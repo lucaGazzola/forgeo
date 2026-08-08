@@ -119,11 +119,7 @@
     </header>
     <div class="modal__body">
       <div id="task-modal-view">
-        <div>
-          <span class="badge" id="task-modal-status"></span>
-        </div>
-        <p class="modal__error" id="task-modal-delete-error" hidden></p>
-        <section class="modal__section modal__blocker" id="task-modal-blocker-section" hidden>
+        <section class="modal__section modal__banner modal__banner--blocked" id="task-modal-blocker-section" hidden>
           <h3>Blocked by the agent</h3>
           <p class="modal__blocked-count" id="task-modal-blocked-count"></p>
           <p class="modal__desc" id="task-modal-blocker-reason"></p>
@@ -134,6 +130,19 @@
             its next scheduled run, building on top of the partial work.
           </p>
         </section>
+        <section class="modal__section modal__banner modal__banner--failed" id="task-modal-failure-section" hidden>
+          <h3>Failed</h3>
+          <p class="modal__desc" id="task-modal-failure-reason"></p>
+          <p class="modal__blocked-note">
+            The agent errored and its changes were discarded. The failure
+            reason is recorded on the task; see the Logs and Runs tabs for the
+            full output.
+          </p>
+        </section>
+        <div>
+          <span class="badge" id="task-modal-status"></span>
+        </div>
+        <p class="modal__error" id="task-modal-delete-error" hidden></p>
         <section class="modal__section" id="task-modal-description-section" hidden>
           <h3>Description</h3>
           <p class="modal__desc" id="task-modal-description"></p>

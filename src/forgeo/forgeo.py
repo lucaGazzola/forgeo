@@ -219,7 +219,7 @@ class Forgeo:
             self.config.blocker_file.unlink(missing_ok=True)
             logger.info("Task %s completed.", task.id)
         elif result.status is ExecutionStatus.ERROR:
-            await self.backlog.update_status(task.id, TaskStatus.FAILED)
+            await self.backlog.set_failed(task.id, self._failure_reason(result))
 
     async def _run_agent(
         self,
@@ -321,7 +321,17 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        await self.backlog.update_status(task.id, TaskStatus.FAILED)
+        await self.backlog.set_failed(task.id, self._failure_reason(result))
+
+    @staticmethod
+    def _failure_reason(result: ExecutionResult) -> list[str]:
+        """The failure reason to persist on a failed task, from an agent result.
+
+        Mirrors the detail the engine already logs today (``result.error``,
+        e.g. the timeout message or a non-zero exit code), with a fallback
+        when the agent gave none.
+        """
+        return [result.error] if result.error else ["no error detail provided"]
 
     async def _commit_and_push(self, message: str, *, task: Task) -> bool:
         """Commit everything on the main branch and push when a remote is set.

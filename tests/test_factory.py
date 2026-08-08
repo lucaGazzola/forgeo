@@ -84,9 +84,23 @@ async def test_task_error_is_failed_and_work_discarded(git_repo, tmp_path):
 
     await forgeo.run_cycle()
 
-    assert (await backlog.get_task("TASK-001")).status is TaskStatus.FAILED
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failure_reason == ["boom"]
     assert await GitManager(git_repo).a_is_clean()
     assert "def answer()" in (git_repo / "app.py").read_text(encoding="utf-8")
+
+
+async def test_task_error_falls_back_to_no_detail(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR)
+
+    await forgeo.run_cycle()
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failure_reason == ["no error detail provided"]
 
 
 async def test_task_blocked_persists_reason_and_renders_blocker_file(git_repo, tmp_path):

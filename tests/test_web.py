@@ -262,6 +262,7 @@ def test_instance_page_has_task_edit_modal(web_env):
     assert 'id="task-modal-edit"' in body
     assert 'id="task-modal-reopen"' in body
     assert 'id="task-modal-blocker-section"' in body
+    assert 'id="task-modal-failure-section"' in body
     assert 'id="task-modal-delete"' in body
     assert 'id="task-modal-edit-form"' in body
     assert 'id="task-modal-save"' in body
@@ -781,6 +782,35 @@ def test_task_json_exposes_blocker_fields(web_env, registry):
     assert tasks[0]["blocked_count"] == 2
 
 
+def failed_task_json(task_id: str = "TASK-004") -> dict:
+    return make_task(
+        id=task_id,
+        title="Failed task",
+        status=TaskStatus.FAILED,
+        failure_reason=["timed out after 60s"],
+    ).model_dump(mode="json")
+
+
+def test_task_json_exposes_failure_reason(web_env, registry):
+    server, registry = web_env
+    write_instance(
+        registry,
+        "failed",
+        repo=str(registry / "repos" / "failed"),
+        tasks=[failed_task_json("F-1")],
+    )
+    status, task = _get(
+        f"http://127.0.0.1:{server.port}/api/instances/failed/tasks/F-1"
+    )
+    assert status == 200
+    assert task["status"] == "FAILED"
+    assert task["failure_reason"] == ["timed out after 60s"]
+
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/failed/tasks")
+    assert status == 200
+    assert tasks[0]["failure_reason"] == ["timed out after 60s"]
+
+
 def test_reopen_blocked_task(web_env, registry):
     server, registry = web_env
     write_instance(
@@ -910,7 +940,8 @@ def test_patch_rejects_engine_managed_blocker_fields(web_env):
     for payload in (
         {"blocker_reason": ["I need a decision"]},
         {"blocked_count": 5},
-        {"blocker_reason": ["x"], "blocked_count": 1},
+        {"failure_reason": ["timed out"]},
+        {"blocker_reason": ["x"], "blocked_count": 1, "failure_reason": ["y"]},
     ):
         status, data = _patch(url, json.dumps(payload))
         assert status == 400, payload
@@ -920,6 +951,7 @@ def test_patch_rejects_engine_managed_blocker_fields(web_env):
     assert status == 200
     assert task["blocker_reason"] == []
     assert task["blocked_count"] == 0
+    assert task["failure_reason"] == []
 
 
 def test_do_delete_returns_500_on_unexpected_error(web_env, monkeypatch):

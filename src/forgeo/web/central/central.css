@@ -253,13 +253,43 @@
   text-decoration: underline;
 }
 
-/* ---------- Task detail modal: edit mode ---------- */
+/* ---------- Task detail modal: reason banners ---------- */
 
-.modal__blocker {
-  border-left: 3px solid var(--blocked);
-  background: rgba(240, 168, 77, 0.07);
+.modal__banner {
+  border: 1px solid;
   border-radius: var(--radius-sm);
   padding: 12px 14px;
+}
+
+.modal__banner h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.modal__banner .modal__desc {
+  color: var(--text);
+}
+
+.modal__banner--blocked {
+  border-color: rgba(240, 168, 77, 0.4);
+  background: rgba(240, 168, 77, 0.08);
+}
+
+.modal__banner--blocked h3,
+.modal__banner--blocked .modal__blocked-count {
+  color: var(--blocked);
+}
+
+.modal__banner--failed {
+  border-color: rgba(224, 108, 117, 0.45);
+  background: rgba(224, 108, 117, 0.08);
+}
+
+.modal__banner--failed h3 {
+  color: var(--failed);
 }
 
 .modal__blocked-count {

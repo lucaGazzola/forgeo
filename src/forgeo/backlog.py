@@ -85,13 +85,20 @@ class JSONBacklog:
         return task
 
     async def update_status(self, task_id: str, status: TaskStatus) -> Task | None:
-        """Transition a task's status, bumping its ``updated_at`` timestamp."""
+        """Transition a task's status, bumping its ``updated_at`` timestamp.
+
+        Any transition away from ``FAILED`` clears the persisted
+        ``failure_reason``, so a task that stops being failed no longer shows
+        the stale reason.
+        """
         async with self._lock:
             store = await self._read()
             entry = self._entry_by_id(store, task_id)
             if entry is None:
                 return None
             entry["status"] = status.value
+            if status is not TaskStatus.FAILED:
+                entry["failure_reason"] = []
             entry["updated_at"] = datetime.now(UTC).isoformat()
             updated = self._to_task(entry)
             await self._write(store)
@@ -113,6 +120,27 @@ class JSONBacklog:
             entry["status"] = TaskStatus.BLOCKED.value
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
+            entry["failure_reason"] = []
+            entry["updated_at"] = datetime.now(UTC).isoformat()
+            updated = self._to_task(entry)
+            await self._write(store)
+        return updated
+
+    async def set_failed(self, task_id: str, reason: list[str]) -> Task | None:
+        """Mark a task ``FAILED``, persisting the failure reason.
+
+        ``reason`` is stored on the task as ``failure_reason`` (shown in the
+        web console's task modal) every time a task transitions into
+        ``FAILED``. An unknown ``task_id`` returns ``None`` without writing
+        anything.
+        """
+        async with self._lock:
+            store = await self._read()
+            entry = self._entry_by_id(store, task_id)
+            if entry is None:
+                return None
+            entry["status"] = TaskStatus.FAILED.value
+            entry["failure_reason"] = list(reason)
             entry["updated_at"] = datetime.now(UTC).isoformat()
             updated = self._to_task(entry)
             await self._write(store)
@@ -132,6 +160,7 @@ class JSONBacklog:
                 return None
             entry["status"] = TaskStatus.OPEN.value
             entry["blocker_reason"] = []
+            entry["failure_reason"] = []
             entry["updated_at"] = datetime.now(UTC).isoformat()
             updated = self._to_task(entry)
             await self._write(store)

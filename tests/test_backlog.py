@@ -105,6 +105,63 @@ async def test_set_blocked_unknown_id_returns_none(tmp_path):
     assert await backlog.set_blocked("MISSING", ["?"]) is None
 
 
+async def test_set_failed_persists_reason(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    failed = await backlog.set_failed(task.id, ["timed out after 60s"])
+    assert failed.status is TaskStatus.FAILED
+    assert failed.failure_reason == ["timed out after 60s"]
+
+    failed = await backlog.set_failed(task.id, ["exit code 3"])
+    assert failed.status is TaskStatus.FAILED
+    assert failed.failure_reason == ["exit code 3"]
+
+    stored = await backlog.get_task(task.id)
+    assert stored.status is TaskStatus.FAILED
+    assert stored.failure_reason == ["exit code 3"]
+    assert stored.updated_at >= task.updated_at
+
+    disk = json.loads((tmp_path / "backlog.json").read_text(encoding="utf-8"))
+    entry = disk["tasks"][0]
+    assert entry["failure_reason"] == ["exit code 3"]
+
+
+async def test_set_failed_unknown_id_returns_none(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(make_task())
+    assert await backlog.set_failed("MISSING", ["?"]) is None
+
+
+async def test_update_status_clears_failure_reason(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["timed out after 60s"])
+    updated = await backlog.update_status(task.id, TaskStatus.OPEN)
+    assert updated.status is TaskStatus.OPEN
+    assert updated.failure_reason == []
+    stored = await backlog.get_task(task.id)
+    assert stored.failure_reason == []
+
+
+async def test_set_blocked_clears_failure_reason(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["timed out after 60s"])
+    blocked = await backlog.set_blocked(task.id, ["I need a decision"])
+    assert blocked.status is TaskStatus.BLOCKED
+    assert blocked.failure_reason == []
+    assert blocked.blocker_reason == ["I need a decision"]
+
+
+async def test_reopen_task_clears_failure_reason(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["timed out after 60s"])
+    reopened = await backlog.reopen_task(task.id)
+    assert reopened.status is TaskStatus.OPEN
+    assert reopened.failure_reason == []
+
+
 async def test_reopen_task_clears_reason_keeps_count(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())

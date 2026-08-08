@@ -386,7 +386,9 @@
     updateModalActions();
 
     var blocked = status === "BLOCKED";
+    var failed = status === "FAILED";
     showModalSection("task-modal-blocker-section", blocked);
+    showModalSection("task-modal-failure-section", failed);
     if (blocked) {
       var count = document.getElementById("task-modal-blocked-count");
       if (count) count.textContent = "blocked " + (task.blocked_count || 0) + "x";
@@ -396,6 +398,15 @@
         reason.textContent = lines.length
           ? lines.join("\n")
           : "The agent did not explain what it needs.";
+      }
+    }
+    if (failed) {
+      var failReason = document.getElementById("task-modal-failure-reason");
+      if (failReason) {
+        var failLines = task.failure_reason || [];
+        failReason.textContent = failLines.length
+          ? failLines.join("\n")
+          : "The agent errored; no reason was recorded.";
       }
     }
 

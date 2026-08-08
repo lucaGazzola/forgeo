@@ -105,8 +105,9 @@ class Task(BaseModel):
 
     ``blocker_reason`` and ``blocked_count`` are engine-managed: they record
     the last agent explanation when the task becomes ``BLOCKED`` and how many
-    times that happened, respectively. Neither is editable through the web
-    console's ``PATCH`` endpoint.
+    times that happened, respectively. ``failure_reason`` is likewise
+    engine-managed: the agent's error when the task becomes ``FAILED``. None
+    of them are editable through the web console's ``PATCH`` endpoint.
     """
 
     id: str
@@ -122,6 +123,7 @@ class Task(BaseModel):
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
     blocker_reason: list[str] = Field(default_factory=list)
     blocked_count: int = Field(default=0, ge=0)
+    failure_reason: list[str] = Field(default_factory=list)
 
     @property
     def instruction(self) -> str:

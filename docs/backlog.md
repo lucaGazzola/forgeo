@@ -39,6 +39,7 @@ Each entry in `tasks` is a task object:
 | `agent_timeout_seconds` | number | — | Override the configured `agent_timeout_seconds` for this task (must be positive). Falls back to the config default when omitted. |
 | `blocker_reason` | list[string] | `[]` | Engine-managed: the agent's explanation (its questions, falling back to captured output) when the task becomes `BLOCKED`. Cleared on reopen; not editable via `PATCH`. |
 | `blocked_count` | integer | `0` | Engine-managed: how many times the task has transitioned into `BLOCKED`. Kept as history when the task is reopened, so you can see a task that keeps blocking needs splitting or rewriting rather than a blind retry. Not editable via `PATCH`. |
+| `failure_reason` | list[string] | `[]` | Engine-managed: the agent's error when the task becomes `FAILED` (e.g. a timeout message or a non-zero exit code). Shown in the web console's task modal so you can see why a task failed without opening the logs. Cleared when the task leaves the `FAILED` state; not editable via `PATCH`. |
 
 Only `id`, `title`, `description`, and `status` (optionally) are required;
 every other field is optional.
@@ -76,7 +77,7 @@ cheap/fast model and hard ones to a frontier model:
 | `OPEN` | To be picked by Forgeo. |
 | `BLOCKED` | Waiting on a human decision; Forgeo pauses while any task is blocked. |
 | `COMPLETED` | The agent finished and the work was committed (and pushed). |
-| `FAILED` | The agent errored; changes were discarded. |
+| `FAILED` | The agent errored; changes were discarded and the reason is recorded in `failure_reason`. |
 
 You add, remove, or reopen tasks by editing the file directly — or use the
 [web console](web-console-api.md): the **new-task form** (`POST

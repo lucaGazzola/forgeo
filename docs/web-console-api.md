@@ -36,11 +36,14 @@ static files in `src/forgeo/web/` are served at their URL paths.
   modify, agent command, timestamps); it closes via the close button, the
   backdrop, or Escape. An **Edit** button switches the modal to an editable
   form for those fields; **Save** persists the change via `PATCH` and
-  **Cancel** discards it. A `BLOCKED` task's modal additionally shows the
-  agent's blocker reason (the persisted per-task `blocker_reason`) and how
-  many times the task has blocked (`blocked_count`, e.g. "blocked 3x"): you
-  can **Edit** the task to correct it and then **Reopen** it, or **Reopen**
-  it as-is — Forgeo retries it on its next scheduled run. `BLOCKED` tasks can
+  **Cancel** discards it. A `BLOCKED` task's modal shows a highlighted banner
+  at the top with the agent's blocker reason (the persisted per-task
+  `blocker_reason`) and how many times the task has blocked (`blocked_count`,
+  e.g. "blocked 3x"); a `FAILED` task's modal shows an analogous red banner
+  with the failure reason (the persisted per-task `failure_reason`), so you
+  never have to open the logs to see why something failed. You can **Edit** a
+  `BLOCKED` task to correct it and then **Reopen** it, or **Reopen** it
+  as-is — Forgeo retries it on its next scheduled run. `BLOCKED` tasks can
   also be **Deleted** (with confirmation), mirroring the `BLOCKER.md`
   instructions.
 
@@ -88,6 +91,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
     "status": "OPEN",
     "blocker_reason": [],
     "blocked_count": 0,
+    "failure_reason": [],
     "created_at": "2026-07-31T10:00:00Z",
     "updated_at": "2026-07-31T10:00:00Z",
     "dependencies": [],
@@ -128,6 +132,9 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   "title": "Implement fibonacci module",
   "description": "With tests.",
   "status": "OPEN",
+  "blocker_reason": [],
+  "blocked_count": 0,
+  "failure_reason": [],
   "created_at": "2026-08-01T12:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "dependencies": [],
@@ -168,6 +175,7 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001/reopen
   "status": "OPEN",
   "blocker_reason": [],
   "blocked_count": 1,
+  "failure_reason": [],
   "created_at": "2026-07-31T10:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "dependencies": [],
@@ -193,11 +201,12 @@ the next cycle automatically. Errors:
 Update an existing task's editable fields: `title`, `description`,
 `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`,
 and `agent_timeout_seconds`. The request body is a JSON object; omitted fields
-are left unchanged and `id`, `status`, `blocker_reason`, `blocked_count`, and
-`created_at` are always preserved (they are engine-managed — `PATCH` rejects
-them like it rejects `status`). `agent_command` may be a string, an array, or
-`null` (clear the per-task override); `agent_timeout_seconds` may be a
-positive number or `null`. `updated_at` is bumped to the current time.
+are left unchanged and `id`, `status`, `blocker_reason`, `blocked_count`,
+`failure_reason`, and `created_at` are always preserved (they are
+engine-managed — `PATCH` rejects them like it rejects `status`).
+`agent_command` may be a string, an array, or `null` (clear the per-task
+override); `agent_timeout_seconds` may be a positive number or `null`.
+`updated_at` is bumped to the current time.
 
 ```bash
 curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
@@ -211,6 +220,9 @@ curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
   "title": "Implement fibonacci module",
   "description": "Write a fibonacci module with tests.",
   "status": "OPEN",
+  "blocker_reason": [],
+  "blocked_count": 0,
+  "failure_reason": [],
   "created_at": "2026-07-31T10:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "dependencies": [],
@@ -224,9 +236,9 @@ rename), so it is safe even while that instance's daemon is mid-cycle.
 Errors:
 
 - `400` with `{"error": "..."}` — unparseable or non-object body, an empty
-  body, an unknown field (e.g. `status`, `blocker_reason`, `blocked_count`),
-  or an invalid value (blank `title`, wrong field types, a non-positive
-  `agent_timeout_seconds`).
+  body, an unknown field (e.g. `status`, `blocker_reason`, `blocked_count`,
+  `failure_reason`), or an invalid value (blank `title`, wrong field types, a
+  non-positive `agent_timeout_seconds`).
 - `404` with `{"error": "not found"}` — the task id does not exist in that
   instance's backlog.
 - `404` with `{"error": "unknown instance"}` — the instance is not

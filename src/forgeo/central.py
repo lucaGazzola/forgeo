@@ -24,6 +24,10 @@ Routes:
   backlog.
 * ``POST /api/instances/<name>/tasks/<id>/reopen`` — reopen a ``BLOCKED``
   task (status back to ``OPEN``, blocker reason cleared).
+* ``POST /api/instances/<name>/start``, ``/stop``, ``/restart`` — start,
+  stop, or restart that instance's daemon from the web console (SIGTERM +
+  wait, detached start — the same logic as ``forgeo start``/``stop``/
+  ``restart``).
 * ``PATCH /api/instances/<name>/tasks/<id>`` — update an existing task's
   editable fields (title, description, acceptance criteria, dependencies,
   files to modify, agent command, agent timeout).
@@ -54,9 +58,10 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
 
+from forgeo import daemon_control
 from forgeo.backlog import JSONBacklog, backlog_status_counts
 from forgeo.config import save_config
-from forgeo.daemon import read_lock_pid
+from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.instances import (
     InstanceInfo,
     get_instance,
@@ -431,7 +436,16 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
         def _post_instance_api(self, path: str) -> None:
             """Route a POST under ``/api/instances/`` to its handler."""
             parts = path[len("/api/instances/") :].split("/")
-            if len(parts) < 2 or parts[1] != "tasks":
+            if len(parts) < 2:
+                self._send_json(404, {"error": "not found"})
+                return
+            if parts[1] in ("start", "stop", "restart"):
+                if len(parts) != 2:
+                    self._send_json(404, {"error": "not found"})
+                    return
+                self._post_instance_daemon_action(path, parts[1])
+                return
+            if parts[1] != "tasks":
                 self._send_json(404, {"error": "not found"})
                 return
             if len(parts) == 2:
@@ -441,6 +455,125 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._reopen_instance_task(path)
                 return
             self._send_json(404, {"error": "not found"})
+
+        def _post_instance_daemon_action(self, path: str, action: str) -> None:
+            """Start, stop, or restart an instance's daemon from the console.
+
+            Reuses the same lock-file driven logic as ``forgeo start``/``stop``/
+            ``restart`` (SIGTERM + wait for the lock to drop, then a detached
+            ``forgeo start`` that re-reads ``forgeo.yaml`` on boot). The
+            response reports the outcome — ``started`` / ``already_running`` /
+            ``stopped`` / ``not_running`` / ``restarted`` — plus the resulting
+            daemon state.
+            """
+            parts = path[len("/api/instances/") :].split("/")
+            name = unquote(parts[0])
+            info = get_instance(name)
+            if info is None:
+                self._send_json(404, {"error": "unknown instance"})
+                return
+            if info.config is None:
+                self._send_json(500, {"error": "instance config not available"})
+                return
+            config = info.config
+            lock_path = Path(config.backlog).with_suffix(".lock")
+
+            if action == "start":
+                if is_lock_held(lock_path):
+                    self._send_json(
+                        409,
+                        {
+                            "status": "already_running",
+                            "error": "daemon already running",
+                            "message": f"Forgeo {config.name!r} is already running.",
+                            "daemon_running": True,
+                            "pid": read_lock_pid(lock_path),
+                        },
+                    )
+                    return
+                try:
+                    pid = daemon_control.start_daemon(info.config_path, config)
+                except daemon_control.DaemonError as exc:
+                    self._send_json(
+                        500,
+                        {
+                            "status": "start_failed",
+                            "error": str(exc),
+                            "daemon_running": is_lock_held(lock_path),
+                        },
+                    )
+                    return
+                self._send_json(
+                    200,
+                    {
+                        "status": "started",
+                        "message": (
+                            f"Forgeo {config.name!r} started "
+                            f"(pid {pid}, interval {config.interval_minutes} min)."
+                        ),
+                        "daemon_running": True,
+                        "pid": pid,
+                    },
+                )
+                return
+
+            if action == "stop":
+                if not is_lock_held(lock_path):
+                    self._send_json(
+                        200,
+                        {
+                            "status": "not_running",
+                            "message": f"Forgeo {config.name!r} is not running.",
+                            "daemon_running": False,
+                        },
+                    )
+                    return
+                try:
+                    daemon_control.stop_daemon(config)
+                except daemon_control.DaemonError as exc:
+                    self._send_json(
+                        500,
+                        {
+                            "status": "stop_failed",
+                            "error": str(exc),
+                            "daemon_running": is_lock_held(lock_path),
+                        },
+                    )
+                    return
+                self._send_json(
+                    200,
+                    {
+                        "status": "stopped",
+                        "message": f"Forgeo {config.name!r} stopped.",
+                        "daemon_running": False,
+                    },
+                )
+                return
+
+            try:
+                pid = daemon_control.restart_daemon(info.config_path, config)
+            except daemon_control.DaemonError as exc:
+                self._send_json(
+                    500,
+                    {
+                        "status": "restart_failed",
+                        "error": str(exc),
+                        "daemon_running": is_lock_held(lock_path),
+                    },
+                )
+                return
+            self._send_json(
+                200,
+                {
+                    "status": "restarted",
+                    "message": (
+                        f"Forgeo {config.name!r} restarted "
+                        f"(pid {pid}, interval {config.interval_minutes} min)."
+                    ),
+                    "daemon_running": True,
+                    "pid": pid,
+                },
+            )
 
         def _post_instance_task(self, path: str) -> None:
             """Create a task in an instance's backlog from a JSON body."""

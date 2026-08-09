@@ -31,7 +31,13 @@ static files in `src/forgeo/web/` are served at their URL paths.
   counts, each linking to its instance page.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
   **Create** tab with a form to add tasks, plus tabs for **logs**, **runs**,
-  **blocker** and **config**. The **Config** tab renders `forgeo.yaml` as an
+  **blocker** and **config**. The header carries a **DAEMON** section with the
+  daemon status tag (`running`/`stopped`) and **Start**/**Stop**/**Restart**
+  buttons that call `POST /api/instances/<name>/start|stop|restart`; the
+  buttons reflect the current state (Start is disabled while running, Stop
+  while stopped), give inline success/error feedback, and the status tag
+  refreshes after each action and on the 30-second auto-refresh. The
+  **Config** tab renders `forgeo.yaml` as an
   editable form (interval, agent command, sandbox, telegram settings, ...):
   **Save** persists it via `PUT /api/instances/<name>/config`, surfaces
   validation errors inline (highlighted next to the failing field), and shows
@@ -355,6 +361,51 @@ the field is omitted, so a partial payload never wipes it. Everything else
 `GET .../config` returns (including `agent_env`, which can carry credentials
 the agent needs) is editable.
 
+### `POST /api/instances/<name>/start`, `/stop`, `/restart`
+
+Start, stop, or restart that instance's daemon — the same lifecycle as
+`forgeo start`/`forgeo stop`/`forgeo restart`, exposed to the web console as
+an explicit operator action. This is also how a config saved from the
+**Config** tab is applied: the daemon re-reads `forgeo.yaml` on every start,
+so a restart picks up the saved settings. No request body is required.
+
+- `start` — launch a detached `forgeo start` for the instance. Refused with
+  `409` when the daemon is already running.
+- `stop` — SIGTERM the running daemon and wait for it to exit. A cycle in
+  progress always finishes first, so partial work is never lost. When the
+  daemon is not running this is a `200` no-op reporting `not_running`.
+- `restart` — stop the daemon when running (waiting for any cycle in
+  progress), then start it detached; when it wasn't running it just starts it.
+
+Every endpoint returns the outcome and the post-action daemon state:
+
+```bash
+curl -X POST http://127.0.0.1:8790/api/instances/my-repo/start
+```
+
+```json
+{
+  "status": "started",
+  "message": "Forgeo 'my-repo' started (pid 4242, interval 30 min).",
+  "daemon_running": true,
+  "pid": 4242
+}
+```
+
+`status` is one of `started`, `already_running`, `stopped`, `not_running`,
+`restarted`, `start_failed`, `stop_failed`, `restart_failed`; `daemon_running`
+is the lock state after the action. Errors:
+
+- `409` with `{"error": "daemon already running", "status": "already_running"}`
+  — `start` while the daemon holds the lock (the UI disables **Start** while
+  running, so this is an edge case).
+- `404` with `{"error": "unknown instance"}` — the instance is not registered.
+- `500` with `{"error": "instance config not available"}` — the instance's
+  config cannot currently be loaded.
+- `500` with `{"error": "..."}` — the stop or start failed: the recorded PID
+  is gone but the lock is still held, the daemon did not start within the
+  startup timeout, or it is still shutting down when the stop timeout elapses.
+
 ### `GET /api/instances/<name>/logs?lines=N`
 
 The last `N` lines of that instance's `forgeo.log` (`N` defaults to `100`,
@@ -395,6 +446,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/blocker
   API endpoint still return `200`.
 - The write endpoints are `POST /api/instances/<name>/tasks` (append a task),
   `POST /api/instances/<name>/tasks/<id>/reopen` (reopen a `BLOCKED` task),
+  `POST /api/instances/<name>/start|stop|restart` (daemon lifecycle),
   `PATCH /api/instances/<name>/tasks/<id>` (update a task's editable fields),
   `DELETE /api/instances/<name>/tasks/<id>` (delete an `OPEN` or `BLOCKED`
   task), and `PUT /api/instances/<name>/config` (validate and persist the
@@ -409,8 +461,11 @@ curl http://127.0.0.1:8790/api/instances/my-repo/blocker
   `DELETE` of a task that is neither `OPEN` nor `BLOCKED`.
 - `404` — unknown API path, unknown instance, unknown task, or missing
   static file.
-- `409` — `POST` id collision (a concurrent request won the race).
-- `500` — an unexpected handler error (logged server-side).
+- `409` — `POST` id collision (a concurrent request won the race), or a
+  `POST start` while the instance's daemon is already running.
+- `500` — an unexpected handler error (logged server-side), a daemon lifecycle
+  action whose stop or start failed, or an instance whose config cannot
+  currently be loaded.
 
 ## Example: a status one-liner
 
@@ -427,11 +482,15 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
 - The write endpoints are `POST /api/instances/<name>/tasks` and `PATCH
   /api/instances/<name>/tasks/<id>` (and `POST
   /api/instances/<name>/tasks/<id>/reopen` to retry a `BLOCKED` task, plus
-  `DELETE /api/instances/<name>/tasks/<id>` for open or blocked tasks, and
-  `PUT /api/instances/<name>/config` for an instance's configuration). A
+  `DELETE /api/instances/<name>/tasks/<id>` for open or blocked tasks, `POST
+  /api/instances/<name>/start|stop|restart` to start/stop/restart that
+  instance's daemon, and `PUT /api/instances/<name>/config` for an instance's
+  configuration). A
   machine that can reach the port can add tasks to any instance's queue, edit
-  their fields, retry blocked ones, delete open or blocked ones, and change an
+  their fields, retry blocked ones, delete open or blocked ones, start, stop
+  and restart that instance's daemon, and change an
   instance's configuration (interval, agent command, paths, ...). The config
   write cannot change an instance's registered `name` or its
   `telegram_bot_token`, and it never restarts a daemon — the new config applies
-  only on the daemon's next restart.
+  only on the daemon's next restart (via the **Restart** button or
+  `POST .../restart`).

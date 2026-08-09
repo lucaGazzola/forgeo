@@ -16,9 +16,17 @@
       <span class="brand-name" id="forgeo-name">Instance</span>
     </div>
     <dl class="meta">
-      <div class="meta-item">
+      <div class="meta-item meta-item--daemon">
         <dt>daemon</dt>
-        <dd><span class="daemon-badge" id="meta-daemon">&mdash;</span></dd>
+        <dd>
+          <span class="daemon-badge" id="meta-daemon" role="status">&mdash;</span>
+          <span class="daemon-actions">
+            <button class="daemon-action daemon-action--start" id="daemon-start" type="button">Start</button>
+            <button class="daemon-action daemon-action--stop" id="daemon-stop" type="button">Stop</button>
+            <button class="daemon-action daemon-action--restart" id="daemon-restart" type="button">Restart</button>
+          </span>
+          <span class="daemon-feedback" id="daemon-feedback" role="status" aria-live="polite" hidden></span>
+        </dd>
       </div>
       <div class="meta-item">
         <dt>repo</dt>
@@ -100,7 +108,8 @@
         <p class="config-form__hint">
           Edits are written to <code>forgeo.yaml</code>. The running daemon
           re-reads the config only on restart, so a saved change applies on the
-          daemon&rsquo;s next start (<code>forgeo restart</code>).
+          daemon&rsquo;s next start &mdash; use the <strong>Restart</strong>
+          button in the header (<code>forgeo restart</code>).
         </p>
         <div class="config-form__grid" id="config-fields"></div>
         <div class="config-form__actions">

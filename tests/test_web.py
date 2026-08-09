@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+import subprocess
+import sys
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,7 +20,8 @@ import yaml
 from forgeo.central import CentralWebServer, web_task_id_for
 from forgeo.cli import build_parser, cmd_web
 from forgeo.config import load_config
-from forgeo.daemon import acquire_run_lock
+from forgeo.daemon import acquire_run_lock, is_lock_held
+from forgeo.daemon_control import DaemonError
 from forgeo.instances import add_instance
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.runs import RunRecorder
@@ -183,6 +188,53 @@ def write_instance(
     return config_dir, config_path
 
 
+def write_daemon_instance(
+    tmp_path: Path,
+    name: str,
+    *,
+    repo: str,
+    interval_minutes: int = 600,
+) -> Path:
+    """Register an instance whose daemon can actually run; returns the config
+    path. The long interval keeps the spawned daemon idle between cycles."""
+    config_dir = tmp_path / name
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        f"name: {name}\n"
+        f"repo: {repo}\n"
+        f"backlog: {config_dir / 'backlog.json'}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        f"agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        f"interval_minutes: {interval_minutes}\n",
+        encoding="utf-8",
+    )
+    add_instance(name, config_path)
+    return config_path
+
+
+def spawn_daemon(config_path: Path) -> subprocess.Popen[bytes]:
+    """Start a real ``forgeo start`` subprocess, detached like restart does."""
+    return subprocess.Popen(
+        [sys.executable, "-m", "forgeo", "start", "--config", str(config_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
+    """Poll ``predicate`` until it holds; False on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return False
+
+
 @pytest.fixture
 def registry(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
@@ -275,6 +327,17 @@ def test_instance_page_has_new_task_form(web_env):
     assert "new-task" not in backlog_panel
     create_panel = body.split('<main id="tab-create"')[1].split("</main>")[0]
     assert 'id="new-task"' in create_panel
+
+
+def test_instance_page_has_daemon_controls(web_env):
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/instances/alpha/")
+    assert status == 200
+    assert 'id="meta-daemon"' in body
+    assert 'id="daemon-start"' in body
+    assert 'id="daemon-stop"' in body
+    assert 'id="daemon-restart"' in body
+    assert 'id="daemon-feedback"' in body
 
 
 def test_instance_page_has_task_edit_modal(web_env):
@@ -1421,3 +1484,179 @@ def test_web_bind_failure_exits_nonzero():
         assert cmd_web(argparse.Namespace(host="127.0.0.1", port=port)) == 1
     finally:
         sock.close()
+
+
+# --------------------------------------------------------------------------- #
+# Daemon lifecycle endpoints (POST /start, /stop, /restart)                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_post_start_starts_daemon(web_env, git_repo):
+    server, registry = web_env
+    write_daemon_instance(registry, "daemon-a", repo=str(git_repo))
+    lock_path = registry / "daemon-a" / "backlog.lock"
+    try:
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/daemon-a/start", None
+        )
+        assert status == 200
+        assert data["status"] == "started"
+        assert data["daemon_running"] is True
+        assert isinstance(data["pid"], int)
+        assert "started" in data["message"]
+        assert wait_for(lambda: is_lock_held(lock_path))
+
+        status, status_data = _get(
+            f"http://127.0.0.1:{server.port}/api/instances/daemon-a/status"
+        )
+        assert status == 200
+        assert status_data["daemon_running"] is True
+    finally:
+        _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-a/stop", None)
+        assert wait_for(lambda: not is_lock_held(lock_path))
+
+
+def test_post_start_already_running_409(web_env):
+    server, registry = web_env
+    lock_path = registry / "alpha" / "backlog.lock"
+    lock = acquire_run_lock(lock_path)
+    assert lock is not None
+    try:
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/start", None
+        )
+        assert status == 409
+        assert data["status"] == "already_running"
+        assert data["daemon_running"] is True
+    finally:
+        lock.close()
+
+
+def test_post_stop_not_running_noop(web_env):
+    server, _ = web_env
+    status, data = _post(
+        f"http://127.0.0.1:{server.port}/api/instances/alpha/stop", None
+    )
+    assert status == 200
+    assert data["status"] == "not_running"
+    assert data["daemon_running"] is False
+
+
+def test_post_stop_stops_running_daemon(web_env, git_repo):
+    server, registry = web_env
+    config_path = write_daemon_instance(registry, "daemon-b", repo=str(git_repo))
+    lock_path = registry / "daemon-b" / "backlog.lock"
+    proc = spawn_daemon(config_path)
+    try:
+        assert wait_for(lambda: is_lock_held(lock_path))
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/daemon-b/stop", None
+        )
+        assert status == 200
+        assert data["status"] == "stopped"
+        assert data["daemon_running"] is False
+        assert wait_for(lambda: proc.poll() is not None)
+        assert not is_lock_held(lock_path)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-b/stop", None)
+
+
+def test_post_restart_starts_daemon_when_not_running(web_env, git_repo):
+    server, registry = web_env
+    write_daemon_instance(registry, "daemon-c", repo=str(git_repo))
+    lock_path = registry / "daemon-c" / "backlog.lock"
+    try:
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/daemon-c/restart", None
+        )
+        assert status == 200
+        assert data["status"] == "restarted"
+        assert data["daemon_running"] is True
+        assert isinstance(data["pid"], int)
+        assert wait_for(lambda: is_lock_held(lock_path))
+    finally:
+        _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-c/stop", None)
+
+
+def test_post_restart_replaces_running_daemon(web_env, git_repo):
+    server, registry = web_env
+    config_path = write_daemon_instance(registry, "daemon-d", repo=str(git_repo))
+    lock_path = registry / "daemon-d" / "backlog.lock"
+    old_proc = spawn_daemon(config_path)
+    try:
+        assert wait_for(lambda: is_lock_held(lock_path))
+        old_pid = None
+        try:
+            old_pid = int((lock_path.read_text(encoding="utf-8")).split("=", 1)[1])
+        except (OSError, IndexError, ValueError):
+            pass
+
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/daemon-d/restart", None
+        )
+        assert status == 200
+        assert data["status"] == "restarted"
+        assert data["daemon_running"] is True
+        new_pid = data["pid"]
+        assert isinstance(new_pid, int)
+        if old_pid is not None:
+            assert new_pid != old_pid
+        assert wait_for(lambda: old_proc.poll() is not None)
+        assert is_lock_held(lock_path)
+    finally:
+        if old_proc.poll() is None:
+            old_proc.kill()
+        _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-d/stop", None)
+
+
+def test_post_daemon_action_unknown_instance_404(web_env):
+    server, _ = web_env
+    for action in ("start", "stop", "restart"):
+        status, data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/nope/{action}", None
+        )
+        assert status == 404
+        assert data["error"] == "unknown instance"
+
+
+def test_post_daemon_action_wrong_path_404(web_env):
+    server, _ = web_env
+    for path in (
+        "/api/instances/alpha/bogus/start",
+        "/api/instances/alpha/start/extra",
+    ):
+        status, data = _post(f"http://127.0.0.1:{server.port}{path}", None)
+        assert status == 404
+        assert data["error"] == "not found"
+
+
+def test_post_start_config_unavailable_500(web_env):
+    server, registry = web_env
+    _, config_path = write_instance(
+        registry, "broken", repo=str(registry / "repos" / "broken")
+    )
+    config_path.write_text("not: [valid", encoding="utf-8")
+    status, data = _post(
+        f"http://127.0.0.1:{server.port}/api/instances/broken/start", None
+    )
+    assert status == 500
+    assert data["error"] == "instance config not available"
+
+
+def test_post_daemon_action_failure_500(web_env, monkeypatch):
+    import forgeo.central as central_module
+
+    server, _ = web_env
+
+    def boom(config_path: Path, config: object) -> int:
+        raise DaemonError("boom")
+
+    monkeypatch.setattr(central_module.daemon_control, "start_daemon", boom)
+    status, data = _post(
+        f"http://127.0.0.1:{server.port}/api/instances/alpha/start", None
+    )
+    assert status == 500
+    assert data["status"] == "start_failed"
+    assert data["error"] == "boom"

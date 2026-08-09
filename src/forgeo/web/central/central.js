@@ -697,6 +697,73 @@
     setText("meta-interval", formatInterval(status.interval_minutes));
     setText("meta-next", formatTime(status.next_run_at));
     setText("meta-outcome", status.last_outcome || "—");
+    updateDaemonButtons();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Instance page: daemon lifecycle actions (start / stop / restart)    */
+  /* ------------------------------------------------------------------ */
+
+  function updateDaemonButtons() {
+    var running = Boolean(instanceStatus && instanceStatus.daemon_running);
+    var start = document.getElementById("daemon-start");
+    var stop = document.getElementById("daemon-stop");
+    var restart = document.getElementById("daemon-restart");
+    if (start) start.disabled = running;
+    if (stop) stop.disabled = !running;
+    if (restart) restart.disabled = false;
+  }
+
+  function setDaemonBusy(busy) {
+    ["daemon-start", "daemon-stop", "daemon-restart"].forEach(function (id) {
+      var btn = document.getElementById(id);
+      if (btn) btn.disabled = busy;
+    });
+  }
+
+  function showDaemonFeedback(message, isError) {
+    var node = document.getElementById("daemon-feedback");
+    if (!node) return;
+    node.textContent = message || "";
+    node.classList.toggle("daemon-feedback--error", Boolean(isError));
+    node.hidden = !message;
+  }
+
+  function daemonAction(action) {
+    if (!API) return;
+    setDaemonBusy(true);
+    showDaemonFeedback(action + "…", false);
+    fetch(API + action, { method: "POST" })
+      .then(function (resp) {
+        return resp.json().then(function (data) {
+          if (!resp.ok) {
+            var err = new Error((data && (data.error || data.message)) || "HTTP " + resp.status);
+            throw err;
+          }
+          return data;
+        });
+      })
+      .then(function (data) {
+        showDaemonFeedback(data.message || data.status || action + " succeeded", false);
+      })
+      .catch(function (err) {
+        showDaemonFeedback(err.message || action + " failed", true);
+      })
+      .finally(function () {
+        setDaemonBusy(false);
+        refreshInstance();
+      });
+  }
+
+  function wireDaemonActions() {
+    ["start", "stop", "restart"].forEach(function (action) {
+      var btn = document.getElementById("daemon-" + action);
+      if (btn) {
+        btn.addEventListener("click", function () {
+          daemonAction(action);
+        });
+      }
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -1238,6 +1305,7 @@
   function wire() {
     if (page === "instance") {
       wireNewTask();
+      wireDaemonActions();
       var configForm = document.getElementById("config-form");
       if (configForm) {
         configForm.addEventListener("submit", function (event) {

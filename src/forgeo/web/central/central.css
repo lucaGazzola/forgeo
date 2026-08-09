@@ -135,6 +135,74 @@
   border-color: rgba(224, 108, 117, 0.35);
 }
 
+/* ---------- Daemon controls (instance page header) ---------- */
+
+.meta-item--daemon dd {
+  display: flex;
+  align-items: center;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.daemon-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.daemon-action {
+  appearance: none;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.daemon-action:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--border);
+}
+
+.daemon-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.daemon-action--start:not(:disabled) {
+  color: var(--completed);
+  background: rgba(111, 206, 147, 0.1);
+  border-color: rgba(111, 206, 147, 0.35);
+}
+
+.daemon-action--stop:not(:disabled) {
+  color: var(--failed);
+  background: rgba(224, 108, 117, 0.1);
+  border-color: rgba(224, 108, 117, 0.35);
+}
+
+.daemon-feedback {
+  flex-basis: 100%;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--completed);
+  word-break: break-word;
+}
+
+.daemon-feedback--error {
+  color: var(--failed);
+}
+
+.daemon-feedback[hidden] {
+  display: none;
+}
+
 /* ---------- Tabs ---------- */
 
 .tabs {

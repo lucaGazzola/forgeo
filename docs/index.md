@@ -58,6 +58,7 @@ forgeo.yaml ──► forgeo start (daemon)
 | --- | --- | --- |
 | `forgeo.cli` | `src/forgeo/cli.py` | `init`, `start`, `once`, `status`, `stop`, `restart` commands. |
 | `forgeo.daemon` | `src/forgeo/daemon.py` | The scheduled worker: wakes every `interval_minutes`, holds the run locks, records `last_outcome`. |
+| `forgeo.daemon_control` | `src/forgeo/daemon_control.py` | Daemon lifecycle shared by the CLI and web console: SIGTERM + wait, detached start/restart. |
 | `forgeo.forgeo` | `src/forgeo/forgeo.py` | One cycle of work: task run, refactor pass, blocker handling, git side effects. |
 | `forgeo.backlog` | `src/forgeo/backlog.py` | JSON backlog read/write; picks the oldest `OPEN` task. |
 | `forgeo.agent` | `src/forgeo/agent.py` | `ShellAgent`: runs your command, maps exit codes to outcomes, delivers `FORGEO_TASK`. |

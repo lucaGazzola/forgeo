@@ -205,8 +205,8 @@ class Forgeo:
         result, ok = await self._run_agent(
             task,
             instruction=task.instruction,
-            success_message=f"forgeo: {task.title} (#{task.id})",
-            blocked_message=f"forgeo: {task.title} (#{task.id}) [partial]",
+            success_message=f"{task.title} (#{task.id})",
+            blocked_message=f"{task.title} (#{task.id}) [partial]",
             command=task.agent_command,
             timeout_seconds=task.agent_timeout_seconds,
         )
@@ -376,8 +376,8 @@ class Forgeo:
         await self._run_agent(
             refactor_task,
             instruction=self.config.refactor_prompt,
-            success_message="forgeo: refactoring pass",
-            blocked_message="forgeo: refactoring pass [partial]",
+            success_message="refactoring pass",
+            blocked_message="refactoring pass [partial]",
             is_refactor=True,
         )
 

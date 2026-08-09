@@ -17,6 +17,9 @@ Routes:
 * ``GET /api/instances/<name>/tasks``, ``/tasks/<id>``, ``/status``,
   ``/logs?lines=N``, ``/runs?limit=N``, ``/blocker``, ``/config`` — the
   per-instance API.
+* ``PUT /api/instances/<name>/config`` — validate and persist an instance's
+  ``forgeo.yaml`` from a config payload (applies on the daemon's next
+  restart; ``name`` and ``telegram_bot_token`` are not editable).
 * ``POST /api/instances/<name>/tasks`` — add a new task to that instance's
   backlog.
 * ``POST /api/instances/<name>/tasks/<id>/reopen`` — reopen a ``BLOCKED``
@@ -52,6 +55,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from forgeo.backlog import JSONBacklog, backlog_status_counts
+from forgeo.config import save_config
 from forgeo.daemon import read_lock_pid
 from forgeo.instances import (
     InstanceInfo,
@@ -93,6 +97,16 @@ def web_task_id_for(tasks: list[Task]) -> str:
         if match:
             highest = max(highest, int(match.group(1)))
     return f"WEB-{highest + 1:03d}"
+
+
+def _config_validation_message(exc: ValidationError) -> str:
+    """A readable one-line error for a config payload that failed validation."""
+    details = []
+    for error in exc.errors():
+        loc = ".".join(str(part) for part in error.get("loc", ()))
+        message = str(error.get("msg", "invalid"))
+        details.append(f"{loc}: {message}" if loc else message)
+    return "invalid config: " + "; ".join(details)
 
 
 def _read_json_dict(path: Path) -> dict[str, Any] | None:
@@ -351,6 +365,18 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 return
             self._send_json(404, {"error": "not found"})
 
+        def do_PUT(self) -> None:
+            self._run_safely(self._do_put)
+
+        def _do_put(self) -> None:
+            parsed = urlparse(self.path)
+            path = parsed.path
+
+            if path.startswith("/api/instances/"):
+                self._put_instance_api(path)
+                return
+            self._send_json(404, {"error": "not found"})
+
         def _read_json_body(self) -> dict[str, Any] | None:
             """Read and parse the request body as a JSON object.
 
@@ -551,6 +577,84 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             deleted = asyncio.run(backlog.delete_task(task_id))
             assert deleted is not None  # task was just found in the backlog
             self._send_json(200, deleted.model_dump(mode="json"))
+
+        def _put_instance_api(self, path: str) -> None:
+            """Route a PUT under ``/api/instances/`` to its handler."""
+            parts = path[len("/api/instances/") :].split("/")
+            if len(parts) != 2 or parts[1] != "config":
+                self._send_json(404, {"error": "not found"})
+                return
+            self._put_instance_config(path)
+
+        def _put_instance_config(self, path: str) -> None:
+            """Validate and persist an instance's ``forgeo.yaml`` from a body.
+
+            Accepts the same shape ``GET /api/instances/<name>/config``
+            returns. The config is validated against :class:`ForgeoConfig`
+            and written to the instance's ``forgeo.yaml`` atomically; the
+            response carries the reloaded config and an explicit note that
+            the daemon picks the changes up only on its next restart (a save
+            never restarts the daemon).
+
+            ``name`` is owned by the registry and forced to the registered
+            instance name (a different value is rejected); ``telegram_bot_token``
+            is not editable through the web console — an explicit change is
+            rejected and the current value is preserved when the field is
+            omitted.
+            """
+            parts = path[len("/api/instances/") :].split("/")
+            name = unquote(parts[0])
+            info = get_instance(name)
+            if info is None:
+                self._send_json(404, {"error": "unknown instance"})
+                return
+            if info.config is None:
+                self._send_json(500, {"error": "instance config not available"})
+                return
+
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            if not payload:
+                self._send_json(400, {"error": "request body must not be empty"})
+                return
+
+            incoming_name = payload.get("name")
+            if incoming_name is not None and incoming_name != info.name:
+                self._send_json(
+                    400,
+                    {"error": "name is managed by the registry and cannot be changed"},
+                )
+                return
+            payload["name"] = info.name
+            if "telegram_bot_token" in payload:
+                if payload["telegram_bot_token"] != info.config.telegram_bot_token:
+                    self._send_json(
+                        400,
+                        {"error": "telegram_bot_token is not editable through the web console"},
+                    )
+                    return
+            else:
+                payload["telegram_bot_token"] = info.config.telegram_bot_token
+
+            try:
+                config = ForgeoConfig.model_validate(payload)
+            except ValidationError as exc:
+                self._send_json(400, {"error": _config_validation_message(exc)})
+                return
+
+            saved = save_config(info.config_path, config)
+            self._send_json(
+                200,
+                {
+                    "saved": True,
+                    "restart_required": True,
+                    "message": (
+                        "Config saved. The daemon picks up changes on its next restart."
+                    ),
+                    "config": saved.model_dump(mode="json"),
+                },
+            )
 
         def _handle_instance_page(self, path: str) -> None:
             name = unquote(path[len("/instances/") :]).strip("/")

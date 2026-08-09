@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from forgeo.config import load_config
+from forgeo.config import load_config, save_config
 from forgeo.models import DEFAULT_REFACTOR_PROMPT, ForgeoConfig, SandboxMode, Task, TaskStatus
 
 
@@ -135,3 +138,60 @@ def test_load_config_resolves_relative_paths(tmp_path):
 def test_load_config_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_config(tmp_path / "nope.yaml")
+
+
+def test_save_config_stores_paths_relative_to_file(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config = ForgeoConfig(
+        name="demo",
+        repo=tmp_path / ".." / "repo",
+        backlog=tmp_path / "tasks.json",
+        blocker_file=tmp_path / "BLOCKER.md",
+        agent_command="echo hi",
+        log_file=str(tmp_path / "forgeo.log"),
+    )
+    saved = save_config(config_path, config)
+
+    disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert disk["name"] == "demo"
+    assert disk["repo"] == "../repo"
+    assert disk["backlog"] == "tasks.json"
+    assert disk["blocker_file"] == "BLOCKER.md"
+    assert disk["log_file"] == "forgeo.log"
+
+    assert saved.repo.resolve() == (tmp_path / ".." / "repo").resolve()
+    assert saved.backlog == (tmp_path / "tasks.json").resolve()
+    assert saved.blocker_file == (tmp_path / "BLOCKER.md").resolve()
+    assert saved.log_file == str((tmp_path / "forgeo.log").resolve())
+    assert load_config(config_path) == saved
+
+
+def test_save_config_round_trips_with_load_config(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text(
+        "name: demo\nrepo: ../repo\nbacklog: tasks.json\nagent_command: echo\n",
+        encoding="utf-8",
+    )
+    original = load_config(config_path)
+    saved = save_config(config_path, original)
+    assert saved == original
+    reloaded = load_config(config_path)
+    assert reloaded.repo == original.repo
+    assert reloaded.backlog == original.backlog
+
+
+def test_save_config_keeps_explicit_relative_paths(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config = ForgeoConfig(
+        name="demo",
+        repo=Path("."),
+        backlog=Path("backlog.json"),
+        blocker_file=Path("BLOCKER.md"),
+        agent_command="echo hi",
+        log_file="forgeo.log",
+    )
+    save_config(config_path, config)
+    disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert disk["repo"] == "."
+    assert disk["backlog"] == "backlog.json"
+    assert disk["log_file"] == "forgeo.log"

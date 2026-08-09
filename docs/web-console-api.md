@@ -301,6 +301,55 @@ The resolved `forgeo.yaml` as JSON.
 curl http://127.0.0.1:8790/api/instances/my-repo/config
 ```
 
+### `PUT /api/instances/<name>/config`
+
+Validate and persist an instance's `forgeo.yaml`. The request body is the same
+shape `GET /api/instances/<name>/config` returns, and is validated against the
+same `ForgeoConfig` schema the daemon uses. Relative paths (`repo`, `backlog`,
+`blocker_file`, `log_file`) are stored relative to the config file's own
+directory, so they resolve to the same absolute paths on the daemon's next
+load — sending back the exact payload from `GET` round-trips the file without
+hard-coding absolute paths into it.
+
+```bash
+curl -X PUT http://127.0.0.1:8790/api/instances/my-repo/config \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "my-repo", "repo": "/home/me/projects/site-a", "interval_minutes": 60, "backlog": "backlog.json", "blocker_file": "BLOCKER.md", "agent_command": "claude -p \"$FORGEO_TASK\" --model haiku", "log_file": "forgeo.log"}'
+```
+
+The write is atomic (temp file + rename), like the other write endpoints.
+Returns `200` with the reloaded config plus an explicit restart notice:
+
+```json
+{
+  "saved": true,
+  "restart_required": true,
+  "message": "Config saved. The daemon picks up changes on its next restart.",
+  "config": { "...": "the reloaded config, paths resolved" }
+}
+```
+
+The daemon re-reads `forgeo.yaml` only on restart (`forgeo restart`); a config
+save never restarts it for you, and `restart_required` is `true` on every
+successful save so the caller cannot miss it. Errors:
+
+- `400` with `{"error": "..."}` — an unparseable, non-object or empty body; a
+  payload that fails `ForgeoConfig` validation (e.g. a blank `agent_command`,
+  a non-positive `interval_minutes`, a `docker` `agent_sandbox` without an
+  `agent_sandbox_image`); a `name` that differs from the registered instance
+  name; or an attempt to change `telegram_bot_token`.
+- `404` with `{"error": "unknown instance"}` — the instance is not registered.
+- `500` with `{"error": "instance config not available"}` — the instance's
+  config cannot currently be loaded.
+
+`name` is owned by the registry (it is the key mapping an instance to its
+`forgeo.yaml`) and is forced to the registered name — sending a different value
+is rejected. `telegram_bot_token` is not editable through the web console: an
+explicit change is rejected with `400`, and the current value is preserved when
+the field is omitted, so a partial payload never wipes it. Everything else
+`GET .../config` returns (including `agent_env`, which can carry credentials
+the agent needs) is editable.
+
 ### `GET /api/instances/<name>/logs?lines=N`
 
 The last `N` lines of that instance's `forgeo.log` (`N` defaults to `100`,
@@ -342,14 +391,17 @@ curl http://127.0.0.1:8790/api/instances/my-repo/blocker
 - The write endpoints are `POST /api/instances/<name>/tasks` (append a task),
   `POST /api/instances/<name>/tasks/<id>/reopen` (reopen a `BLOCKED` task),
   `PATCH /api/instances/<name>/tasks/<id>` (update a task's editable fields),
-  and `DELETE /api/instances/<name>/tasks/<id>` (delete an `OPEN` or
-  `BLOCKED` task).
+  `DELETE /api/instances/<name>/tasks/<id>` (delete an `OPEN` or `BLOCKED`
+  task), and `PUT /api/instances/<name>/config` (validate and persist the
+  instance's `forgeo.yaml`; applies on the daemon's next restart).
 
 ## Errors
 
-- `400` — malformed `POST`/`PATCH` body (missing/blank title, unparseable
-  body, wrong field types, unknown fields), a `POST reopen` of a task that is
-  not `BLOCKED`, or `DELETE` of a task that is neither `OPEN` nor `BLOCKED`.
+- `400` — malformed `POST`/`PATCH`/`PUT` body (missing/blank title, unparseable
+  body, wrong field types, unknown fields), a config payload that fails schema
+  validation, a change to an instance's registered `name` or to its
+  `telegram_bot_token`, a `POST reopen` of a task that is not `BLOCKED`, or
+  `DELETE` of a task that is neither `OPEN` nor `BLOCKED`.
 - `404` — unknown API path, unknown instance, unknown task, or missing
   static file.
 - `409` — `POST` id collision (a concurrent request won the race).
@@ -370,6 +422,11 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
 - The write endpoints are `POST /api/instances/<name>/tasks` and `PATCH
   /api/instances/<name>/tasks/<id>` (and `POST
   /api/instances/<name>/tasks/<id>/reopen` to retry a `BLOCKED` task, plus
-  `DELETE /api/instances/<name>/tasks/<id>` for open or blocked tasks). A
+  `DELETE /api/instances/<name>/tasks/<id>` for open or blocked tasks, and
+  `PUT /api/instances/<name>/config` for an instance's configuration). A
   machine that can reach the port can add tasks to any instance's queue, edit
-  their fields, retry blocked ones, and delete open or blocked ones.
+  their fields, retry blocked ones, delete open or blocked ones, and change an
+  instance's configuration (interval, agent command, paths, ...). The config
+  write cannot change an instance's registered `name` or its
+  `telegram_bot_token`, and it never restarts a daemon — the new config applies
+  only on the daemon's next restart.

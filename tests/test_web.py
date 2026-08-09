@@ -11,9 +11,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 
 from forgeo.central import CentralWebServer, web_task_id_for
 from forgeo.cli import build_parser, cmd_web
+from forgeo.config import load_config
 from forgeo.daemon import acquire_run_lock
 from forgeo.instances import add_instance
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
@@ -81,6 +83,26 @@ def _patch(url: str, data: str | None) -> tuple[int, dict | list | str]:
 
 def _delete(url: str) -> tuple[int, dict | list | str]:
     request = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            resp_body = resp.read().decode("utf-8")
+            ctype = resp.headers.get_content_type()
+            if ctype == "application/json":
+                return resp.status, json.loads(resp_body)
+            return resp.status, resp_body
+    except urllib.error.HTTPError as exc:
+        resp_body = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(resp_body)
+        except json.JSONDecodeError:
+            return exc.code, resp_body
+
+
+def _put(url: str, data: str | None) -> tuple[int, dict | list | str]:
+    body = data.encode("utf-8") if data is not None else None
+    request = urllib.request.Request(url, data=body, method="PUT")
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(request, timeout=5) as resp:
             resp_body = resp.read().decode("utf-8")
@@ -1011,6 +1033,254 @@ def test_config_endpoint(web_env):
     assert status == 200
     assert data["name"] == "alpha"
     assert data["interval_minutes"] == 30
+
+
+def test_put_config_persists_and_returns_reloaded(web_env):
+    server, registry = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/config"
+    _, before = _get(url)
+    payload = dict(before)
+    payload["interval_minutes"] = 15
+    payload["branch"] = "dev"
+    status, data = _put(url, json.dumps(payload))
+    assert status == 200
+    assert data["saved"] is True
+    assert data["restart_required"] is True
+    assert data["message"]
+    assert data["config"]["name"] == "alpha"
+    assert data["config"]["interval_minutes"] == 15
+    assert data["config"]["branch"] == "dev"
+
+    status, after = _get(url)
+    assert status == 200
+    assert after["interval_minutes"] == 15
+    assert after["branch"] == "dev"
+
+    disk = yaml.safe_load((registry / "alpha" / "forgeo.yaml").read_text(encoding="utf-8"))
+    assert disk["interval_minutes"] == 15
+    assert disk["branch"] == "dev"
+
+
+def test_put_config_round_trips_relative_paths(web_env, registry):
+    server, registry = web_env
+    config_dir = registry / "rel"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        "name: rel\n"
+        "repo: ../repo\n"
+        "backlog: tasks.json\n"
+        "blocker_file: BLOCKER.md\n"
+        "agent_command: echo hi\n"
+        "log_file: forgeo.log\n"
+        "interval_minutes: 30\n",
+        encoding="utf-8",
+    )
+    add_instance("rel", config_path)
+    url = f"http://127.0.0.1:{server.port}/api/instances/rel/config"
+
+    status, config = _get(url)
+    assert status == 200
+    assert config["name"] == "rel"
+    assert Path(config["repo"]).resolve() == (config_dir / ".." / "repo").resolve()
+    assert config["backlog"] == str((config_dir / "tasks.json").resolve())
+
+    status, data = _put(url, json.dumps(config))
+    assert status == 200
+    assert data["config"]["backlog"] == str((config_dir / "tasks.json").resolve())
+
+    disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert disk["repo"] == "../repo"
+    assert disk["backlog"] == "tasks.json"
+    assert disk["blocker_file"] == "BLOCKER.md"
+    assert disk["log_file"] == "forgeo.log"
+
+    reloaded = load_config(config_path)
+    assert reloaded.repo.resolve() == (config_dir / ".." / "repo").resolve()
+    assert reloaded.backlog == (config_dir / "tasks.json").resolve()
+    assert reloaded.blocker_file == (config_dir / "BLOCKER.md").resolve()
+    assert reloaded.log_file == str((config_dir / "forgeo.log").resolve())
+
+
+def test_put_config_validation_errors(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/config"
+    for payload in (
+        {"name": "alpha", "agent_command": ""},
+        {"name": "alpha", "agent_command": "echo", "interval_minutes": 0},
+        {"name": "alpha", "agent_command": "echo", "agent_sandbox": "sandbox"},
+        {"name": "alpha", "agent_command": "echo", "branch": 42},
+        {"name": "alpha", "agent_command": "echo", "agent_sandbox": "docker"},
+    ):
+        status, data = _put(url, json.dumps(payload))
+        assert status == 400, payload
+        assert data["error"]
+
+    status, data = _put(url, "{not json")
+    assert status == 400
+    assert data["error"]
+
+    status, data = _put(url, "[1, 2]")
+    assert status == 400
+    assert data["error"]
+
+    status, data = _put(url, None)
+    assert status == 400
+    assert data["error"]
+
+    status, data = _put(url, json.dumps({}))
+    assert status == 400
+    assert data["error"]
+
+    status, config = _get(url)
+    assert status == 200
+    assert config["interval_minutes"] == 30
+
+
+def test_put_config_rejects_changed_name(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/config"
+    _, config = _get(url)
+    payload = dict(config)
+    payload["name"] = "other"
+    status, data = _put(url, json.dumps(payload))
+    assert status == 400
+    assert data["error"]
+
+    status, after = _get(url)
+    assert status == 200
+    assert after["name"] == "alpha"
+
+
+def test_put_config_rejects_changed_telegram_token(web_env, registry):
+    server, registry = web_env
+    config_dir = registry / "tok"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        "name: tok\n"
+        "repo: ../repo\n"
+        "backlog: backlog.json\n"
+        "agent_command: echo hi\n"
+        "telegram_bot_token: real-secret\n",
+        encoding="utf-8",
+    )
+    add_instance("tok", config_path)
+    url = f"http://127.0.0.1:{server.port}/api/instances/tok/config"
+
+    _, config = _get(url)
+    assert config["telegram_bot_token"] == "real-secret"
+    payload = dict(config)
+    payload["telegram_bot_token"] = "attacker-token"
+    status, data = _put(url, json.dumps(payload))
+    assert status == 400
+    assert data["error"]
+
+    status, after = _get(url)
+    assert status == 200
+    assert after["telegram_bot_token"] == "real-secret"
+
+
+def test_put_config_cannot_null_telegram_token(web_env, registry):
+    server, registry = web_env
+    config_dir = registry / "tok"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        "name: tok\n"
+        "repo: ../repo\n"
+        "backlog: backlog.json\n"
+        "agent_command: echo hi\n"
+        "telegram_bot_token: real-secret\n",
+        encoding="utf-8",
+    )
+    add_instance("tok", config_path)
+    url = f"http://127.0.0.1:{server.port}/api/instances/tok/config"
+
+    _, config = _get(url)
+    payload = dict(config)
+    payload["telegram_bot_token"] = None
+    status, data = _put(url, json.dumps(payload))
+    assert status == 400
+    assert data["error"]
+
+    status, after = _get(url)
+    assert status == 200
+    assert after["telegram_bot_token"] == "real-secret"
+
+
+def test_put_config_preserves_telegram_token(web_env, registry):
+    server, registry = web_env
+    config_dir = registry / "tok"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        "name: tok\n"
+        "repo: ../repo\n"
+        "backlog: backlog.json\n"
+        "agent_command: echo hi\n"
+        "telegram_bot_token: real-secret\n",
+        encoding="utf-8",
+    )
+    add_instance("tok", config_path)
+    url = f"http://127.0.0.1:{server.port}/api/instances/tok/config"
+
+    _, config = _get(url)
+    payload = dict(config)
+    payload["interval_minutes"] = 45
+    status, data = _put(url, json.dumps(payload))
+    assert status == 200
+    assert data["config"]["telegram_bot_token"] == "real-secret"
+
+    _, after = _get(url)
+    payload = dict(after)
+    del payload["telegram_bot_token"]
+    payload["interval_minutes"] = 60
+    status, data = _put(url, json.dumps(payload))
+    assert status == 200
+    assert data["config"]["telegram_bot_token"] == "real-secret"
+
+    status, after = _get(url)
+    assert status == 200
+    assert after["telegram_bot_token"] == "real-secret"
+    assert after["interval_minutes"] == 60
+
+
+def test_put_config_unknown_instance_404(web_env):
+    server, _ = web_env
+    status, data = _put(
+        f"http://127.0.0.1:{server.port}/api/instances/nope/config",
+        json.dumps({"agent_command": "echo"}),
+    )
+    assert status == 404
+    assert data["error"] == "unknown instance"
+
+
+def test_put_config_wrong_path_404(web_env):
+    server, _ = web_env
+    status, data = _put(
+        f"http://127.0.0.1:{server.port}/api/instances/alpha/bogus",
+        json.dumps({"agent_command": "echo"}),
+    )
+    assert status == 404
+    assert data["error"] == "not found"
+
+
+def test_do_put_returns_500_on_unexpected_error(web_env, monkeypatch):
+    import forgeo.central as central_module
+
+    server, _ = web_env
+
+    def boom(name: str) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(central_module, "get_instance", boom)
+    status, data = _put(
+        f"http://127.0.0.1:{server.port}/api/instances/alpha/config",
+        json.dumps({"agent_command": "echo"}),
+    )
+    assert status == 500
+    assert data["error"] == "internal server error"
 
 
 def test_missing_data_files_render_empty(registry, central_server):

@@ -31,7 +31,12 @@ static files in `src/forgeo/web/` are served at their URL paths.
   counts, each linking to its instance page.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
   **Create** tab with a form to add tasks, plus tabs for **logs**, **runs**,
-  **blocker** and **config**. Clicking a task card opens a modal with the full
+  **blocker** and **config**. The **Config** tab renders `forgeo.yaml` as an
+  editable form (interval, agent command, sandbox, telegram settings, ...):
+  **Save** persists it via `PUT /api/instances/<name>/config`, surfaces
+  validation errors inline (highlighted next to the failing field), and shows
+  a notice that the running daemon applies the change only on its next
+  restart. Clicking a task card opens a modal with the full
   task details (description, acceptance criteria, dependencies, files to
   modify, agent command, timestamps); it closes via the close button, the
   backdrop, or Escape. An **Edit** button switches the modal to an editable

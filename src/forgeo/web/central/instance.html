@@ -92,7 +92,23 @@
     <pre class="code-panel" id="blocker-body">(loading &hellip;)</pre>
   </main>
   <main id="tab-config" class="tab-panel" hidden>
-    <pre class="code-panel" id="config-body">(loading &hellip;)</pre>
+    <div id="config-body">
+      <p class="config-panel__loading" id="config-loading">(loading &hellip;)</p>
+      <div class="config-banner config-banner--error" id="config-error" role="alert" hidden></div>
+      <div class="config-banner config-banner--notice" id="config-restart-hint" hidden></div>
+      <form class="config-form" id="config-form" hidden>
+        <p class="config-form__hint">
+          Edits are written to <code>forgeo.yaml</code>. The running daemon
+          re-reads the config only on restart, so a saved change applies on the
+          daemon&rsquo;s next start (<code>forgeo restart</code>).
+        </p>
+        <div class="config-form__grid" id="config-fields"></div>
+        <div class="config-form__actions">
+          <span class="config-form__status" id="config-save-status" aria-live="polite"></span>
+          <button class="config-form__save" id="config-save" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
   </main>
 
   <footer class="footerbar">

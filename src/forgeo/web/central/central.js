@@ -25,6 +25,9 @@
   var instanceName = match ? decodeURIComponent(match[1]) : null;
   var API = instanceName ? "/api/instances/" + encodeURIComponent(instanceName) + "/" : null;
   var currentTab = "backlog";
+  var instanceStatus = null;
+  var configDirty = false;
+  var configFormBuilt = false;
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -682,6 +685,7 @@
   }
 
   function renderStatus(status) {
+    instanceStatus = status || {};
     setText("forgeo-name", status.name || instanceName);
     var daemon = Boolean(status.daemon_running);
     var badge = document.getElementById("meta-daemon");
@@ -748,6 +752,319 @@
     if (node) node.textContent = text || fallback;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Config tab: editable forgeo.yaml form                               */
+  /* ------------------------------------------------------------------ */
+
+  var CONFIG_FIELDS = [
+    { key: "repo", label: "Repository", type: "text", hint: "Path of the git repository Forgeo works on." },
+    { key: "interval_minutes", label: "Interval (minutes)", type: "number", min: 1, step: 1 },
+    { key: "branch", label: "Branch", type: "text", hint: "Branch everything is committed to (default main)." },
+    { key: "remote", label: "Git remote", type: "text", optional: true, hint: "Remote to push to (e.g. origin). Empty = commit locally only." },
+    { key: "agent_command", label: "Agent command", type: "textarea", rows: 3, hint: "Shell command (or argv list) that runs the coding agent. The task arrives as the $FORGEO_TASK environment variable; exit 0 = success, blocked_exit_code = needs human input." },
+    { key: "agent_timeout_seconds", label: "Agent timeout (seconds)", type: "number", min: 0.1, step: "any", optional: true, hint: "Kill the agent after this many seconds. Empty = never." },
+    { key: "blocked_exit_code", label: "Blocked exit code", type: "number", min: 1, step: 1 },
+    { key: "git_timeout_seconds", label: "Git timeout (seconds)", type: "number", min: 0.1, step: "any" },
+    { key: "refactor_prompt", label: "Refactor prompt", type: "textarea", rows: 4, hint: "Instruction used for the refactoring run when the backlog is empty." },
+    { key: "backlog", label: "Backlog file", type: "text", hint: "Path of the JSON backlog file (created on first use)." },
+    { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
+    { key: "log_file", label: "Log file", type: "text" },
+    { key: "agent_sandbox", label: "Agent sandbox", type: "select", options: ["none", "docker"], hint: "none = run directly on the host; docker = run inside a container." },
+    { key: "agent_sandbox_image", label: "Sandbox image", type: "text", optional: true, hint: "Container image used when agent_sandbox is docker. Required in that mode." },
+    { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },
+    { key: "agent_sandbox_mounts", label: "Sandbox mounts", type: "textarea", rows: 2, optional: true, hint: "Host paths mounted read-only into the container, one per line." },
+    { key: "agent_env", label: "Agent environment", type: "textarea", rows: 3, optional: true, hint: "Extra environment variables for the agent process, one KEY=VALUE per line." },
+    { key: "telegram_chat_id", label: "Telegram chat id", type: "text", optional: true },
+    { key: "telegram_bot_token", label: "Telegram bot token", type: "readonly", hint: "Protected: not editable through the web console." }
+  ];
+
+  function configValue(field, config) {
+    var v = config ? config[field.key] : "";
+    if (v === undefined || v === null) return "";
+    if (field.key === "telegram_bot_token") {
+      var secret = String(v);
+      return secret.length > 4 ? "••••••••" + secret.slice(-4) : "••••••••";
+    }
+    if (field.key === "agent_env" && typeof v === "object" && !Array.isArray(v)) {
+      return Object.keys(v)
+        .map(function (key) {
+          return key + "=" + v[key];
+        })
+        .join("\n");
+    }
+    if (Array.isArray(v)) return field.key === "agent_command" ? v.join(" ") : v.join("\n");
+    return String(v);
+  }
+
+  function markConfigDirty() {
+    configDirty = true;
+    var status = document.getElementById("config-save-status");
+    if (status && status.dataset.state === "saved") {
+      status.textContent = "unsaved changes";
+      status.dataset.state = "dirty";
+    }
+  }
+
+  function buildConfigField(field, config) {
+    var wrap = el("label", "config-field");
+    wrap.setAttribute("data-config-key", field.key);
+    wrap.appendChild(el("span", "config-field__label", field.label));
+
+    var control;
+    var value = configValue(field, config);
+    if (field.type === "readonly") {
+      control = el("span", "config-field__readonly", value);
+    } else if (field.type === "textarea") {
+      control = document.createElement("textarea");
+      control.id = "config-" + field.key;
+      control.rows = field.rows || 3;
+      control.value = value;
+    } else if (field.type === "select") {
+      control = document.createElement("select");
+      control.id = "config-" + field.key;
+      (field.options || []).forEach(function (optionValue) {
+        var option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = optionValue;
+        if (optionValue === value) option.selected = true;
+        control.appendChild(option);
+      });
+    } else {
+      control = document.createElement("input");
+      control.id = "config-" + field.key;
+      control.type = field.type === "number" ? "number" : "text";
+      if (field.type === "number") {
+        if (field.min !== undefined) control.min = String(field.min);
+        if (field.step !== undefined) control.step = String(field.step);
+      }
+      control.value = value;
+    }
+    if (field.type !== "readonly") {
+      control.addEventListener("input", markConfigDirty);
+      control.addEventListener("change", markConfigDirty);
+    }
+    wrap.appendChild(control);
+
+    var error = el("span", "config-field__error");
+    error.hidden = true;
+    wrap.appendChild(error);
+
+    if (field.hint) wrap.appendChild(el("span", "config-field__hint", field.hint));
+    return wrap;
+  }
+
+  function setConfigLoading(show) {
+    var loading = document.getElementById("config-loading");
+    if (loading) loading.hidden = !show;
+  }
+
+  function showConfigError(message) {
+    setConfigLoading(false);
+    var form = document.getElementById("config-form");
+    if (form) form.hidden = true;
+    var hint = document.getElementById("config-restart-hint");
+    if (hint) hint.hidden = true;
+    var error = document.getElementById("config-error");
+    if (error) {
+      error.textContent = message || "config could not be loaded";
+      error.hidden = false;
+    }
+  }
+
+  function renderConfig(config) {
+    setConfigLoading(false);
+    configFormBuilt = true;
+    configDirty = false;
+    var error = document.getElementById("config-error");
+    if (error) error.hidden = true;
+    var hint = document.getElementById("config-restart-hint");
+    if (hint) hint.hidden = true;
+    var form = document.getElementById("config-form");
+    var fields = document.getElementById("config-fields");
+    if (!form || !fields) return;
+    fields.textContent = "";
+    CONFIG_FIELDS.forEach(function (field) {
+      fields.appendChild(buildConfigField(field, config));
+    });
+    form.hidden = false;
+    var status = document.getElementById("config-save-status");
+    if (status) {
+      status.textContent = "";
+      status.dataset.state = "";
+    }
+    var saveBtn = document.getElementById("config-save");
+    if (saveBtn) saveBtn.disabled = false;
+  }
+
+  function clearConfigFieldErrors() {
+    var wrappers = document.querySelectorAll(".config-field--invalid");
+    for (var i = 0; i < wrappers.length; i++) {
+      wrappers[i].classList.remove("config-field--invalid");
+      var error = wrappers[i].querySelector(".config-field__error");
+      if (error) {
+        error.hidden = true;
+        error.textContent = "";
+      }
+    }
+  }
+
+  function highlightConfigErrors(message) {
+    clearConfigFieldErrors();
+    var text = String(message || "");
+    var prefix = "invalid config: ";
+    var body = text.indexOf(prefix) === 0 ? text.slice(prefix.length) : text;
+    body.split("; ").forEach(function (segment) {
+      var idx = segment.indexOf(":");
+      if (idx < 0) return;
+      var loc = segment.slice(0, idx).trim();
+      var detail = segment.slice(idx + 1).trim();
+      var fieldKey = loc.split(".")[0];
+      var wrapper = document.querySelector('[data-config-key="' + fieldKey + '"]');
+      if (!wrapper) return;
+      wrapper.classList.add("config-field--invalid");
+      var error = wrapper.querySelector(".config-field__error");
+      if (error) {
+        error.textContent = detail;
+        error.hidden = false;
+      }
+    });
+  }
+
+  function collectConfig() {
+    var payload = { name: instanceName };
+    CONFIG_FIELDS.forEach(function (field) {
+      var node = document.getElementById("config-" + field.key);
+      if (!node) return;
+      var raw = node.value;
+      if (field.key === "agent_env") {
+        var env = {};
+        String(raw)
+          .split(/\r?\n/)
+          .forEach(function (line) {
+            line = line.trim();
+            if (!line) return;
+            var eq = line.indexOf("=");
+            if (eq < 0) env[line] = "";
+            else env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+          });
+        payload[field.key] = env;
+      } else if (field.key === "agent_sandbox_mounts") {
+        payload[field.key] = splitLines(raw);
+      } else if (field.type === "number") {
+        var trimmed = String(raw).trim();
+        if (trimmed === "") {
+          payload[field.key] = field.optional ? null : Number("0");
+        } else {
+          payload[field.key] = Number(trimmed);
+        }
+      } else {
+        var value = String(raw).trim();
+        payload[field.key] = field.optional && value === "" ? null : value;
+      }
+    });
+    return payload;
+  }
+
+  function renderRestartHint(message, status) {
+    var hint = document.getElementById("config-restart-hint");
+    if (!hint) return;
+    hint.textContent = "";
+    hint.appendChild(el("strong", null, "Config saved"));
+    var notice = String(message || "The daemon picks up changes on its next restart.").replace(/^Config saved\.?\s*/i, "");
+    hint.appendChild(document.createTextNode(" — " + notice + " "));
+    if (status) {
+      var state = status.daemon_running ? "running" : "stopped";
+      hint.appendChild(
+        document.createTextNode(
+          "The daemon is currently " + state + " and still uses the previous config until it is restarted (forgeo restart)."
+        )
+      );
+    } else {
+      hint.appendChild(
+        document.createTextNode("The running daemon still uses the previous config until it is restarted (forgeo restart).")
+      );
+    }
+    hint.hidden = false;
+  }
+
+  function saveConfig() {
+    if (!API) return;
+    var error = document.getElementById("config-error");
+    var status = document.getElementById("config-save-status");
+    var saveBtn = document.getElementById("config-save");
+    if (error) error.hidden = true;
+    clearConfigFieldErrors();
+    if (saveBtn) saveBtn.disabled = true;
+    if (status) {
+      status.textContent = "saving…";
+      status.dataset.state = "saving";
+    }
+
+    fetch(API + "config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectConfig()),
+    })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (data) {
+            throw new Error((data && data.error) || "HTTP " + resp.status);
+          });
+        }
+        return resp.json();
+      })
+      .then(function (data) {
+        renderConfig(data.config);
+        if (status) {
+          status.textContent = "saved";
+          status.dataset.state = "saved";
+        }
+        return fetchJSON(API + "status")
+          .then(function (statusData) {
+            instanceStatus = statusData || {};
+            return statusData;
+          })
+          .catch(function () {
+            return null;
+          })
+          .then(function (statusData) {
+            renderRestartHint(data.message, statusData);
+          });
+      })
+      .catch(function (err) {
+        if (saveBtn) saveBtn.disabled = false;
+        if (status) {
+          status.textContent = "";
+          status.dataset.state = "";
+        }
+        highlightConfigErrors(err.message);
+        if (error) {
+          error.textContent = err.message || "failed to save config";
+          error.hidden = false;
+        }
+      });
+  }
+
+  function loadConfig() {
+    if (!API) return;
+    if (configDirty) return;
+    if (!configFormBuilt) setConfigLoading(true);
+    fetchJSON(API + "config")
+      .then(function (config) {
+        if (configDirty) return;
+        if (config && typeof config.error === "string") {
+          showConfigError(config.error);
+          return;
+        }
+        renderConfig(config);
+        setDown(false);
+      })
+      .catch(function (err) {
+        setDown(true);
+        showConfigError(err && err.message ? err.message : "config could not be loaded");
+      });
+  }
+
   function loadTab(tab) {
     if (!API || tab === "backlog" || tab === "create") return;
     if (tab === "logs") {
@@ -778,14 +1095,7 @@
           setDown(true);
         });
     } else if (tab === "config") {
-      fetchJSON(API + "config")
-        .then(function (data) {
-          renderTextPanel("config-body", JSON.stringify(data, null, 2), "(no config)");
-          setDown(false);
-        })
-        .catch(function () {
-          setDown(true);
-        });
+      loadConfig();
     }
   }
 
@@ -928,6 +1238,13 @@
   function wire() {
     if (page === "instance") {
       wireNewTask();
+      var configForm = document.getElementById("config-form");
+      if (configForm) {
+        configForm.addEventListener("submit", function (event) {
+          event.preventDefault();
+          saveConfig();
+        });
+      }
       var buttons = document.querySelectorAll(".tab[data-tab]");
       for (var i = 0; i < buttons.length; i++) {
         buttons[i].addEventListener("click", function () {

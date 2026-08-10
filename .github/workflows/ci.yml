@@ -90,6 +90,24 @@ jobs:
         with:
           path: binaries
           merge-multiple: true
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          python - "${{ github.ref_name }}" <<'EOF'
+          import re
+          import sys
+          import pathlib
+
+          version = sys.argv[1].removeprefix("v")
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\] .*?\n(.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(text)
+          notes = match.group(1).strip() if match else ""
+          pathlib.Path("release-body.md").write_text(notes, encoding="utf-8")
+          EOF
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -97,6 +115,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             binaries/*
+          body_path: release-body.md
 
   publish-pypi:
     if: startsWith(github.ref, 'refs/tags/v')

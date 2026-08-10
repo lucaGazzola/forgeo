@@ -21,6 +21,9 @@ DEFAULT_REFACTOR_PROMPT = (
     "make no changes."
 )
 
+#: Fallback shown to the human when a blocked agent gave no explanation.
+NO_BLOCKER_REASON = "The agent did not explain what it needs."
+
 
 def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | None:
     """Shared validation: an agent command must be a non-blank string or list."""
@@ -157,6 +160,11 @@ class ExecutionResult(BaseModel):
     questions: list[str] = Field(default_factory=list)
     error: str | None = None
     exit_code: int | None = None
+
+    @property
+    def reason(self) -> list[str]:
+        """The agent's human-readable explanation: its questions, else its output."""
+        return self.questions or self.output_logs
 
 
 class RepoContext(BaseModel):

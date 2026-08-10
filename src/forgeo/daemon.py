@@ -55,16 +55,12 @@ def _take_flock(lock_path: str | Path) -> Any | None:
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_file.open("a+")
     fcntl = _fcntl()
-    if fcntl is None:
-        handle.truncate(0)
-        handle.write(f"pid={os.getpid()}\n")
-        handle.flush()
-        return handle
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return None
+    if fcntl is not None:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            return None
     handle.truncate(0)
     handle.write(f"pid={os.getpid()}\n")
     handle.flush()

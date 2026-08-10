@@ -382,6 +382,21 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 return
             self._send_json(404, {"error": "not found"})
 
+        def _resolve_instance(self, name: str) -> InstanceInfo | None:
+            """The registered instance, or ``None`` after sending a 404."""
+            info = get_instance(name)
+            if info is None:
+                self._send_json(404, {"error": "unknown instance"})
+                return None
+            return info
+
+        def _instance_config(self, info: InstanceInfo) -> ForgeoConfig | None:
+            """The instance's config, or ``None`` after sending a 500."""
+            if info.config is None:
+                self._send_json(500, {"error": "instance config not available"})
+                return None
+            return info.config
+
         def _read_json_body(self) -> dict[str, Any] | None:
             """Read and parse the request body as a JSON object.
 
@@ -419,19 +434,18 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             """
             parts = path[len("/api/instances/") :].split("/")
             name = unquote(parts[0])
-            info = get_instance(name)
+            info = self._resolve_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
                 return None
             expected = 3 if with_task_id else 2
             if len(parts) != expected or parts[1] != "tasks":
                 self._send_json(404, {"error": "not found"})
                 return None
-            if info.config is None:
-                self._send_json(500, {"error": "instance config not available"})
+            config = self._instance_config(info)
+            if config is None:
                 return None
             task_id = unquote(parts[2]) if with_task_id else None
-            return info.config, task_id
+            return config, task_id
 
         def _post_instance_api(self, path: str) -> None:
             """Route a POST under ``/api/instances/`` to its handler."""
@@ -468,14 +482,12 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             """
             parts = path[len("/api/instances/") :].split("/")
             name = unquote(parts[0])
-            info = get_instance(name)
+            info = self._resolve_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
                 return
-            if info.config is None:
-                self._send_json(500, {"error": "instance config not available"})
+            config = self._instance_config(info)
+            if config is None:
                 return
-            config = info.config
             lock_path = Path(config.backlog).with_suffix(".lock")
 
             if action == "start":
@@ -664,16 +676,15 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(404, {"error": "not found"})
                 return
             name = unquote(parts[0])
-            info = get_instance(name)
+            info = self._resolve_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
                 return
-            if info.config is None:
-                self._send_json(500, {"error": "instance config not available"})
+            config = self._instance_config(info)
+            if config is None:
                 return
             task_id = unquote(parts[2])
 
-            backlog = JSONBacklog(info.config.backlog)
+            backlog = JSONBacklog(config.backlog)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
                 self._send_json(404, {"error": "not found"})
@@ -737,12 +748,11 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             """
             parts = path[len("/api/instances/") :].split("/")
             name = unquote(parts[0])
-            info = get_instance(name)
+            info = self._resolve_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
                 return
-            if info.config is None:
-                self._send_json(500, {"error": "instance config not available"})
+            config = self._instance_config(info)
+            if config is None:
                 return
 
             payload = self._read_json_body()
@@ -761,14 +771,14 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 return
             payload["name"] = info.name
             if "telegram_bot_token" in payload:
-                if payload["telegram_bot_token"] != info.config.telegram_bot_token:
+                if payload["telegram_bot_token"] != config.telegram_bot_token:
                     self._send_json(
                         400,
                         {"error": "telegram_bot_token is not editable through the web console"},
                     )
                     return
             else:
-                payload["telegram_bot_token"] = info.config.telegram_bot_token
+                payload["telegram_bot_token"] = config.telegram_bot_token
 
             try:
                 config = ForgeoConfig.model_validate(payload)
@@ -799,9 +809,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
         def _handle_instance_api(self, path: str, query: dict[str, list[str]]) -> None:
             parts = path[len("/api/instances/") :].split("/")
             name = unquote(parts[0])
-            info = get_instance(name)
+            info = self._resolve_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
                 return
             if len(parts) < 2:
                 self._send_json(404, {"error": "not found"})

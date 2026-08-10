@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -91,18 +92,12 @@ class JSONBacklog:
         ``failure_reason``, so a task that stops being failed no longer shows
         the stale reason.
         """
-        async with self._lock:
-            store = await self._read()
-            entry = self._entry_by_id(store, task_id)
-            if entry is None:
-                return None
+        def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = status.value
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
-            entry["updated_at"] = datetime.now(UTC).isoformat()
-            updated = self._to_task(entry)
-            await self._write(store)
-        return updated
+
+        return await self._update_entry(task_id, mutate)
 
     async def set_blocked(self, task_id: str, reason: list[str]) -> Task | None:
         """Mark a task ``BLOCKED``, persisting the agent's blocker reason.
@@ -112,19 +107,13 @@ class JSONBacklog:
         every time a task transitions into ``BLOCKED``. An unknown ``task_id``
         returns ``None`` without writing anything.
         """
-        async with self._lock:
-            store = await self._read()
-            entry = self._entry_by_id(store, task_id)
-            if entry is None:
-                return None
+        def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.BLOCKED.value
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
             entry["failure_reason"] = []
-            entry["updated_at"] = datetime.now(UTC).isoformat()
-            updated = self._to_task(entry)
-            await self._write(store)
-        return updated
+
+        return await self._update_entry(task_id, mutate)
 
     async def set_failed(self, task_id: str, reason: list[str]) -> Task | None:
         """Mark a task ``FAILED``, persisting the failure reason.
@@ -134,17 +123,11 @@ class JSONBacklog:
         ``FAILED``. An unknown ``task_id`` returns ``None`` without writing
         anything.
         """
-        async with self._lock:
-            store = await self._read()
-            entry = self._entry_by_id(store, task_id)
-            if entry is None:
-                return None
+        def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
-            entry["updated_at"] = datetime.now(UTC).isoformat()
-            updated = self._to_task(entry)
-            await self._write(store)
-        return updated
+
+        return await self._update_entry(task_id, mutate)
 
     async def reopen_task(self, task_id: str) -> Task | None:
         """Reopen a blocked task: status back to ``OPEN``, reason cleared.
@@ -153,18 +136,12 @@ class JSONBacklog:
         the task blocked before deciding to retry, split, or drop it). An
         unknown ``task_id`` returns ``None`` without writing anything.
         """
-        async with self._lock:
-            store = await self._read()
-            entry = self._entry_by_id(store, task_id)
-            if entry is None:
-                return None
+        def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.OPEN.value
             entry["blocker_reason"] = []
             entry["failure_reason"] = []
-            entry["updated_at"] = datetime.now(UTC).isoformat()
-            updated = self._to_task(entry)
-            await self._write(store)
-        return updated
+
+        return await self._update_entry(task_id, mutate)
 
     async def delete_task(self, task_id: str) -> Task | None:
         """Remove a task from the backlog, returning the deleted task.
@@ -242,6 +219,26 @@ class JSONBacklog:
     # ------------------------------------------------------------------ #
     # Internal persistence helpers                                        #
     # ------------------------------------------------------------------ #
+
+    async def _update_entry(
+        self, task_id: str, mutate: Callable[[dict[str, Any]], None]
+    ) -> Task | None:
+        """Mutate one stored task under the lock and persist it.
+
+        ``mutate`` receives the stored dict for ``task_id`` and changes it in
+        place; ``updated_at`` is bumped after it runs. An unknown ``task_id``
+        returns ``None`` without writing anything.
+        """
+        async with self._lock:
+            store = await self._read()
+            entry = self._entry_by_id(store, task_id)
+            if entry is None:
+                return None
+            mutate(entry)
+            entry["updated_at"] = datetime.now(UTC).isoformat()
+            updated = self._to_task(entry)
+            await self._write(store)
+        return updated
 
     @staticmethod
     def _entry_by_id(store: dict[str, Any], task_id: str) -> Any:

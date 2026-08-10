@@ -28,6 +28,7 @@ from forgeo.agent import BaseAgent
 from forgeo.backlog import JSONBacklog, oldest_open_task
 from forgeo.git import GitError, GitManager
 from forgeo.models import (
+    NO_BLOCKER_REASON,
     ExecutionResult,
     ExecutionStatus,
     ForgeoConfig,
@@ -212,8 +213,7 @@ class Forgeo:
         )
 
         if result.status is ExecutionStatus.BLOCKED:
-            reason = result.questions or result.output_logs
-            await self.backlog.set_blocked(task.id, reason)
+            await self.backlog.set_blocked(task.id, result.reason)
         if result.status is ExecutionStatus.SUCCESS and ok:
             await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
             self.config.blocker_file.unlink(missing_ok=True)
@@ -392,11 +392,11 @@ class Forgeo:
         first lines of the blocker reason. Notifications are optional and never
         change the outcome of the cycle: a failure is only logged.
         """
-        reason = entry.result.questions or entry.result.output_logs
+        reason = entry.result.reason
         notice = BlockedNotice(
             task_id=entry.task.id,
             task_title=entry.task.title,
-            reason="\n".join(reason) if reason else "The agent did not explain what it needs.",
+            reason="\n".join(reason) if reason else NO_BLOCKER_REASON,
         )
         send_blocked_notice(self.config, notice)
 
@@ -420,8 +420,7 @@ class Forgeo:
         for task in blocked:
             sections.append(self._render_blocked_task(task))
             sections.append("")
-        self.config.blocker_file.parent.mkdir(parents=True, exist_ok=True)
-        self.config.blocker_file.write_text("\n".join(sections), encoding="utf-8")
+        self._persist_blocker(sections)
         logger.info(
             "Blocker file rendered from %d BLOCKED task(s) to %s",
             len(blocked),
@@ -442,6 +441,11 @@ class Forgeo:
             "3. Or delete the task from the web console if it should not be done.",
         ]
         return "\n".join(sections)
+
+    def _persist_blocker(self, sections: list[str]) -> None:
+        """Write the rendered blocker file (parent dir created if needed)."""
+        self.config.blocker_file.parent.mkdir(parents=True, exist_ok=True)
+        self.config.blocker_file.write_text("\n".join(sections), encoding="utf-8")
 
     def _is_derived_blocker(self) -> bool:
         """True when the blocker file is a task-derived view (not a stale or
@@ -472,14 +476,12 @@ class Forgeo:
         for entry in entries:
             sections.append(self._render_entry(entry))
             sections.append("")
-        self.config.blocker_file.parent.mkdir(parents=True, exist_ok=True)
-        self.config.blocker_file.write_text("\n".join(sections), encoding="utf-8")
+        self._persist_blocker(sections)
         logger.info("Blocker file written to %s", self.config.blocker_file)
 
     def _render_entry(self, entry: BlockerEntry) -> str:
         """Render the explanation and required human action for one refactor block."""
-        reason = entry.result.questions or entry.result.output_logs
-        sections = [self._render_reason_sections(entry.task, entry.instruction, reason)]
+        sections = [self._render_reason_sections(entry.task, entry.instruction, entry.result.reason)]
         sections += [
             "",
             "### What you must do",
@@ -498,6 +500,6 @@ class Forgeo:
         lines += [f"> {line}" for line in instruction.splitlines()]
         lines += ["", "### What the agent says it needs", ""]
         if not reason:
-            reason = ["The agent did not explain what it needs."]
+            reason = [NO_BLOCKER_REASON]
         lines += [f"> {line}" for line in reason[-10:]]
         return "\n".join(lines)

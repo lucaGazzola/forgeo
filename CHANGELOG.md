@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-10
+
+### Added
+
+- Delete OPEN tasks from the web console: a Delete button (with
+  confirmation) in the task detail modal, backed by `DELETE
+  /api/instances/<name>/tasks/<id>` and `JSONBacklog.delete_task`.
+- Resolve BLOCKED tasks from the web console: the task modal shows the
+  blocker reason and can reopen the task (back to `OPEN`) via `POST
+  /api/instances/<name>/tasks/<id>/reopen`.
+- The web console stays usable with many tasks: non-OPEN columns collapse
+  behind count badges with an expand toggle, so a long backlog no longer
+  renders every task as a tall card up front.
+- The failure/block reason is shown prominently in the task detail modal.
+- Config editing from the web console: `PUT /api/instances/<name>/config`
+  validates and persists `forgeo.yaml` changes, and a new Config tab in the
+  instance page edits the fields in a form (with a restart hint).
+- Daemon control from the web console: start, stop, and restart an
+  instance's daemon from the top bar via `POST
+  /api/instances/<name>/{start,stop,restart}`.
+- `forgeo init` now asks only for the bare agent command and appends the
+  task prompt automatically.
+
+### Changed
+
+- Commit messages no longer carry the `forgeo: ` prefix.
+- The instance is registered before the run lock is taken, so a `--name`
+  lookup never fails while starting.
+- README revised for clarity and formatting.
+
+## [0.3.0] - 2026-08-07
+
 ### Added
 
 - `forgeo web [--host HOST] [--port PORT]` — a standalone central dashboard
@@ -22,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Task editing in the web console: the task detail modal gained an **Edit**
   mode (Save/Cancel), backed by a new `PATCH
   /api/instances/<name>/tasks/<id>` endpoint and `JSONBacklog.update_task`.
+- PyPI publishing: tagging a release now also publishes the `forgeo-cli`
+  wheel and sdist to PyPI via trusted publishing.
 
 ### Changed
 
@@ -108,7 +142,9 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/lucaGazzola/forgeo/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/lucaGazzola/forgeo/compare/v0.2.0...v0.3.0
 [0.2.1]: https://github.com/lucaGazzola/forgeo/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lucaGazzola/forgeo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/lucaGazzola/forgeo/releases/tag/v0.1.0

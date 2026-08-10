@@ -14,7 +14,7 @@ set -eu
 
 REPO_OWNER="lucaGazzola"
 REPO_NAME="forgeo"
-VERSION="0.3.0"
+VERSION="0.4.0"
 MIN_PYTHON="3.11"
 PYPI_PACKAGE="forgeo-cli"
 

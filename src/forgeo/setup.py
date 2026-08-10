@@ -5,8 +5,9 @@ work on a repository:
 
 1. Forgeo folder — where the backlog, ``BLOCKER.md`` and the log live
    (inside the project, gitignored by default);
-2. the coding agent command — any shell command that reads ``$FORGEO_TASK``
-   and works in the repository (e.g. ``claude -p "$FORGEO_TASK"``);
+2. the coding agent command — the bare invocation that launches the agent
+   (e.g. ``opencode run --auto``); Forgeo appends the standard task prompt
+   (ending in ``$FORGEO_TASK``) so the user never types it;
 3. the refactoring prompt — the default is offered; a custom one can be
    pasted instead.
 
@@ -27,9 +28,33 @@ from rich.prompt import Confirm, Prompt
 from forgeo.models import DEFAULT_REFACTOR_PROMPT
 
 DEFAULT_FORGEO_DIR = ".forgeo"
-DEFAULT_AGENT_COMMAND = 'aider --message "$FORGEO_TASK"'
+DEFAULT_AGENT_COMMAND = "opencode run --auto"
+
+# The standard task prompt appended to the bare agent command (as a quoted
+# argument) when the user does not write one themselves.
+DEFAULT_AGENT_PROMPT = (
+    "Work on the repository at the current working directory.\n"
+    "Make the code changes requested below and nothing else. Do NOT run\n"
+    "git commit, git push, or git add -A — the forgeo commits your work\n"
+    "itself. Verify with the test suite where applicable and, if needed,\n"
+    "update readme, docs and landing page.\n"
+    "$FORGEO_TASK"
+)
 
 SetupInput = Callable[[str], str]
+
+
+def build_agent_command(command: str) -> str:
+    """Compose the full ``agent_command`` from a bare agent invocation.
+
+    A bare invocation like ``opencode run --auto`` gets the standard task
+    prompt appended as a quoted argument, so the agent receives the task
+    (``$FORGEO_TASK``) without the user typing it. Commands that already
+    reference ``$FORGEO_TASK`` are kept verbatim.
+    """
+    if "$FORGEO_TASK" in command:
+        return command
+    return f'{command} "{DEFAULT_AGENT_PROMPT}"'
 
 
 def _ask_text(input_fn: SetupInput | None, prompt: str, default: str | None = None) -> str:
@@ -120,14 +145,11 @@ def run_setup(
 
     command = _ask_text(
         input_fn,
-        f"[bold]Coding agent command[/bold] [default {DEFAULT_AGENT_COMMAND}]",
+        f"[bold]Coding agent command[/bold] [default {DEFAULT_AGENT_COMMAND}]\n"
+        "[dim](bare invocation; the task prompt is appended automatically)[/dim]",
         default=DEFAULT_AGENT_COMMAND,
     ).strip() or DEFAULT_AGENT_COMMAND
-    if "$FORGEO_TASK" not in command:
-        out.print(
-            "[yellow]Note: the command never references $FORGEO_TASK, so the "
-            "agent will not receive the task text.[/yellow]"
-        )
+    command = build_agent_command(command)
 
     if _ask_yes_no(input_fn, "[bold]Use the default refactor prompt?[/bold]", default=True):
         refactor_prompt = DEFAULT_REFACTOR_PROMPT

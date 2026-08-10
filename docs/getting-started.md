@@ -43,8 +43,11 @@ The wizard asks for three things:
 
 1. **Forgeo folder** — where the backlog, `BLOCKER.md` and the log live
    (default `.forgeo`). It is gitignored by default.
-2. **Coding agent command** — any shell command that reads `$FORGEO_TASK` and
-   works in the repository (default `aider --message "$FORGEO_TASK"`).
+2. **Coding agent command** — the bare command that launches your coding
+   agent (default `opencode run --auto`). Forgeo appends the standard task
+   prompt (which ends in `$FORGEO_TASK`) automatically, so you never type
+   it. Enter a command that already references `$FORGEO_TASK` and it is
+   kept verbatim.
 3. **Refactor prompt** — the instruction used when the backlog is empty; the
    default is offered, or you can paste a custom one.
 

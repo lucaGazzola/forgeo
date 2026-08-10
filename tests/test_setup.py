@@ -11,7 +11,13 @@ from rich.console import Console
 
 from forgeo.cli import _offer_setup, cmd_default, cmd_init, cmd_start
 from forgeo.models import DEFAULT_REFACTOR_PROMPT
-from forgeo.setup import DEFAULT_AGENT_COMMAND, add_gitignore, run_setup
+from forgeo.setup import (
+    DEFAULT_AGENT_COMMAND,
+    DEFAULT_AGENT_PROMPT,
+    add_gitignore,
+    build_agent_command,
+    run_setup,
+)
 
 
 class AnswerQueue:
@@ -35,6 +41,18 @@ def _run_setup(base: Path, *answers: str) -> dict | None:
     )
 
 
+def test_build_agent_command_appends_prompt():
+    assert build_agent_command("opencode run --auto") == (
+        f'opencode run --auto "{DEFAULT_AGENT_PROMPT}"'
+    )
+    assert build_agent_command("") == f' "{DEFAULT_AGENT_PROMPT}"'
+
+
+def test_build_agent_command_keeps_existing_task_reference():
+    command = 'claude -p "$FORGEO_TASK"'
+    assert build_agent_command(command) == command
+
+
 # --------------------------------------------------------------------- #
 # The wizard                                                             #
 # --------------------------------------------------------------------- #
@@ -48,14 +66,14 @@ def test_run_setup_defaults(tmp_path):
     assert payload is not None
     assert payload["backlog"] == ".forgeo/backlog.json"
     assert payload["blocker_file"] == ".forgeo/BLOCKER.md"
-    assert payload["agent_command"] == DEFAULT_AGENT_COMMAND
+    assert payload["agent_command"] == build_agent_command(DEFAULT_AGENT_COMMAND)
     assert payload["refactor_prompt"] == DEFAULT_REFACTOR_PROMPT
     assert payload["repo"] == "."
     assert payload["log_file"] == ".forgeo/forgeo.log"
 
     data = yaml.safe_load((project / "forgeo.yaml").read_text(encoding="utf-8"))
     assert data["backlog"] == ".forgeo/backlog.json"
-    assert data["agent_command"] == DEFAULT_AGENT_COMMAND
+    assert data["agent_command"] == build_agent_command(DEFAULT_AGENT_COMMAND)
     assert data["refactor_prompt"] == DEFAULT_REFACTOR_PROMPT
 
     assert (project / ".gitignore").read_text(encoding="utf-8") == ".forgeo/\n"
@@ -68,7 +86,7 @@ def test_run_setup_custom_values(tmp_path):
     payload = _run_setup(
         project,
         "forgeo/",
-        'claude -p "$FORGEO_TASK"',
+        "opencode run --auto",
         "n",
         "Fix dead code and duplication.",
         "",
@@ -78,9 +96,24 @@ def test_run_setup_custom_values(tmp_path):
     assert payload is not None
     assert payload["backlog"] == "forgeo/backlog.json"
     assert payload["blocker_file"] == "forgeo/BLOCKER.md"
-    assert payload["agent_command"] == 'claude -p "$FORGEO_TASK"'
+    assert payload["agent_command"] == 'opencode run --auto "' + DEFAULT_AGENT_PROMPT + '"'
     assert payload["refactor_prompt"] == "Fix dead code and duplication."
     assert not (project / ".gitignore").exists()
+
+
+def test_run_setup_keeps_verbatim_command_with_task_reference(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    payload = _run_setup(
+        project,
+        "",
+        'claude -p "$FORGEO_TASK" --model cheap',
+        "y",
+        "y",
+    )
+
+    assert payload is not None
+    assert payload["agent_command"] == 'claude -p "$FORGEO_TASK" --model cheap'
 
 
 def test_run_setup_keeps_existing_gitignore(tmp_path):

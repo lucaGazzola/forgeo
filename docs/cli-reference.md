@@ -185,16 +185,29 @@ list`. With no registered instances it prints a hint and exits `0`.
 
 ## `forgeo web`
 
-Serve the **central multi-instance dashboard** in the foreground (like
-`forgeo start`): one page that aggregates every registered instance. It
-reads each instance's data straight from its files (`backlog.json`,
-`runs.jsonl`, `forgeo.log`, `BLOCKER.md`, `daemon.state.json`), so it works
-whether or not each instance's daemon is running.
+Serve the **central multi-instance dashboard**: one page that aggregates every
+registered instance. It reads each instance's data straight from its files
+(`backlog.json`, `runs.jsonl`, `forgeo.log`, `BLOCKER.md`,
+`daemon.state.json`), so it works whether or not each instance's daemon is
+running.
 
 | Flag | Description |
 | --- | --- |
 | `--host <address>` | Bind address (default `0.0.0.0`). |
 | `--port <port>` | Bind port (default `8790`). |
+| `-d`, `--detach` | Start the dashboard in the background and return once it binds. |
+| `--timeout <seconds>` | How long to wait for the dashboard to bind when detached (default `30`). |
+
+Without `-d` the dashboard runs in the foreground (like `forgeo start`);
+interrupt it with Ctrl-C or stop it from another terminal with
+`forgeo web stop`.
+
+The dashboard is **host-global** (one per user, not per-repo), so it cannot
+reuse a per-instance `backlog.lock`. Instead it owns a lock file at
+`~/.config/forgeo/web.lock` (or `$FORGEO_CONFIG_DIR/web.lock`) that records
+the running PID plus its `host`/`port` (written atomically with `O_EXCL`).
+A second `forgeo web -d` is refused while the lock is held; a stale lock
+whose PID is dead is taken over with a warning.
 
 - `GET /` — home page listing every registered instance (daemon state, last
   outcome, next run, backlog counts).
@@ -203,6 +216,29 @@ whether or not each instance's daemon is running.
 
 See [Web console & HTTP API](web-console-api.md) for the full API. This is
 the only web dashboard: daemons themselves bind no ports.
+
+### `forgeo web stop`
+
+Stop the running dashboard gracefully (SIGTERM) and wait for it to exit.
+
+| Flag | Description |
+| --- | --- |
+| `--timeout <seconds>` | How long to wait for the dashboard to exit (default `30`). |
+
+Exit code is `0` on success, `1` when the dashboard is not running, the lock
+records a dead PID, or it did not exit within the timeout. The lock file is
+removed on success.
+
+### `forgeo web status`
+
+Print whether the dashboard is running.
+
+```
+central dashboard: not running
+central dashboard: running (pid 12345, http://127.0.0.1:8790)
+```
+
+Exit code is `0` whether it is running or not (the output says which).
 
 ## Process checks
 

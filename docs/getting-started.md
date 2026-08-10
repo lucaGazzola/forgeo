@@ -138,7 +138,9 @@ forgeo start --name site-a
 forgeo stop --name site-a
 
 # 5. Open the central dashboard: one page for every registered instance
-forgeo web           # default http://0.0.0.0:8790
+forgeo web           # default http://0.0.0.0:8790 (foreground)
+forgeo web -d        # ...or keep it running in the background
+forgeo web stop      # stop the background dashboard
 ```
 
 `--name` works on `start`, `once`, `status`, `stop` and `restart` and is

@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from forgeo.daemon import is_lock_held, read_lock_pid
@@ -40,14 +41,30 @@ def _lock_path(config: ForgeoConfig) -> Path:
     return Path(config.backlog).with_suffix(".lock")
 
 
-def _wait_for_lock_release(lock_path: Path, timeout: float) -> bool:
-    """Poll until the daemon lock is released; False on timeout."""
+def wait_for_lock_release(
+    lock_path: Path,
+    timeout: float,
+    *,
+    is_held: Callable[[], bool] | None = None,
+) -> bool:
+    """Poll until the lock is released; False on timeout.
+
+    ``is_held`` defaults to the flock-based :func:`is_lock_held`; pass a
+    custom predicate (e.g. a PID-alive check for the web-dashboard lock) to
+    reuse the same wait loop for other lock kinds.
+    """
+    if is_held is None:
+
+        def _flock_held() -> bool:
+            return is_lock_held(lock_path)
+
+        is_held = _flock_held
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not is_lock_held(lock_path):
+        if not is_held():
             return True
         time.sleep(_POLL_SECONDS)
-    return not is_lock_held(lock_path)
+    return not is_held()
 
 
 def stop_daemon(
@@ -79,7 +96,7 @@ def stop_daemon(
         )
     except PermissionError:
         raise DaemonError(f"No permission to stop process {pid}.")
-    if _wait_for_lock_release(lock_path, timeout):
+    if wait_for_lock_release(lock_path, timeout):
         logger.info("Forgeo %r stopped.", config.name)
         return
     raise DaemonError(

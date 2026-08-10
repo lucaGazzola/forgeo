@@ -9,12 +9,18 @@ dashboard reads every registered instance's data straight from its files
 running.
 
 ```bash
-forgeo web               # default 0.0.0.0:8790
+forgeo web               # default 0.0.0.0:8790, foreground
 forgeo web --port 9000   # pick a different port
 forgeo web --host 127.0.0.1
+forgeo web -d            # start it in the background and return
+forgeo web status        # running? pid + host + port
+forgeo web stop          # SIGTERM the background dashboard
 ```
 
-It runs in the foreground like `forgeo start`. By default it binds
+It runs in the foreground like `forgeo start`, or in the background with
+`-d`/`--detach` (managed through `forgeo web stop`/`forgeo web status` and
+its host-global `~/.config/forgeo/web.lock` — see the
+[CLI reference](cli-reference.md#forgeo-web)). By default it binds
 **`0.0.0.0`** so you can open it from any machine on your LAN — use
 `--host 127.0.0.1` to restrict it to the local machine (open the port in your
 firewall too).

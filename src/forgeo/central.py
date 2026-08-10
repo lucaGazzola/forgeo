@@ -44,9 +44,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import signal
+import subprocess
+import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,10 +92,138 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8790
 
+WEB_START_TIMEOUT_SECONDS = 30.0
+WEB_STOP_TIMEOUT_SECONDS = 30.0
+_POLL_SECONDS = 0.5
+
+DEFAULT_FORGEO_CONFIG_DIR = Path.home() / ".config" / "forgeo"
+
 _HOME_PAGE = "/central/index.html"
 _INSTANCE_PAGE = "/central/instance.html"
 
 _WEB_TASK_ID_RE = re.compile(r"^WEB-(\d+)$")
+
+
+def forgeo_config_dir() -> Path:
+    """Forgeo's per-user config directory: ``$FORGEO_CONFIG_DIR`` or
+    ``~/.config/forgeo``."""
+    env = os.environ.get("FORGEO_CONFIG_DIR")
+    if env:
+        return Path(env).expanduser()
+    return DEFAULT_FORGEO_CONFIG_DIR
+
+
+def web_lock_path() -> Path:
+    """The host-global dashboard lock file (one per user, not per-repo)."""
+    return forgeo_config_dir() / "web.lock"
+
+
+class WebLockError(Exception):
+    """A central-dashboard lock/stop action failed; the message is user-facing."""
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when ``pid`` belongs to a live process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class WebLock:
+    """The host-global lock for the central dashboard.
+
+    Unlike the per-forgeo daemon locks (``fcntl`` flock), this is a plain
+    ``pid=<pid>`` file created atomically with ``O_EXCL``, recording the
+    bound ``host``/``port`` too; it counts as held while the recorded PID is
+    alive. A leftover file whose PID is dead is taken over (with a warning)
+    on the next acquire.
+    """
+
+    def __init__(self, lock_path: str | Path | None = None) -> None:
+        self.lock_path = Path(lock_path) if lock_path is not None else web_lock_path()
+
+    def _read_value(self, key: str) -> str | None:
+        try:
+            text = self.lock_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        for line in text.splitlines():
+            if line.startswith(f"{key}="):
+                return line.removeprefix(f"{key}=").strip()
+        return None
+
+    @property
+    def pid(self) -> int | None:
+        """The recorded PID (``read_lock_pid``-compatible shape)."""
+        return read_lock_pid(self.lock_path)
+
+    @property
+    def host(self) -> str | None:
+        """The recorded bind address, or ``None`` when not written."""
+        return self._read_value("host")
+
+    @property
+    def port(self) -> int | None:
+        """The recorded bind port, or ``None`` when not written."""
+        value = self._read_value("port")
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def is_held(self) -> bool:
+        """True while the recorded PID is a live process."""
+        pid = self.pid
+        if pid is None:
+            return False
+        return _pid_alive(pid)
+
+    def acquire(self, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+        """Take the lock, refusing while a live dashboard holds it.
+
+        Raises:
+            WebLockError: When another live dashboard holds the lock.
+        """
+        if self.is_held():
+            raise WebLockError(
+                f"Another central dashboard is already running (pid {self.pid}); "
+                f"lock file {self.lock_path}."
+            )
+        if self.lock_path.exists():
+            logger.warning(
+                "Stale central-dashboard lock %s (pid %s is dead); taking over.",
+                self.lock_path,
+                self.pid,
+            )
+            self.lock_path.unlink()
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            raise WebLockError(
+                f"Another central dashboard just took the lock {self.lock_path}; retry."
+            )
+        try:
+            os.write(
+                fd,
+                f"pid={os.getpid()}\nhost={host}\nport={port}\n".encode(),
+            )
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def release(self) -> None:
+        """Remove the lock file (idempotent)."""
+        try:
+            self.lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def web_task_id_for(tasks: list[Task]) -> str:
@@ -942,7 +1074,7 @@ async def _serve_forever(server: CentralWebServer, host: str) -> None:
             loop.add_signal_handler(sig, stop_event.set)
         except NotImplementedError:
             pass
-    Console().print(
+    Console(stderr=True).print(
         Panel.fit(
             f"[bold]Forgeo central dashboard[/bold]\n"
             f"[bold]Listening:[/bold] http://{host}:{server.port}\n"
@@ -955,15 +1087,116 @@ async def _serve_forever(server: CentralWebServer, host: str) -> None:
     await stop_event.wait()
 
 
+def stop_web(timeout: float = WEB_STOP_TIMEOUT_SECONDS) -> None:
+    """SIGTERM the running dashboard and wait for its lock to drop.
+
+    Raises:
+        WebLockError: When the dashboard is not running, records no live PID,
+            cannot be signalled, or does not exit within ``timeout``.
+    """
+    lock = WebLock()
+    if not lock.is_held():
+        raise WebLockError("Central dashboard is not running.")
+    pid = lock.pid
+    if pid is None:
+        raise WebLockError(
+            f"The lock file {lock.lock_path} records no PID; find the dashboard "
+            f"with `pgrep -af forgeo` and stop it manually."
+        )
+    logger.info("Stopping central dashboard (pid %s)...", pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        if not lock.is_held():
+            logger.info("Central dashboard stopped.")
+            return
+        raise WebLockError(
+            f"Recorded pid {pid} is gone but the lock file is still held; "
+            f"check with `pgrep -af forgeo`."
+        )
+    except PermissionError:
+        raise WebLockError(f"No permission to stop process {pid}.")
+    if daemon_control.wait_for_lock_release(lock.lock_path, timeout, is_held=lock.is_held):
+        lock.release()
+        logger.info("Central dashboard stopped.")
+        return
+    raise WebLockError(
+        f"Central dashboard is still shutting down after {timeout:.0f}s; giving up."
+    )
+
+
+def start_web_detached(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    timeout: float = WEB_START_TIMEOUT_SECONDS,
+) -> int:
+    """Launch the dashboard as a detached background process.
+
+    The child is a plain foreground ``forgeo web`` (same ``Popen`` +
+    ``start_new_session`` pattern as ``forgeo restart``), so it re-does the
+    lock handling and binds the socket itself; this returns once the lock
+    reports a live PID, i.e. the server has bound successfully.
+
+    Raises:
+        WebLockError: When another live dashboard already holds the lock, or
+            the server fails to start within ``timeout``.
+    """
+    lock = WebLock()
+    if lock.is_held():
+        raise WebLockError(
+            f"Another central dashboard is already running (pid {lock.pid})."
+        )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "forgeo",
+            "web",
+            "--host",
+            host,
+            "--port",
+            str(port),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if lock.is_held():
+            pid = lock.pid or proc.pid
+            logger.info("Central web server started (pid %s).", pid)
+            return pid
+        if proc.poll() is not None:
+            break
+        time.sleep(_POLL_SECONDS)
+    raise WebLockError(
+        f"Central dashboard did not start within {timeout:.0f}s; "
+        f"check the process output for bind errors."
+    )
+
+
 def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     """Start ``forgeo web`` in the foreground; returns the process exit code.
 
-    Binds the dashboard, prints the listening banner, and blocks until the
-    user interrupts it with Ctrl-C or a SIGTERM arrives.
+    Takes the host-global dashboard lock (refusing while another dashboard
+    runs), binds the dashboard, prints the listening banner to stderr, and
+    blocks until the user interrupts it with Ctrl-C or a SIGTERM arrives.
+    The lock is always released on the way out — even after a failed bind.
     """
+    lock = WebLock()
+    try:
+        lock.acquire(host=host, port=port)
+    except WebLockError as exc:
+        Console(stderr=True).print(f"[red]{exc}[/red]")
+        return 1
     server = CentralWebServer(host=host, port=port)
     if not server.start():
-        Console().print(f"[red]Central dashboard failed to bind {host}:{port}.[/red]")
+        Console(stderr=True).print(
+            f"[red]Central dashboard failed to bind {host}:{port}.[/red]"
+        )
+        lock.release()
         return 1
     try:
         asyncio.run(_serve_forever(server, host))
@@ -971,4 +1204,5 @@ def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
         pass
     finally:
         server.stop()
+        lock.release()
     return 0

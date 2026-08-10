@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import socket
 import subprocess
@@ -1475,13 +1474,19 @@ def test_do_post_reopen_returns_500_on_unexpected_error(web_env, monkeypatch):
     assert data["error"] == "internal server error"
 
 
-def test_web_bind_failure_exits_nonzero():
+def test_web_bind_failure_exits_nonzero_and_releases_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    lock_path = tmp_path / "web.lock"
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     sock.listen(1)
     port = sock.getsockname()[1]
     try:
-        assert cmd_web(argparse.Namespace(host="127.0.0.1", port=port)) == 1
+        args = build_parser().parse_args(
+            ["web", "--host", "127.0.0.1", "--port", str(port)]
+        )
+        assert cmd_web(args) == 1
+        assert not lock_path.exists()
     finally:
         sock.close()
 

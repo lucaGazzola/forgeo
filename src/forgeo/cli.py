@@ -34,7 +34,13 @@ Commands:
    backlog counts.
 * ``forgeo web [--host HOST] [--port PORT]`` — serve the central
    multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
-   aggregating every registered instance straight from its files.
+   aggregating every registered instance straight from its files. With
+   ``-d``/``--detach`` it starts in the background and returns once the
+   server reports it bound; ``forgeo web stop`` SIGTERMs a running
+   dashboard and ``forgeo web status`` reports whether one is running.
+   The dashboard is host-global (one per user): its lock lives at
+   ``~/.config/forgeo/web.lock`` (or ``$FORGEO_CONFIG_DIR/web.lock``),
+   independent of any per-repo backlog lock.
 
 ``start``, ``once``, ``status``, ``stop`` and ``restart`` each accept either
 ``--config PATH`` (a config file) or ``--name NAME`` (an instance resolved
@@ -62,7 +68,12 @@ from rich.table import Table
 from forgeo import __version__
 from forgeo.agent import DockerSandboxAgent, SandboxUnavailableError, ShellAgent
 from forgeo.backlog import JSONBacklog, backlog_status_counts, oldest_open_task
-from forgeo.central import DEFAULT_HOST, DEFAULT_PORT
+from forgeo.central import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    WEB_START_TIMEOUT_SECONDS,
+    WEB_STOP_TIMEOUT_SECONDS,
+)
 from forgeo.config import load_config
 from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held
 from forgeo.daemon_control import (
@@ -202,6 +213,33 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_PORT,
         help=f"Bind port (default: {DEFAULT_PORT}).",
+    )
+    web_parser.add_argument(
+        "-d",
+        "--detach",
+        action="store_true",
+        help="Start the dashboard in the background and return once it binds.",
+    )
+    web_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=WEB_START_TIMEOUT_SECONDS,
+        help="Seconds to wait for the dashboard to bind when detached "
+        f"(default: {WEB_START_TIMEOUT_SECONDS:.0f}).",
+    )
+    web_sub = web_parser.add_subparsers(dest="web_action")
+    web_stop_parser = web_sub.add_parser(
+        "stop", help="Stop the running central dashboard (SIGTERM)."
+    )
+    web_stop_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=WEB_STOP_TIMEOUT_SECONDS,
+        help="Seconds to wait for the dashboard to exit "
+        f"(default: {WEB_STOP_TIMEOUT_SECONDS:.0f}).",
+    )
+    web_sub.add_parser(
+        "status", help="Print whether the central dashboard is running."
     )
     return parser
 
@@ -690,12 +728,86 @@ def cmd_instance(args: argparse.Namespace) -> int:
 def cmd_web(args: argparse.Namespace) -> int:
     """Handle ``forgeo web``: the central multi-instance dashboard.
 
-    Runs in the foreground like ``forgeo start``, serving an aggregate view
-    of every registered instance straight from each instance's files.
+    Runs in the foreground by default, or detached in the background with
+    ``-d``; ``forgeo web stop`` and ``forgeo web status`` manage a running
+    dashboard through its host-global lock file.
     """
     from forgeo.central import run_foreground
 
+    action = getattr(args, "web_action", None)
+    if action == "stop":
+        return cmd_web_stop(args)
+    if action == "status":
+        return cmd_web_status(args)
+    if args.detach:
+        return cmd_web_detach(args)
     return run_foreground(host=args.host, port=args.port)
+
+
+def cmd_web_detach(args: argparse.Namespace) -> int:
+    """Handle ``forgeo web -d``: run the dashboard as a background process.
+
+    Refuses while another live dashboard holds the host-global lock; a stale
+    lock (dead recorded PID) is taken over with a warning, matching the
+    daemon's lock behavior.
+    """
+    from forgeo.central import WebLock, WebLockError, start_web_detached
+
+    lock = WebLock()
+    if lock.is_held():
+        console.print(
+            f"[red]Central dashboard already running (pid {lock.pid}); "
+            f"stop it with `forgeo web stop`.[/red]"
+        )
+        return 1
+    if lock.lock_path.exists():
+        console.print(
+            f"[yellow]Stale dashboard lock {lock.lock_path} "
+            f"(pid {lock.pid} is dead); taking over.[/yellow]"
+        )
+    try:
+        pid = start_web_detached(args.host, args.port, args.timeout)
+    except WebLockError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    console.print(
+        f"[green]Forgeo central dashboard started in the background "
+        f"(pid {pid}, http://{args.host}:{args.port}).[/green]"
+    )
+    return 0
+
+
+def cmd_web_stop(args: argparse.Namespace) -> int:
+    """Handle ``forgeo web stop``: SIGTERM the running dashboard."""
+    from forgeo.central import WebLock, WebLockError, stop_web
+
+    lock = WebLock()
+    if not lock.is_held():
+        console.print("[yellow]Forgeo central dashboard is not running.[/yellow]")
+        return 1
+    try:
+        stop_web(args.timeout)
+    except WebLockError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    console.print("[green]Forgeo central dashboard stopped.[/green]")
+    return 0
+
+
+def cmd_web_status(args: argparse.Namespace) -> int:
+    """Handle ``forgeo web status``: report whether the dashboard is running."""
+    from forgeo.central import WebLock
+
+    lock = WebLock()
+    if lock.is_held():
+        host = lock.host or "unknown"
+        port = lock.port if lock.port is not None else "unknown"
+        console.print(
+            f"central dashboard: running (pid {lock.pid}, http://{host}:{port})"
+        )
+        return 0
+    console.print("central dashboard: not running")
+    return 0
 
 
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {

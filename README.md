@@ -44,7 +44,7 @@ forgeo start   # run forever: every interval_minutes, implement the oldest OPEN 
 `forgeo init` writes `forgeo.yaml` and a `.forgeo/` folder for the backlog
 and logs. Fill the backlog with plain JSON tasks (see
 [Backlog format](docs/backlog.md)) or add them from the web console while
-it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <http://0.0.0.0:8790>):
+it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <http://0.0.0.0:8790>), or keep it always-on with `forgeo web -d` (stop it with `forgeo web stop`, check it with `forgeo web status`):
 
 ![Forgeo web console](docs/img/console.png)
 

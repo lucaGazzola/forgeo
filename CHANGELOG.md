@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Update notification: when `forgeo start` or `forgeo once` begins a cycle,
+  Forgeo checks PyPI at most once a day and, if a newer `forgeo-cli` release
+  exists, prints/logs a short notice with the upgrade command. The check is
+  best-effort (short timeout, failures logged and skipped), never modifies
+  the install, and can be disabled with `FORGEO_UPDATE_CHECK=0`.
+
 ## [0.4.0] - 2026-08-10
 
 ### Added

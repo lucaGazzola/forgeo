@@ -95,6 +95,7 @@ from forgeo.instances import (
 from forgeo.models import ForgeoConfig, SandboxMode, Task
 from forgeo.runs import RunRecorder, runs_path_for
 from forgeo.setup import run_setup
+from forgeo.update import check_for_update, update_state_path
 
 DEFAULT_CONFIG = Path("forgeo.yaml")
 
@@ -473,6 +474,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 border_style="green",
             )
         )
+        check_for_update(update_state_path(config.backlog), print_fn=console.print)
         await daemon.run_forever()
 
     try:
@@ -492,6 +494,7 @@ def cmd_once(args: argparse.Namespace) -> int:
     _config_path, _config, forgeo, lock = prepared
 
     async def _run_once() -> None:
+        check_for_update(update_state_path(_config.backlog), print_fn=console.print)
         outcome = await forgeo.run_cycle()
         console.print(f"[green]Cycle finished: {outcome}[/green]")
 

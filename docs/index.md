@@ -101,6 +101,8 @@ forgeo.yaml ──► forgeo start (daemon)
 - `backlog.lock` — per-forgeo lock holding the daemon PID; released
   automatically on exit, even on a crash.
 - `backlog.run` — per-iteration lock that prevents two agents running at once.
+- `backlog.update.json` — remembers when the once-a-day PyPI update check last
+  ran, so it never phones home every cycle.
 
 ## Next steps
 

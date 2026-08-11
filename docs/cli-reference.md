@@ -55,6 +55,14 @@ outcome, next run) to `daemon.state.json` next to the backlog. It binds no
 ports — the web dashboard for it is served by `forgeo web`
 (see [Web console & HTTP API](web-console-api.md)).
 
+When `forgeo start` begins a cycle, Forgeo checks PyPI at most once a day
+for a newer `forgeo-cli` release and, when one exists, prints/logs a short
+notice naming the newer version and the upgrade command (re-run the
+`install.sh` one-liner, or `pipx upgrade forgeo-cli` /
+`pip install --user --upgrade forgeo-cli`). The check is best-effort: it
+never auto-updates or modifies the install, a network or parse failure is
+logged and skipped, and it can be disabled with `FORGEO_UPDATE_CHECK=0`.
+
 ## `forgeo once`
 
 Run exactly **one cycle** and exit; no daemon needed.

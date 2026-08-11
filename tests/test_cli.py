@@ -125,6 +125,28 @@ def test_once_runs_one_cycle_and_exits_zero(git_repo, tmp_path, monkeypatch, cap
     released.close()
 
 
+def test_once_triggers_update_check(git_repo, tmp_path, monkeypatch, capsys):
+    """An outdated install prints the upgrade notice when a cycle begins."""
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    checked_paths: list[Path] = []
+
+    def fake_check(state_path, *, print_fn):
+        checked_paths.append(state_path)
+        print_fn("A newer forgeo-cli version is available: 0.4.0 -> 0.5.0. "
+                 "Upgrade with `pipx upgrade forgeo-cli`.")
+
+    monkeypatch.setattr("forgeo.cli.check_for_update", fake_check)
+
+    assert cmd_once(once_args(config_path)) == 0
+    assert fake.cycles == 1
+    assert checked_paths == [tmp_path / "backlog.update.json"]
+    out = capsys.readouterr().out
+    assert "A newer forgeo-cli version is available" in out
+    assert "0.5.0" in out
+
+
 def test_once_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
     config_path = write_config(git_repo, tmp_path)
     fake = FakeForgeo()

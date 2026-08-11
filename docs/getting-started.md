@@ -31,6 +31,12 @@ The installer:
 If the install location is not on your `PATH`, it warns you and tells you how
 to add it.
 
+You do not need to watch for releases: when `forgeo start` or `forgeo once`
+begins a cycle, Forgeo checks PyPI at most once a day and prints a short
+notice (also logged) naming the newer version and the upgrade command when
+one is available. The check never auto-updates or modifies the install; set
+`FORGEO_UPDATE_CHECK=0` to disable it.
+
 ## 2. Initialize
 
 Run the guided wizard from your project root:

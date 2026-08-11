@@ -22,6 +22,17 @@ from forgeo.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _skip_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable the PyPI update check for every test (no network in tests).
+
+    The update module reads the env var at call time, so subprocesses spawned
+    by tests inherit it too. Suites that test the check itself re-enable it by
+    deleting the variable.
+    """
+    monkeypatch.setenv("FORGEO_UPDATE_CHECK", "0")
+
+
 def git(repo: Path, *args: str) -> str:
     """Run a git command inside ``repo`` and return its stdout."""
     proc = subprocess.run(

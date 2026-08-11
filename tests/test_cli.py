@@ -776,7 +776,7 @@ def test_two_instances_stay_fully_independent(
         name="inst-a",
         backlog=dir_a / "backlog.json",
         blocker_file=dir_a / "BLOCKER.md",
-        
+        agent_command="echo done > done-a.txt",
         interval_minutes=600,
     )
     config_b = write_config_in(
@@ -786,7 +786,7 @@ def test_two_instances_stay_fully_independent(
         name="inst-b",
         backlog=dir_b / "backlog.json",
         blocker_file=dir_b / "BLOCKER.md",
-        
+        agent_command="echo done > done-b.txt",
         interval_minutes=600,
     )
     assert cmd_instance_add(argparse.Namespace(name="inst-a", config=config_a)) == 0

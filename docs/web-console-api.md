@@ -428,7 +428,9 @@ That instance's durable run history from `runs.jsonl`, newest first (`limit`
 defaults to `10`, max `10000`). Each record has started/finished timestamps,
 the run kind (`task` or `refactor`), the task id and title when applicable,
 the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the agent exit code, the commit
-SHA when a commit was created, and the duration in seconds.
+SHA when a commit was created, the duration in seconds, and an optional
+`reason` when the run completed without a commit (a no-change SUCCESS is
+surfaced here instead of silently showing a null commit SHA).
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/runs

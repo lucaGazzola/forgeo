@@ -24,6 +24,21 @@ DEFAULT_REFACTOR_PROMPT = (
 #: Fallback shown to the human when a blocked agent gave no explanation.
 NO_BLOCKER_REASON = "The agent did not explain what it needs."
 
+#: Failure reason when a task's agent exits 0 but leaves the working tree
+#: unchanged: the engine cannot tell "deliberately did nothing" from
+#: "did nothing", so a no-change SUCCESS fails the task. To complete a task
+#: without touching the code the agent must say so explicitly with
+#: ``no_changes_exit_code`` (see the agent contract).
+NO_CHANGES_REASON = "Agent exited 0 but produced no changes"
+
+#: Reason recorded when an agent explicitly reports a task needs no code
+#: change (exit ``no_changes_exit_code``) and the tree is clean.
+NO_CHANGES_REPORTED_REASON = "Agent reported no changes needed"
+
+#: Failure reason when an agent reports no changes but leaves the working tree
+#: dirty — a contradiction that must not be silently accepted.
+NO_CHANGES_DIRTY_REASON = "Agent reported no changes but left uncommitted changes"
+
 
 def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | None:
     """Shared validation: an agent command must be a non-blank string or list."""
@@ -101,6 +116,11 @@ class RunRecord(BaseModel):
     agent_exit_code: int | None = None
     commit_sha: str | None = None
     duration_seconds: float
+    reason: str | None = Field(
+        default=None,
+        description="Human-readable note surfacing a no-change SUCCESS "
+        "(no commit was produced), so it is never a silent null commit_sha.",
+    )
 
 
 class Task(BaseModel):
@@ -160,6 +180,11 @@ class ExecutionResult(BaseModel):
     questions: list[str] = Field(default_factory=list)
     error: str | None = None
     exit_code: int | None = None
+    no_changes: bool = Field(
+        default=False,
+        description="Agent explicitly reported no code change is needed "
+        "(exit no_changes_exit_code); the tree must be clean.",
+    )
 
     @property
     def reason(self) -> list[str]:
@@ -207,6 +232,10 @@ class ForgeoConfig(BaseModel):
             Nothing is mounted unless listed here.
         blocked_exit_code: Exit code the agent uses to signal that it needs
             human input.
+        no_changes_exit_code: Exit code the agent uses to signal that the task
+            legitimately needs no code change. Exiting with this code completes
+            the task without committing anything; exiting ``0`` with an empty
+            working tree instead fails the task (see the agent contract).
         remote: Git remote to push to (e.g. ``origin``). When omitted the
             forgeo only commits locally.
         branch: Branch everything is committed to (default ``main``).
@@ -234,6 +263,7 @@ class ForgeoConfig(BaseModel):
     agent_sandbox_network: str = "none"
     agent_sandbox_mounts: list[str] = Field(default_factory=list)
     blocked_exit_code: int = Field(default=2)
+    no_changes_exit_code: int = Field(default=3)
     remote: str | None = None
     branch: str = "main"
     git_timeout_seconds: float = Field(default=120, gt=0)
@@ -254,6 +284,13 @@ class ForgeoConfig(BaseModel):
             raise ValueError("agent_sandbox_network must not be blank")
         return value
 
+    @field_validator("no_changes_exit_code")
+    @classmethod
+    def _no_changes_exit_code_not_success(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("no_changes_exit_code must not be 0 (reserved for SUCCESS)")
+        return value
+
     @field_validator("agent_sandbox_mounts")
     @classmethod
     def _mounts_not_blank(cls, value: list[str]) -> list[str]:
@@ -266,4 +303,8 @@ class ForgeoConfig(BaseModel):
     def _docker_requires_image(self) -> ForgeoConfig:
         if self.agent_sandbox is SandboxMode.DOCKER and not (self.agent_sandbox_image or "").strip():
             raise ValueError("agent_sandbox_image is required when agent_sandbox is 'docker'")
+        if self.no_changes_exit_code == self.blocked_exit_code:
+            raise ValueError(
+                "no_changes_exit_code must differ from blocked_exit_code"
+            )
         return self

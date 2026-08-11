@@ -39,11 +39,31 @@ The exit code decides the outcome of the run:
 | Exit code | Outcome | What happens |
 | --- | --- | --- |
 | `0` | **SUCCESS** | Everything is committed (`git add -A && git commit`) with the message `<title> (#<id>)`, pushed when a remote is set, and the task is marked `COMPLETED`. |
+| `no_changes_exit_code` (default `3`) | **SUCCESS, no changes** | The agent explicitly reports the task needs **no code change**: the task is marked `COMPLETED` without a commit (and the run record notes why). Only accepted when the working tree is clean. |
 | `blocked_exit_code` (default `2`) | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> (#<id>) [partial]`, the agent's reason is persisted on the task (`blocker_reason`), an optional Telegram notification is sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
 | anything else | **ERROR** | Changes are discarded (`git reset --hard` + `git clean -fd`), the failure is logged, and the task is marked `FAILED`. |
 
 The blocked exit code is configurable via `blocked_exit_code` in
-[forgeo.yaml](configuration.md).
+[forgeo.yaml](configuration.md), and the no-change exit code via
+`no_changes_exit_code`.
+
+## The no-change contract
+
+Forgeo cannot tell "the agent deliberately made no changes" from "the agent
+did nothing". A `SUCCESS` exit that produces **no changes is therefore not a
+valid completion for a task**:
+
+- exiting `0` while leaving the working tree **unchanged** fails the task
+  (`FAILED`, reason: *"Agent exited 0 but produced no changes"*);
+- to complete a task **without touching the code**, exit
+  `no_changes_exit_code` (default `3`). The working tree must be clean — an
+  agent that reports "no changes" while leaving uncommitted work behind fails
+  instead.
+
+Refactoring passes are the exception: when the backlog is empty, a refactor
+that finds nothing to improve is a normal, successful run (the default
+refactor prompt already says "if nothing needs refactoring, make no
+changes").
 
 ## Timeouts
 
@@ -84,6 +104,8 @@ that, based on the exit code. The working contract is:
 - make your changes in the repository;
 - **do not** run `git add`, `git commit`, `git push`, or reset the tree;
 - exit `0` to have your changes committed and pushed as one commit;
+- exit `no_changes_exit_code` when the task needs no code change (never exit
+  `0` with an empty tree — that fails the task);
 - exit `blocked_exit_code` to have partial work preserved and a blocker
   written;
 - exit anything else to have your changes discarded.

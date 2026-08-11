@@ -309,6 +309,11 @@
   font-size: 12px;
 }
 
+.run-table .run-reason {
+  color: var(--blocked);
+  white-space: normal;
+}
+
 /* ---------- Footer ---------- */
 
 .footer-link {

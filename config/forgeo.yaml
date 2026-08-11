@@ -19,13 +19,20 @@ blocker_file: BLOCKER.md        # Written with a detailed explanation when the a
 # repo directory, and exit with:
 #   0 = success             (work is committed and pushed)
 #   2 = needs human input   (BLOCKER.md is written; forgeo pauses)
+#   3 = no changes needed   (task completes without a commit; explicit no-op)
 #   other = error           (work is discarded, task marked FAILED)
+#
+# Exiting 0 with an unchanged working tree is NOT a valid no-op: the task is
+# marked FAILED, because the engine cannot tell "deliberately did nothing"
+# from "did nothing". Use exit code `no_changes_exit_code` to complete a task
+# without touching the code.
 agent_command: "aider --message \"$FORGEO_TASK\""
 # agent_timeout_seconds: 3600   # Optional escape hatch: kill a stuck agent after
                                 # this many seconds. Omitted = never kill; an
                                 # overlong run just skips the next iteration.
 agent_env: {}                 # Extra environment variables for the agent process.
 blocked_exit_code: 2
+no_changes_exit_code: 3
 
 # Optional: isolate the agent in a Docker sandbox instead of running it on the
 # host with the user's full privileges. The default `none` runs the agent

@@ -28,6 +28,7 @@ use `forgeo restart` so it re-reads the file.
 | `agent_sandbox_network` | `none` | Docker `--network` for the sandboxed agent (default `none` = networking disabled). |
 | `agent_sandbox_mounts` | `[]` | Host paths mounted read-only into the sandboxed container (agent credentials/config). |
 | `blocked_exit_code` | `2` | Exit code meaning "needs human input". |
+| `no_changes_exit_code` | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
 | `refactor_prompt` | default refactor prompt | Instruction used when the backlog is empty. |
 | `log_file` | `forgeo.log` | Where the daemon writes its log. |
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
@@ -90,6 +91,16 @@ agent_env:
 The exit code the agent uses to signal "I need a human decision" — see
 [Agent contract](agent-contract.md) for what happens on that exit code.
 Default `2`.
+
+### `no_changes_exit_code`
+
+The exit code the agent uses to signal "this task needs no code change" — a
+legitimate no-op that completes the task without a commit. Default `3`.
+
+Exiting `0` while leaving the working tree unchanged is **not** accepted as a
+no-op: it fails the task, because the engine cannot tell a deliberate no-op
+from an agent that simply did nothing. See [Agent
+contract](agent-contract.md) for the full contract.
 
 ### `agent_sandbox`
 

@@ -29,6 +29,9 @@ from forgeo.backlog import JSONBacklog, oldest_open_task
 from forgeo.git import GitError, GitManager
 from forgeo.models import (
     NO_BLOCKER_REASON,
+    NO_CHANGES_DIRTY_REASON,
+    NO_CHANGES_REASON,
+    NO_CHANGES_REPORTED_REASON,
     ExecutionResult,
     ExecutionStatus,
     ForgeoConfig,
@@ -91,6 +94,7 @@ class Forgeo:
         self._last_task: Task | None = None
         self._last_agent_result: ExecutionResult | None = None
         self._last_commit_sha: str | None = None
+        self._last_run_reason: str | None = None
         self._blocked_tasks: list[Task] = []
 
     async def run_cycle(self) -> str:
@@ -109,6 +113,7 @@ class Forgeo:
         self._last_task = None
         self._last_agent_result = None
         self._last_commit_sha = None
+        self._last_run_reason = None
         self._blocked_tasks = []
         await self.git.a_ensure_branch(self.config.branch)
         tasks = await self.backlog.list_tasks()
@@ -159,6 +164,7 @@ class Forgeo:
                 outcome=self._run_outcome(outcome),
                 agent_exit_code=self._run_exit_code(outcome),
                 commit_sha=self._last_commit_sha if outcome in ("task", "refactor") else None,
+                reason=self._last_run_reason if outcome in ("task", "refactor") else None,
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
             )
         )
@@ -214,12 +220,17 @@ class Forgeo:
 
         if result.status is ExecutionStatus.BLOCKED:
             await self.backlog.set_blocked(task.id, result.reason)
-        if result.status is ExecutionStatus.SUCCESS and ok:
-            await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
-            self.config.blocker_file.unlink(missing_ok=True)
-            logger.info("Task %s completed.", task.id)
-        elif result.status is ExecutionStatus.ERROR:
+            return
+        if result.status is ExecutionStatus.ERROR:
             await self.backlog.set_failed(task.id, self._failure_reason(result))
+            return
+        if not ok:
+            # SUCCESS whose commit (or no-change) path failed: already marked
+            # FAILED inside _handle_execution_result.
+            return
+        await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
+        self.config.blocker_file.unlink(missing_ok=True)
+        logger.info("Task %s completed.", task.id)
 
     async def _run_agent(
         self,
@@ -269,18 +280,32 @@ class Forgeo:
     ) -> bool:
         """Apply shared SUCCESS / BLOCKED / ERROR side effects for an agent run.
 
-        * SUCCESS — commit and push ``success_message``.
+        * SUCCESS — commit and push ``success_message``. An agent that
+          explicitly reported no changes are needed (``result.no_changes``)
+          completes the task without a commit; an agent that exited 0 but
+          produced no changes fails the task instead of silently completing
+          it.
         * BLOCKED — commit partial work under ``blocked_message``, then write
           the blocker file explaining what the human must do.
         * ERROR — hard-reset the working tree and log the failure.
 
-        Returns ``True`` only when the result was SUCCESS and the commit path
-        succeeded, so callers can apply backlog status transitions. This
-        method does not update task status itself (except indirectly when
-        ``_commit_and_push`` fails and marks the task FAILED).
+        Returns ``True`` only when the result was SUCCESS and the commit (or
+        explicit no-change) path succeeded, so callers can apply backlog
+        status transitions. This method does not update task status itself
+        (except indirectly when ``_commit_and_push`` fails and marks the task
+        FAILED).
         """
         if result.status is ExecutionStatus.SUCCESS:
-            return await self._commit_and_push(success_message, task=task)
+            if result.no_changes:
+                return await self._complete_without_changes(task, is_refactor=is_refactor)
+            ok = await self._commit_and_push(success_message, task=task)
+            if ok and self._last_commit_sha is None and not is_refactor:
+                # Exited 0 but produced no changes: not a completion. The
+                # engine cannot tell "deliberately did nothing" from "did
+                # nothing", so the agent must opt into no-ops explicitly.
+                await self._fail_no_changes(task)
+                return False
+            return ok
 
         if result.status is ExecutionStatus.BLOCKED:
             if await self._commit_and_push(blocked_message, task=task):
@@ -322,6 +347,53 @@ class Forgeo:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
         await self.backlog.set_failed(task.id, self._failure_reason(result))
+
+    async def _fail_no_changes(self, task: Task) -> None:
+        """Fail a task whose agent exited 0 without producing any changes.
+
+        A no-change SUCCESS is indistinguishable from an agent that simply did
+        nothing, so it is not a valid completion: the task is marked FAILED
+        and the run record surfaces the reason instead of a silent null
+        commit.
+        """
+        self._last_run_reason = NO_CHANGES_REASON
+        logger.warning(
+            "Task %s exited 0 but produced no changes; marking FAILED.", task.id
+        )
+        await self._fail(
+            task,
+            ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_REASON),
+        )
+
+    async def _complete_without_changes(
+        self, task: Task, *, is_refactor: bool = False
+    ) -> bool:
+        """Complete a run whose agent explicitly reported no changes needed.
+
+        Only accepted when the working tree is clean: an agent that claims a
+        run needs no change but leaves uncommitted work behind contradicts
+        itself and fails the run instead.
+        """
+        if not await self.git.a_is_clean():
+            self._last_run_reason = NO_CHANGES_DIRTY_REASON
+            label = _subject_label(task, is_refactor=is_refactor)
+            logger.warning(
+                "%s reported no changes but left uncommitted changes; marking FAILED.",
+                label,
+            )
+            await self._discard_failed_work(
+                task,
+                ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_DIRTY_REASON),
+                is_refactor=is_refactor,
+            )
+            if not is_refactor:
+                await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON])
+            return False
+        self._last_run_reason = NO_CHANGES_REPORTED_REASON
+        logger.info(
+            "Task %s completed without changes (explicit no-change signal).", task.id
+        )
+        return True
 
     @staticmethod
     def _failure_reason(result: ExecutionResult) -> list[str]:

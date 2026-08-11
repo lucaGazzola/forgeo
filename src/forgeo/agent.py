@@ -9,8 +9,15 @@ the outcome:
 * ``0`` — SUCCESS, the work is committed and pushed,
 * ``blocked_exit_code`` (default ``2``) — BLOCKED, the agent needs human
   input; its output ends up in the blocker file,
+* ``no_changes_exit_code`` (default ``3``) — SUCCESS with no changes: the
+  agent explicitly reports the task needs no code change, nothing is
+  committed, and the task is completed without a commit,
 * anything else — ERROR, the task fails and the agent's changes are
   discarded.
+
+An agent that exits ``0`` without producing any changes is *not* a valid
+no-op: Forgeo treats it as a FAILED task, because a silent no-change SUCCESS
+is indistinguishable from an agent that simply did nothing.
 """
 
 from __future__ import annotations
@@ -93,12 +100,14 @@ class ShellAgent(BaseAgent):
         drain_timeout_seconds: float = _DEFAULT_DRAIN_TIMEOUT_SECONDS,
         env: dict[str, str] | None = None,
         blocked_exit_code: int = 2,
+        no_changes_exit_code: int = 3,
     ) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
         self.drain_timeout_seconds = drain_timeout_seconds
         self.env = dict(env or {})
         self.blocked_exit_code = blocked_exit_code
+        self.no_changes_exit_code = no_changes_exit_code
 
     @staticmethod
     async def _drain_stream(
@@ -233,6 +242,18 @@ class ShellAgent(BaseAgent):
                 exit_code=proc.returncode,
             )
 
+        if proc.returncode == self.no_changes_exit_code:
+            logs.append(
+                f"[{self.name}] Task {task.id} reported no changes needed "
+                f"(exit {proc.returncode})."
+            )
+            return ExecutionResult(
+                status=ExecutionStatus.SUCCESS,
+                output_logs=logs,
+                exit_code=proc.returncode,
+                no_changes=True,
+            )
+
         logs.append(f"[{self.name}] Task {task.id} failed with exit code {proc.returncode}.")
         return ExecutionResult(
             status=ExecutionStatus.ERROR,
@@ -256,7 +277,8 @@ class DockerSandboxAgent(ShellAgent):
     credentials/config are only visible inside the container when listed in
     ``mounts`` (mounted read-only at the same path). The container exit code
     is mapped exactly like the shell agent's: ``0`` success,
-    ``blocked_exit_code`` needs human input, anything else is an error.
+    ``blocked_exit_code`` needs human input, ``no_changes_exit_code`` means
+    no code change is needed, anything else is an error.
 
     The image is expected to contain the agent CLI (e.g. ``claude``) and a
     POSIX shell (``sh``) for string commands.
@@ -274,6 +296,7 @@ class DockerSandboxAgent(ShellAgent):
         timeout_seconds: float | None = None,
         env: dict[str, str] | None = None,
         blocked_exit_code: int = 2,
+        no_changes_exit_code: int = 3,
     ) -> None:
         if not (image or "").strip():
             raise ValueError("docker sandbox requires an image")
@@ -287,6 +310,7 @@ class DockerSandboxAgent(ShellAgent):
             timeout_seconds=timeout_seconds,
             env=env,
             blocked_exit_code=blocked_exit_code,
+            no_changes_exit_code=no_changes_exit_code,
         )
         self.image = image
         self.network = network

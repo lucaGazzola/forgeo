@@ -788,7 +788,7 @@
     var table = el("table", "run-table");
     var thead = el("thead");
     var headRow = el("tr");
-    ["finished", "kind", "task", "outcome", "exit", "commit", "duration"].forEach(function (h) {
+    ["finished", "kind", "task", "outcome", "exit", "commit", "duration", "reason"].forEach(function (h) {
       headRow.appendChild(el("th", null, h));
     });
     thead.appendChild(headRow);
@@ -808,6 +808,7 @@
       row.appendChild(
         el("td", "mono", run.duration_seconds === null || run.duration_seconds === undefined ? "—" : run.duration_seconds + "s")
       );
+      row.appendChild(el("td", run.reason ? "run-reason" : null, run.reason || "—"));
       tbody.appendChild(row);
     });
     table.appendChild(tbody);
@@ -831,6 +832,7 @@
     { key: "agent_command", label: "Agent command", type: "textarea", rows: 3, hint: "Shell command (or argv list) that runs the coding agent. The task arrives as the $FORGEO_TASK environment variable; exit 0 = success, blocked_exit_code = needs human input." },
     { key: "agent_timeout_seconds", label: "Agent timeout (seconds)", type: "number", min: 0.1, step: "any", optional: true, hint: "Kill the agent after this many seconds. Empty = never." },
     { key: "blocked_exit_code", label: "Blocked exit code", type: "number", min: 1, step: 1 },
+    { key: "no_changes_exit_code", label: "No-changes exit code", type: "number", min: 1, step: 1, hint: "Exit code the agent uses to signal a task needs no code change. Exiting 0 with an unchanged tree fails the task instead." },
     { key: "git_timeout_seconds", label: "Git timeout (seconds)", type: "number", min: 0.1, step: "any" },
     { key: "refactor_prompt", label: "Refactor prompt", type: "textarea", rows: 4, hint: "Instruction used for the refactoring run when the backlog is empty." },
     { key: "backlog", label: "Backlog file", type: "text", hint: "Path of the JSON backlog file (created on first use)." },

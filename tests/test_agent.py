@@ -41,6 +41,21 @@ async def test_other_exit_code_is_error():
     assert "exit code 1" in (result.error or "")
 
 
+async def test_no_changes_exit_code_is_success_with_no_changes():
+    agent = ShellAgent("exit 3")
+    result = await agent.run_task(TASK, RepoContext())
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.no_changes is True
+    assert result.exit_code == 3
+
+
+async def test_no_changes_exit_code_is_configurable():
+    agent = ShellAgent("exit 5", no_changes_exit_code=5)
+    result = await agent.run_task(TASK, RepoContext())
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.no_changes is True
+
+
 async def test_missing_command_is_error():
     agent = ShellAgent("/nonexistent/binary --flag")
     result = await agent.run_task(TASK, RepoContext())
@@ -338,6 +353,18 @@ async def test_docker_preserves_other_exit_code_as_error(monkeypatch):
     result = await docker_agent().run_task(TASK, RepoContext())
     assert result.status is ExecutionStatus.ERROR
     assert "exit code 1" in (result.error or "")
+
+
+async def test_docker_no_changes_exit_code(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "forgeo.agent.asyncio.create_subprocess_exec",
+        fake_docker_exec(captured, returncode=3),
+    )
+    result = await docker_agent().run_task(TASK, RepoContext())
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.no_changes is True
+    assert result.exit_code == 3
 
 
 async def test_docker_accepts_argv_list_command(monkeypatch):

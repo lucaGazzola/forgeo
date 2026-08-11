@@ -72,11 +72,27 @@ def test_config_defaults():
     assert config.interval_minutes == 60
     assert config.branch == "main"
     assert config.blocked_exit_code == 2
+    assert config.no_changes_exit_code == 3
     assert config.agent_timeout_seconds is None
     assert config.git_timeout_seconds == 120
     assert config.refactor_prompt == DEFAULT_REFACTOR_PROMPT
     assert config.telegram_bot_token is None
     assert config.telegram_chat_id is None
+
+
+def test_config_rejects_no_changes_exit_code_of_zero():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", no_changes_exit_code=0)
+
+
+def test_config_rejects_no_changes_matching_blocked_exit_code():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", blocked_exit_code=2, no_changes_exit_code=2)
+
+
+def test_config_accepts_distinct_no_changes_exit_code():
+    config = ForgeoConfig(agent_command="x", no_changes_exit_code=9)
+    assert config.no_changes_exit_code == 9
 
 
 def test_config_sandbox_defaults_to_none():

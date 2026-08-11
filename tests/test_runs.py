@@ -8,6 +8,8 @@ import pathlib
 from datetime import UTC, datetime
 
 from forgeo.models import (
+    NO_CHANGES_REASON,
+    NO_CHANGES_REPORTED_REASON,
     ExecutionResult,
     ExecutionStatus,
     RunKind,
@@ -47,7 +49,10 @@ async def test_task_success_appends_run_record(git_repo, tmp_path):
     assert record["finished_at"]
 
 
-async def test_task_success_without_changes_has_no_commit_sha(git_repo, tmp_path):
+async def test_task_success_without_changes_has_reason(git_repo, tmp_path):
+    """A no-change SUCCESS is surfaced on the run record: outcome stays
+    SUCCESS (the agent did exit 0) but with an explicit reason, never a
+    silent null commit_sha."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
@@ -57,6 +62,27 @@ async def test_task_success_without_changes_has_no_commit_sha(git_repo, tmp_path
     record = read_lines(runs_path_for(forgeo.config.backlog))[0]
     assert record["outcome"] == "SUCCESS"
     assert record["commit_sha"] is None
+    assert record["reason"] == NO_CHANGES_REASON
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.FAILED
+
+
+async def test_explicit_no_changes_record_has_reason(git_repo, tmp_path):
+    """An explicit no-change (exit no_changes_exit_code) completes the task and
+    the run record explains the missing commit."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.SUCCESS, exit_code=3, no_changes=True
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    assert record["outcome"] == "SUCCESS"
+    assert record["agent_exit_code"] == 3
+    assert record["commit_sha"] is None
+    assert record["reason"] == NO_CHANGES_REPORTED_REASON
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
 
 
 async def test_task_blocked_record(git_repo, tmp_path):
@@ -102,6 +128,8 @@ async def test_refactor_record(git_repo, tmp_path):
     assert record["task_title"] == "Refactoring pass"
     assert record["outcome"] == "SUCCESS"
     assert record["agent_exit_code"] == 0
+    assert record["commit_sha"] is None
+    assert record["reason"] is None  # refactor no-diff is normal, not a failure
 
 
 async def test_every_cycle_appends_exactly_one_line(git_repo, tmp_path):

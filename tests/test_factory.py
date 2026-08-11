@@ -8,7 +8,13 @@ from typing import Self
 
 from forgeo.backlog import JSONBacklog
 from forgeo.git import GitManager
-from forgeo.models import ExecutionResult, ExecutionStatus, TaskStatus
+from forgeo.models import (
+    NO_CHANGES_DIRTY_REASON,
+    NO_CHANGES_REASON,
+    ExecutionResult,
+    ExecutionStatus,
+    TaskStatus,
+)
 from tests.conftest import git, make_forgeo, make_task
 
 
@@ -46,7 +52,10 @@ async def test_task_success_is_committed_on_main(git_repo, tmp_path):
     assert "forgeo" not in git(git_repo, "branch")
 
 
-async def test_task_success_without_changes_commits_nothing(git_repo, tmp_path):
+async def test_task_success_without_changes_fails_task(git_repo, tmp_path):
+    """Exit 0 with an empty tree is not a valid completion: it is FAILED, so
+    a silent no-change SUCCESS can never quietly close a task (regression:
+    SELF-033 was closed without any work)."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
@@ -54,8 +63,62 @@ async def test_task_success_without_changes_commits_nothing(git_repo, tmp_path):
     outcome = await forgeo.run_cycle()
 
     assert outcome == "task"
-    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failure_reason == [NO_CHANGES_REASON]
     assert git(git_repo, "rev-list", "--count", "HEAD") == "1"
+
+
+async def test_no_changes_failure_logs_warning(git_repo, tmp_path, caplog):
+    """The no-change SUCCESS case is surfaced as a warning, never silent."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+
+    with caplog.at_level(logging.WARNING):
+        await forgeo.run_cycle()
+
+    assert any(NO_CHANGES_REASON in r.message for r in caplog.records)
+    assert any("produced no changes" in r.message for r in caplog.records)
+
+
+async def test_task_explicit_no_changes_completes_task(git_repo, tmp_path):
+    """Exit no_changes_exit_code is the explicit no-op contract: the task is
+    COMPLETED without a commit, and the tree stays untouched."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.SUCCESS, exit_code=3, no_changes=True
+    )
+
+    outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.COMPLETED
+    assert git(git_repo, "rev-list", "--count", "HEAD") == "1"
+    assert await GitManager(git_repo).a_is_clean()
+
+
+async def test_task_no_changes_but_dirty_tree_fails(git_repo, tmp_path):
+    """An agent that reports no changes while leaving uncommitted work behind
+    contradicts itself: the work is discarded and the task is FAILED."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.SUCCESS, exit_code=3, no_changes=True
+    )
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    await forgeo.run_cycle()
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failure_reason == [NO_CHANGES_DIRTY_REASON]
+    assert await GitManager(git_repo).a_is_clean()
+    assert "def answer()" in (git_repo / "app.py").read_text(encoding="utf-8")
 
 
 async def test_task_success_pushes_to_remote(git_repo, tmp_path):
@@ -344,10 +407,16 @@ async def test_refactor_pass_when_backlog_empty(git_repo, tmp_path):
 
 
 async def test_refactor_with_nothing_to_do_commits_nothing(git_repo, tmp_path):
+    """A refactor that finds nothing to improve is a normal, successful run —
+    unlike a task, an empty diff on a refactor pass is not a failure."""
     forgeo, agent, _backlog = make_forgeo(git_repo, tmp_path)
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
-    await forgeo.run_cycle()
+
+    outcome = await forgeo.run_cycle()
+
+    assert outcome == "refactor"
     assert git(git_repo, "rev-list", "--count", "HEAD") == "1"
+    assert agent.calls[0][0].id == "REFACTOR"
 
 
 async def test_refactor_blocked_writes_blocker(git_repo, tmp_path):

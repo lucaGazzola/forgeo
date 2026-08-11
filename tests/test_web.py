@@ -1075,6 +1075,23 @@ def test_runs_endpoint(web_env):
     assert data[0]["outcome"] == "SUCCESS"
 
 
+def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
+    """A no-change run is surfaced with its reason, not a silent null commit."""
+    record = run_record("TASK-001", RunOutcome.SUCCESS)
+    record.reason = "Agent exited 0 but produced no changes"
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.OPEN)],
+        runs=[record],
+    )
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    assert data[0]["commit_sha"] is None
+    assert data[0]["reason"] == "Agent exited 0 but produced no changes"
+
+
 def test_blocker_endpoint(web_env):
     server, _ = web_env
     status, data = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/blocker")
@@ -1173,6 +1190,13 @@ def test_put_config_validation_errors(web_env):
         {"name": "alpha", "agent_command": "echo", "agent_sandbox": "sandbox"},
         {"name": "alpha", "agent_command": "echo", "branch": 42},
         {"name": "alpha", "agent_command": "echo", "agent_sandbox": "docker"},
+        {"name": "alpha", "agent_command": "echo", "no_changes_exit_code": 0},
+        {
+            "name": "alpha",
+            "agent_command": "echo",
+            "blocked_exit_code": 2,
+            "no_changes_exit_code": 2,
+        },
     ):
         status, data = _put(url, json.dumps(payload))
         assert status == 400, payload

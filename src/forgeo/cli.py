@@ -382,12 +382,14 @@ def _build_agent(config: ForgeoConfig) -> ShellAgent:
             timeout_seconds=config.agent_timeout_seconds,
             env=config.agent_env,
             blocked_exit_code=config.blocked_exit_code,
+            no_changes_exit_code=config.no_changes_exit_code,
         )
     return ShellAgent(
         config.agent_command,
         timeout_seconds=config.agent_timeout_seconds,
         env=config.agent_env,
         blocked_exit_code=config.blocked_exit_code,
+        no_changes_exit_code=config.no_changes_exit_code,
     )
 
 

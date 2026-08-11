@@ -53,7 +53,12 @@ static files in `src/forgeo/web/` are served at their URL paths.
   modify, agent command, timestamps); it closes via the close button, the
   backdrop, or Escape. An **Edit** button switches the modal to an editable
   form for those fields; **Save** persists the change via `PATCH` and
-  **Cancel** discards it. A `BLOCKED` task's modal shows a highlighted banner
+  **Cancel** discards it. A task whose dependencies are not all `COMPLETED`
+  shows a *Waiting on dependencies* banner listing each uncompleted
+  dependency with its current status (or `missing` when the id does not
+  exist in the backlog) — Forgeo will not pick the task until every
+  dependency is `COMPLETED`. A `BLOCKED` task's modal shows a highlighted
+  banner
   at the top with the agent's blocker reason (the persisted per-task
   `blocker_reason`) and how many times the task has blocked (`blocked_count`,
   e.g. "blocked 3x"); a `FAILED` task's modal shows an analogous red banner
@@ -93,7 +98,8 @@ curl http://127.0.0.1:8790/api/instances
 
 ### `GET /api/instances/<name>/tasks`
 
-List every task in that instance's backlog, in creation order.
+List every task in that instance's backlog, in creation order. Each task
+carries an extra `unsatisfied_dependencies` field (see below).
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/tasks
@@ -113,7 +119,8 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
     "updated_at": "2026-07-31T10:00:00Z",
     "dependencies": [],
     "acceptance_criteria": [],
-    "files_to_modify": []
+    "files_to_modify": [],
+    "unsatisfied_dependencies": []
   }
 ]
 ```
@@ -127,6 +134,25 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001
 ```
 
 Returns `404` with `{"error": "not found"}` for an unknown id.
+
+### `unsatisfied_dependencies`
+
+Every task returned by `GET .../tasks` and `GET .../tasks/{id}` includes an
+`unsatisfied_dependencies` field: a list of the task's `dependencies` that are
+**not** `COMPLETED`, in `dependencies` order. Each entry has the dependency id
+and its current status — or `missing` when no task with that id exists:
+
+```json
+[
+  { "id": "TASK-001", "status": "OPEN" },
+  { "id": "TASK-003", "status": "missing" }
+]
+```
+
+Forgeo only picks an `OPEN` task once every dependency is `COMPLETED` (see
+[Backlog format](backlog.md)); the field is how the web console explains why a
+task is waiting and is `[]` when the task has no (or only `COMPLETED`)
+dependencies.
 
 ### `POST /api/instances/<name>/tasks`
 

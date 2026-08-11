@@ -1,9 +1,9 @@
 """The backlog: a single human-readable JSON file of tasks.
 
-Forgeo pulls the oldest ``OPEN`` task from here. Edit this file
-directly to add, remove, or reopen tasks (e.g. set a ``BLOCKED`` task back
-to ``OPEN`` once the human input has been provided). Writes are atomic and
-serialized through an asyncio lock.
+Forgeo pulls the oldest ``OPEN`` task whose dependencies are all ``COMPLETED``
+from here. Edit this file directly to add, remove, or reopen tasks (e.g. set a
+``BLOCKED`` task back to ``OPEN`` once the human input has been provided).
+Writes are atomic and serialized through an asyncio lock.
 """
 
 from __future__ import annotations
@@ -38,9 +38,48 @@ EDITABLE_TASK_FIELDS = frozenset(
 )
 
 
+def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
+    """The dependencies of ``task`` that are not yet satisfied.
+
+    A dependency is satisfied only when a task with that id exists in the
+    backlog and its status is ``COMPLETED``. Each returned entry carries the
+    dependency id and its current status (``missing`` when no task with that
+    id exists), in ``task.dependencies`` order.
+    """
+    status_by_id = {t.id: t.status for t in tasks}
+    unmet: list[dict[str, str]] = []
+    for dep_id in task.dependencies:
+        status = status_by_id.get(dep_id)
+        if status is TaskStatus.COMPLETED:
+            continue
+        unmet.append(
+            {
+                "id": dep_id,
+                "status": status.value if status is not None else "missing",
+            }
+        )
+    return unmet
+
+
 def oldest_open_task(tasks: list[Task]) -> Task | None:
-    """Return the oldest OPEN task (smallest ``created_at``), or ``None``."""
-    open_tasks = [task for task in tasks if task.status is TaskStatus.OPEN]
+    """Return the oldest OPEN task whose dependencies are all COMPLETED.
+
+    A task is only runnable when every id in its ``dependencies`` exists and
+    is ``COMPLETED``; tasks referencing missing or still-pending tasks are
+    skipped. Tasks without dependencies behave exactly as before. Returns
+    ``None`` when no runnable OPEN task exists (e.g. an empty backlog, or a
+    cycle of tasks all waiting on each other).
+    """
+    status_by_id = {t.id: t.status for t in tasks}
+    open_tasks = [
+        task
+        for task in tasks
+        if task.status is TaskStatus.OPEN
+        and all(
+            status_by_id.get(dep_id) is TaskStatus.COMPLETED
+            for dep_id in task.dependencies
+        )
+    ]
     if not open_tasks:
         return None
     return min(open_tasks, key=lambda task: task.created_at)
@@ -66,7 +105,8 @@ class JSONBacklog:
         return [self._to_task(entry) for entry in store["tasks"]]
 
     async def fetch_next_task(self) -> Task | None:
-        """Return the oldest OPEN task, or ``None`` when there is none."""
+        """Return the oldest OPEN task whose dependencies are all COMPLETED,
+        or ``None`` when nothing is runnable."""
         return oldest_open_task(await self.list_tasks())
 
     async def get_task(self, task_id: str) -> Task | None:

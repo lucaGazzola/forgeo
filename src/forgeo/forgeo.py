@@ -4,8 +4,8 @@ Each run does exactly one of three things:
 
 1. A ``BLOCKED`` task exists -> render the blocker file (the detailed
    explanation of what the human must do) from the backlog and pause.
-2. An ``OPEN`` task exists -> execute it with the agent, commit and push the
-   result on the main branch.
+2. A runnable ``OPEN`` task exists (its dependencies are all ``COMPLETED``) ->
+   execute it with the agent, commit and push the result on the main branch.
 3. The backlog has nothing runnable -> run the agent in refactoring mode on
    the same branch, committing and pushing whatever it improves.
 

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Task dependencies are now enforced when picking the next task: Forgeo picks
+  the oldest `OPEN` task whose `dependencies` are all `COMPLETED` instead of
+  the plain oldest `OPEN` task, so a task never runs before the work it
+  depends on. Unsatisfied dependencies (including ids that don't exist in the
+  backlog) are surfaced on `forgeo status` (`waiting on:` line) and in the web
+  console's task detail modal (*Waiting on dependencies* banner); the
+  `GET /api/instances/<name>/tasks*` responses annotate each task with an
+  `unsatisfied_dependencies` field.
+
 - Homebrew install support: `brew install lucaGazzola/forgeo/forgeo`
   installs the prebuilt binary on macOS (arm64/Intel) and Linux (Intel). The
   `publish-homebrew` CI job re-renders the tap formula (sha256 + version)

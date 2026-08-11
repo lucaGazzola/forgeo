@@ -458,6 +458,47 @@ def test_tasks_endpoints(web_env):
     assert data["error"] == "not found"
 
 
+def test_task_detail_reports_unsatisfied_dependencies(web_env):
+    server, registry = web_env
+    write_instance(
+        registry,
+        "gamma",
+        repo=str(registry / "repos" / "gamma"),
+        tasks=[
+            make_task(
+                id="T1", title="Done dep", status=TaskStatus.COMPLETED
+            ).model_dump(mode="json"),
+            make_task(
+                id="T2", title="Pending dep", status=TaskStatus.OPEN
+            ).model_dump(mode="json"),
+            make_task(
+                id="T3",
+                title="Waits",
+                status=TaskStatus.OPEN,
+                dependencies=["T1", "T2", "GHOST"],
+            ).model_dump(mode="json"),
+        ],
+    )
+    base = f"http://127.0.0.1:{server.port}/api/instances/gamma/tasks"
+
+    status, data = _get(f"{base}/T3")
+    assert status == 200
+    assert data["unsatisfied_dependencies"] == [
+        {"id": "T2", "status": "OPEN"},
+        {"id": "GHOST", "status": "missing"},
+    ]
+
+    status, data = _get(base)
+    assert status == 200
+    by_id = {task["id"]: task for task in data}
+    assert by_id["T3"]["unsatisfied_dependencies"] == [
+        {"id": "T2", "status": "OPEN"},
+        {"id": "GHOST", "status": "missing"},
+    ]
+    assert by_id["T1"]["unsatisfied_dependencies"] == []
+    assert by_id["T2"]["unsatisfied_dependencies"] == []
+
+
 def test_post_task_creates_in_backlog(web_env):
     server, _ = web_env
     base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"

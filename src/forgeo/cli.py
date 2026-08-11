@@ -67,7 +67,12 @@ from rich.table import Table
 
 from forgeo import __version__
 from forgeo.agent import DockerSandboxAgent, SandboxUnavailableError, ShellAgent
-from forgeo.backlog import JSONBacklog, backlog_status_counts, oldest_open_task
+from forgeo.backlog import (
+    JSONBacklog,
+    backlog_status_counts,
+    oldest_open_task,
+    unsatisfied_dependencies,
+)
 from forgeo.central import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -92,7 +97,7 @@ from forgeo.instances import (
     remove_instance,
     resolve_instance,
 )
-from forgeo.models import ForgeoConfig, SandboxMode, Task
+from forgeo.models import ForgeoConfig, SandboxMode, Task, TaskStatus
 from forgeo.runs import RunRecorder, runs_path_for
 from forgeo.setup import run_setup
 from forgeo.update import check_for_update, update_state_path
@@ -544,18 +549,36 @@ def render_status(
     next_text = f"{nxt.id} — {nxt.title}" if nxt is not None else "(none)"
     daemon_text = "running" if daemon_running else "not running"
     outcome_text = last_outcome if last_outcome is not None else "(none)"
-    return "\n".join(
-        [
-            f"name: {config.name}",
-            f"repo: {config.repo}",
-            f"interval: {config.interval_minutes} min",
-            f"branch: {config.branch}",
-            f"backlog: {count_text}",
-            f"next: {next_text}",
-            f"daemon: {daemon_text}",
-            f"last outcome: {outcome_text}",
-        ]
-    )
+    lines = [
+        f"name: {config.name}",
+        f"repo: {config.repo}",
+        f"interval: {config.interval_minutes} min",
+        f"branch: {config.branch}",
+        f"backlog: {count_text}",
+        f"next: {next_text}",
+        f"daemon: {daemon_text}",
+        f"last outcome: {outcome_text}",
+    ]
+    waiting = _waiting_hint(tasks)
+    if waiting is not None:
+        lines.append(waiting)
+    return "\n".join(lines)
+
+
+def _waiting_hint(tasks: list[Task]) -> str | None:
+    """A status line naming the oldest OPEN task that is not yet runnable and
+    the dependency ids keeping it waiting, or ``None`` when there is none."""
+    open_tasks = [
+        task for task in tasks if task.status is TaskStatus.OPEN
+    ]
+    if not open_tasks:
+        return None
+    oldest = min(open_tasks, key=lambda task: task.created_at)
+    unmet = unsatisfied_dependencies(tasks, oldest)
+    if not unmet:
+        return None
+    detail = ", ".join(f"{dep['id']} ({dep['status']})" for dep in unmet)
+    return f"waiting on: {oldest.id} (needs COMPLETED: {detail})"
 
 
 def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:

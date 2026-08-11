@@ -3,9 +3,10 @@
 A **scheduled, agent-driven software forgeo** for one repository. Every
 `interval_minutes` Forgeo wakes up and runs exactly one of three things:
 
-1. picks the oldest `OPEN` task from the [backlog](backlog.md), runs it through
-   a coding [agent](agent-contract.md), and commits + pushes the result
-   directly on the single configured branch — no branches, no PRs;
+1. picks the oldest `OPEN` task whose dependencies are all `COMPLETED` from the
+   [backlog](backlog.md), runs it through a coding [agent](agent-contract.md),
+   and commits + pushes the result directly on the single configured branch —
+   no branches, no PRs;
 2. if the backlog is empty, runs the agent in **refactoring mode** and commits
    whatever it improves;
 3. if the agent signals it needs a human decision, the task is marked
@@ -41,7 +42,7 @@ forgeo.yaml ──► forgeo start (daemon)
                      │
                      ├── BLOCKED task exists ──► render BLOCKER.md from backlog, pause
                      │
-                     ├── oldest OPEN task ──► run agent ──► commit & push ──► COMPLETED
+                     ├── oldest OPEN task with all deps COMPLETED ──► run agent ──► commit & push ──► COMPLETED
                      │
                      └── backlog empty ──► run agent (refactor) ──► commit & push
                                                 │
@@ -60,7 +61,7 @@ forgeo.yaml ──► forgeo start (daemon)
 | `forgeo.daemon` | `src/forgeo/daemon.py` | The scheduled worker: wakes every `interval_minutes`, holds the run locks, records `last_outcome`. |
 | `forgeo.daemon_control` | `src/forgeo/daemon_control.py` | Daemon lifecycle shared by the CLI and web console: SIGTERM + wait, detached start/restart. |
 | `forgeo.forgeo` | `src/forgeo/forgeo.py` | One cycle of work: task run, refactor pass, blocker handling, git side effects. |
-| `forgeo.backlog` | `src/forgeo/backlog.py` | JSON backlog read/write; picks the oldest `OPEN` task. |
+| `forgeo.backlog` | `src/forgeo/backlog.py` | JSON backlog read/write; picks the oldest `OPEN` task whose dependencies are all `COMPLETED`. |
 | `forgeo.agent` | `src/forgeo/agent.py` | `ShellAgent`: runs your command, maps exit codes to outcomes, delivers `FORGEO_TASK`. |
 | `forgeo.git` | `src/forgeo/git.py` | Single-branch git operations: ensure branch, commit all, push, hard reset. |
 | `forgeo.config` | `src/forgeo/config.py` | Loads and validates `forgeo.yaml`. |
@@ -80,8 +81,11 @@ forgeo.yaml ──► forgeo start (daemon)
    — it will not start new work until the block is resolved. Once the last
    `BLOCKED` task is reopened, the file disappears automatically on the next
    cycle.
-4. Otherwise it takes the oldest `OPEN` task. If the working tree is dirty the
-   cycle aborts (`dirty`) rather than running over manual changes.
+4. Otherwise it takes the oldest `OPEN` task whose dependencies are all
+   `COMPLETED` — a task still waiting on an uncompleted dependency is skipped
+   (see [Backlog format](backlog.md) for how dependencies are enforced). If
+   the working tree is dirty the cycle aborts (`dirty`) rather than running
+   over manual changes.
 5. The agent runs with the repository as its working directory and the task in
    `FORGEO_TASK`. The exit code decides what happens to the work — see
    [Agent contract](agent-contract.md) for the exact mapping.

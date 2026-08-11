@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -241,6 +241,29 @@ def test_render_status_empty_backlog_and_no_outcome(git_repo, tmp_path):
     assert "next: (none)" in text
     assert "daemon: not running" in text
     assert "last outcome: (none)" in text
+
+
+def test_render_status_reports_waiting_on_dependency(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    now = datetime.now(UTC)
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.BLOCKED,
+        created_at=now - timedelta(hours=1),
+    )
+    waiting = make_task(
+        id="TASK-001", title="Waits", status=TaskStatus.OPEN,
+        dependencies=["DEP-1"], created_at=now - timedelta(hours=2),
+    )
+    text = render_status(config, [waiting, dep], daemon_running=False, last_outcome=None)
+    assert "next: (none)" in text
+    assert "waiting on: TASK-001 (needs COMPLETED: DEP-1 (BLOCKED))" in text
+
+
+def test_render_status_no_waiting_line_when_runnable(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [make_task(id="TASK-001", title="Do the thing", status=TaskStatus.OPEN)]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert "waiting on:" not in text
 
 
 def test_status_prints_summary_and_exits_zero(git_repo, tmp_path, capsys):

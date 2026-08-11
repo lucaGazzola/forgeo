@@ -32,7 +32,7 @@ Each entry in `tasks` is a task object:
 | `status` | string | `OPEN` | One of `OPEN`, `BLOCKED`, `COMPLETED`, `FAILED`. |
 | `created_at` | ISO-8601 datetime | now (UTC) | When the task was created; used for oldest-first ordering. |
 | `updated_at` | ISO-8601 datetime | now (UTC) | Bumped whenever the status changes. |
-| `dependencies` | list[string] | `[]` | Task ids this task depends on (informational; not enforced). |
+| `dependencies` | list[string] | `[]` | Task ids this task depends on. Forgeo only picks the task once every dependency is `COMPLETED` (missing ids and ids in any other state keep it waiting). |
 | `acceptance_criteria` | list[string] | `[]` | Rendered into the `FORGEO_TASK` instruction under an "Acceptance criteria:" heading. |
 | `files_to_modify` | list[string] | `[]` | Informational; hints for the agent. |
 | `agent_command` | string / list[string] | — | Override the configured `agent_command` for this task (e.g. route it to a different model). Validated like the global key; falls back to the config default when omitted. |
@@ -107,14 +107,47 @@ the web console's Reopen when the task was blocked by the agent.
 
 ## Oldest-first ordering
 
-Forgeo picks the **oldest `OPEN` task**, i.e. the `OPEN` task with the
-smallest `created_at`. Tasks in other states are ignored for picking:
+Forgeo picks the **oldest `OPEN` task whose dependencies are all `COMPLETED`**,
+i.e. the `OPEN` task with the smallest `created_at` that is not waiting on
+anything. Tasks in other states are ignored for picking:
 
 - `BLOCKED` tasks do not get picked, but their presence pauses Forgeo.
 - `COMPLETED` and `FAILED` tasks are skipped.
+- An `OPEN` task whose `dependencies` are not all `COMPLETED` is skipped:
+  Forgeo runs its dependencies first. A dependency that is `missing` (no task
+  with that id exists) or stuck in another state (e.g. `FAILED`) keeps the
+  task waiting forever, so it can never run and is not picked.
 
 Set `created_at` deliberately (e.g. back-date a task) if you want to control
 the order in which tasks are processed.
+
+## Dependencies
+
+`dependencies` is a list of task ids that must be `COMPLETED` before this task
+runs. Forgeo enforces them when picking the next task: the oldest `OPEN` task
+whose dependencies are all `COMPLETED` is chosen, so a task is never run before
+the work it depends on. A task without `dependencies` behaves exactly as
+before.
+
+Ordering is oldest-first among *runnable* tasks: if the oldest `OPEN` task is
+still waiting on an uncompleted dependency, Forgeo picks the next-oldest
+`OPEN` task that is runnable instead. When nothing is runnable — e.g. a cycle
+where `A` depends on `B` and `B` depends on `A` — Forgeo reports no next task
+and runs a refactoring pass until a dependency is `COMPLETED`.
+
+Unsatisfied dependencies are surfaced so a waiting task is never a silent
+black hole:
+
+- `forgeo status` shows a `waiting on:` line naming the oldest `OPEN` task that
+  is not yet runnable and the dependency ids keeping it waiting (with their
+  current status, or `missing`).
+- the web console task detail shows a *Waiting on dependencies* banner listing
+  each uncompleted dependency with its status; a dependency id that does not
+  exist in the backlog is shown as `missing`.
+
+To unblock a waiting task, complete (or delete and re-add, or fix) the
+referenced task — or edit the task's `dependencies` from the web console /
+the backlog file.
 
 ## How a task is executed
 

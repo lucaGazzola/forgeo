@@ -365,6 +365,15 @@
   color: var(--failed);
 }
 
+.modal__banner--waiting {
+  border-color: rgba(143, 183, 255, 0.4);
+  background: rgba(143, 183, 255, 0.08);
+}
+
+.modal__banner--waiting h3 {
+  color: var(--open);
+}
+
 .modal__blocked-count {
   margin: 0 0 6px;
   font-size: 11px;

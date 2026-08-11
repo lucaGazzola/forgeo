@@ -180,6 +180,15 @@
           <h3>Dependencies</h3>
           <ul class="modal__list" id="task-modal-dependencies"></ul>
         </section>
+        <section class="modal__section modal__banner modal__banner--waiting" id="task-modal-unmet-dependencies-section" hidden>
+          <h3>Waiting on dependencies</h3>
+          <ul class="modal__list" id="task-modal-unmet-dependencies"></ul>
+          <p class="modal__blocked-note">
+            Forgeo only picks this task once every dependency is COMPLETED. A
+            dependency whose id does not exist in the backlog is listed as
+            &ldquo;missing&rdquo; and never counts as done.
+          </p>
+        </section>
         <section class="modal__section" id="task-modal-files-section" hidden>
           <h3>Files to modify</h3>
           <ul class="modal__list" id="task-modal-files"></ul>

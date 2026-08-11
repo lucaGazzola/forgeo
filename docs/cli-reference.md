@@ -111,7 +111,12 @@ last outcome: task
 ```
 
 - `backlog` — per-status task counts.
-- `next` — the oldest `OPEN` task (the one Forgeo will pick next).
+- `next` — the oldest `OPEN` task whose dependencies are all `COMPLETED` (the
+  one Forgeo will pick next), or `(none)` when nothing is runnable.
+- `waiting on` — when present, names the oldest `OPEN` task that is *not* yet
+  runnable and the dependency ids keeping it waiting (with their current
+  status, or `missing`) — e.g. `waiting on: TASK-002 (needs COMPLETED:
+  TASK-001 (OPEN))`. Omitted when no `OPEN` task is blocked on a dependency.
 - `daemon` — whether the per-forgeo lock is currently held.
 - `last outcome` — the most recent run recorded in `runs.jsonl`.
 

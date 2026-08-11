@@ -42,7 +42,7 @@ pipx install forgeo-cli
 forgeo init
 
 # 3. Start Forgeo
-forgeo start   # run forever: every interval_minutes, implement the oldest OPEN task
+forgeo start   # run forever: every interval_minutes, implement the oldest OPEN task (dependencies first)
 ```
 
 `forgeo init` writes `forgeo.yaml` and a `.forgeo/` folder for the backlog

@@ -315,6 +315,7 @@
     var empty = document.getElementById("empty-state");
     if (!board) return;
     var hasAny = false;
+    allTasks = tasks || [];
 
     STATUS_ORDER.forEach(function (status) {
       var col = board.querySelector('.status-col[data-status="' + status + '"]');
@@ -341,6 +342,7 @@
   var modalTaskId = null;
   var modalTask = null;
   var modalLastFocus = null;
+  var allTasks = [];
 
   function listItems(values) {
     var ul = el("ul", "modal__list");
@@ -352,6 +354,28 @@
       });
     }
     return ul;
+  }
+
+  function taskById(id) {
+    for (var i = 0; i < allTasks.length; i++) {
+      if (allTasks[i].id === id) return allTasks[i];
+    }
+    return null;
+  }
+
+  function computeUnsatisfied(task) {
+    /* Fallback for task objects that carry no server-computed
+       unsatisfied_dependencies (e.g. a PATCH/POST response): resolve each
+       dependency against the full backlog we already have. */
+    var unmet = [];
+    (task.dependencies || []).forEach(function (depId) {
+      var dep = taskById(depId);
+      var status = dep ? (dep.status || "OPEN").toUpperCase() : "missing";
+      if (status !== "COMPLETED") {
+        unmet.push({ id: depId, status: status });
+      }
+    });
+    return unmet;
   }
 
   function showModalSection(id, show) {
@@ -424,6 +448,21 @@
       dependencies.textContent = "";
       dependencies.appendChild(listItems(task.dependencies));
     }
+    var unmet = Array.isArray(task.unsatisfied_dependencies)
+      ? task.unsatisfied_dependencies
+      : computeUnsatisfied(task);
+    var unmetList = document.getElementById("task-modal-unmet-dependencies");
+    if (unmetList) {
+      unmetList.textContent = "";
+      unmetList.appendChild(
+        listItems(
+          unmet.map(function (dep) {
+            return dep.id + " — " + dep.status;
+          })
+        )
+      );
+    }
+    showModalSection("task-modal-unmet-dependencies-section", unmet.length > 0);
     var files = document.getElementById("task-modal-files");
     if (files) {
       files.textContent = "";

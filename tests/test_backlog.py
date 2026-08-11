@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from forgeo.backlog import JSONBacklog, oldest_open_task
+from forgeo.backlog import JSONBacklog, oldest_open_task, unsatisfied_dependencies
 from forgeo.models import Task, TaskStatus
 from tests.conftest import make_task
 
@@ -27,6 +27,109 @@ def test_oldest_open_task_picks_oldest():
 def test_oldest_open_task_none_when_empty_or_no_open():
     assert oldest_open_task([]) is None
     assert oldest_open_task([make_task(status=TaskStatus.COMPLETED)]) is None
+
+
+def test_oldest_open_task_skips_task_with_uncompleted_dependency():
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.BLOCKED,
+        created_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    waiting = make_task(
+        id="WAIT", title="Waits", dependencies=["DEP-1"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    eligible = make_task(id="GO", title="Eligible", created_at=datetime.now(UTC))
+    assert oldest_open_task([waiting, dep, eligible]) is eligible
+    assert oldest_open_task([waiting, dep]) is None
+
+
+def test_oldest_open_task_runs_open_dependency_first():
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.OPEN,
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    waiting = make_task(
+        id="WAIT", title="Waits", dependencies=["DEP-1"],
+        created_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    assert oldest_open_task([waiting, dep]) is dep
+
+
+def test_oldest_open_task_picks_waiting_task_once_dependency_completed():
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.COMPLETED,
+        created_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    waiting = make_task(
+        id="WAIT", title="Waits", dependencies=["DEP-1"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    eligible = make_task(id="GO", title="Eligible", created_at=datetime.now(UTC))
+    assert oldest_open_task([waiting, dep, eligible]) is waiting
+
+
+def test_oldest_open_task_missing_dependency_never_picked():
+    waiting = make_task(
+        id="WAIT", title="Waits", dependencies=["GHOST"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    eligible = make_task(id="GO", title="Eligible", created_at=datetime.now(UTC))
+    assert oldest_open_task([waiting, eligible]) is eligible
+    assert oldest_open_task([waiting]) is None
+
+
+def test_oldest_open_task_requires_all_dependencies_completed():
+    done = make_task(id="DONE", status=TaskStatus.COMPLETED)
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.FAILED,
+        created_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    waiting = make_task(
+        id="WAIT", title="Waits", dependencies=["DONE", "DEP-1"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    assert oldest_open_task([waiting, done, dep]) is None
+
+
+def test_oldest_open_task_cycle_returns_none():
+    a = make_task(
+        id="A", title="A", dependencies=["B"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    b = make_task(
+        id="B", title="B", dependencies=["A"],
+        created_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    assert oldest_open_task([a, b]) is None
+
+
+def test_oldest_open_task_self_dependency_never_runnable():
+    task = make_task(
+        id="SELF", title="Self", dependencies=["SELF"],
+        created_at=datetime.now(UTC),
+    )
+    assert oldest_open_task([task]) is None
+
+
+def test_unsatisfied_dependencies_reports_status_and_missing():
+    done = make_task(id="DONE", status=TaskStatus.COMPLETED)
+    blocked = make_task(id="BLK", status=TaskStatus.BLOCKED)
+    open_ = make_task(id="OPEN-1", status=TaskStatus.OPEN)
+    task = make_task(
+        id="T", title="T", dependencies=["DONE", "BLK", "OPEN-1", "GHOST"]
+    )
+    assert unsatisfied_dependencies([task, done, blocked, open_], task) == [
+        {"id": "BLK", "status": "BLOCKED"},
+        {"id": "OPEN-1", "status": "OPEN"},
+        {"id": "GHOST", "status": "missing"},
+    ]
+
+
+def test_unsatisfied_dependencies_empty_when_satisfied_or_no_deps():
+    done = make_task(id="DONE", status=TaskStatus.COMPLETED)
+    waiting = make_task(id="T", title="T", dependencies=["DONE"])
+    assert unsatisfied_dependencies([waiting, done], waiting) == []
+    assert unsatisfied_dependencies([make_task()], make_task()) == []
 
 
 async def test_fetch_oldest_open_task(tmp_path):
@@ -57,6 +160,36 @@ async def test_fetch_prefers_open_over_blocked(tmp_path):
     await backlog.create_task(make_task(id="OPEN-1"))
     fetched = await backlog.fetch_next_task()
     assert fetched.id == "OPEN-1"
+
+
+async def test_fetch_next_task_waits_for_dependencies(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(
+        Task(
+            id="DEP-1", title="Dep", description="d",
+            status=TaskStatus.BLOCKED,
+            created_at=datetime.now(UTC) - timedelta(hours=3),
+        )
+    )
+    waiting = Task(
+        id="WAIT", title="Waits", description="d",
+        dependencies=["DEP-1"],
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    await backlog.create_task(waiting)
+    assert await backlog.fetch_next_task() is None
+
+    await backlog.update_status("DEP-1", TaskStatus.COMPLETED)
+    fetched = await backlog.fetch_next_task()
+    assert fetched is not None
+    assert fetched.id == "WAIT"
+
+
+async def test_fetch_next_task_none_on_cycle(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(Task(id="A", title="a", description="d", dependencies=["B"]))
+    await backlog.create_task(Task(id="B", title="b", description="d", dependencies=["A"]))
+    assert await backlog.fetch_next_task() is None
 
 
 async def test_update_status_persists_and_bumps_timestamp(tmp_path):

@@ -63,7 +63,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from forgeo import daemon_control
-from forgeo.backlog import JSONBacklog, backlog_status_counts
+from forgeo.backlog import JSONBacklog, backlog_status_counts, unsatisfied_dependencies
 from forgeo.config import save_config
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.instances import (
@@ -293,6 +293,19 @@ def _read_tasks(config: ForgeoConfig | None) -> list[Task]:
         except ValidationError:
             continue
     return parsed
+
+
+def _task_payload(task: Task, tasks: list[Task]) -> dict[str, Any]:
+    """Serialize a task for the API, annotating its unsatisfied dependencies.
+
+    The extra ``unsatisfied_dependencies`` field lists every dependency id
+    that is not ``COMPLETED`` yet (with its current status, or ``missing``
+    when it does not exist), so the web console can explain why a task is
+    waiting before Forgeo may pick it.
+    """
+    payload = task.model_dump(mode="json")
+    payload["unsatisfied_dependencies"] = unsatisfied_dependencies(tasks, task)
+    return payload
 
 
 def _blocker_content(config: ForgeoConfig | None) -> str | None:
@@ -952,13 +965,16 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             if endpoint == "tasks":
                 if len(parts) == 2:
                     tasks = _read_tasks(info.config)
-                    self._send_json(200, [t.model_dump(mode="json") for t in tasks])
+                    self._send_json(
+                        200, [_task_payload(t, tasks) for t in tasks]
+                    )
                     return
                 if len(parts) == 3:
                     task_id = unquote(parts[2])
-                    for task in _read_tasks(info.config):
+                    tasks = _read_tasks(info.config)
+                    for task in tasks:
                         if task.id == task_id:
-                            self._send_json(200, task.model_dump(mode="json"))
+                            self._send_json(200, _task_payload(task, tasks))
                             return
                     self._send_json(404, {"error": "not found"})
                     return

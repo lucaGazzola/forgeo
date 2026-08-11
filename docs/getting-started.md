@@ -121,9 +121,9 @@ shows every registered instance) with `forgeo web` — see
 forgeo status
 ```
 
-shows the config, backlog counts, the next `OPEN` task, whether the daemon is
-running, and the last run outcome. To run exactly one cycle without leaving a
-daemon up:
+shows the config, backlog counts, the next runnable `OPEN` task (one whose
+dependencies are all `COMPLETED`), whether the daemon is running, and the last
+run outcome. To run exactly one cycle without leaving a daemon up:
 
 ```bash
 forgeo once

@@ -13,6 +13,7 @@ Everything here is lock-file driven and never touches the config-save flow.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import signal
@@ -54,11 +55,7 @@ def wait_for_lock_release(
     reuse the same wait loop for other lock kinds.
     """
     if is_held is None:
-
-        def _flock_held() -> bool:
-            return is_lock_held(lock_path)
-
-        is_held = _flock_held
+        is_held = functools.partial(is_lock_held, lock_path)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not is_held():

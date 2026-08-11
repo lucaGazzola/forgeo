@@ -58,7 +58,7 @@ def _execution_outcome(status: ExecutionStatus) -> RunOutcome:
         ExecutionStatus.SUCCESS: RunOutcome.SUCCESS,
         ExecutionStatus.BLOCKED: RunOutcome.BLOCKED,
         ExecutionStatus.ERROR: RunOutcome.ERROR,
-    }.get(status, RunOutcome.ERROR)
+    }[status]
 
 
 def _subject_label(task: Task, *, is_refactor: bool) -> str:
@@ -480,15 +480,7 @@ class Forgeo:
         text). Once the last BLOCKED task is resolved, :meth:`_run_cycle`
         removes the file because it carries the derived-view marker.
         """
-        sections: list[str] = [
-            "# BLOCKER: Forgeo needs your input",
-            "",
-            _TASK_BLOCKER_MARKER,
-            "",
-            "The coding agent could not finish without a human decision. The",
-            f"forgeo is paused until this is resolved. Backlog: `{self.config.backlog}`.",
-            "",
-        ]
+        sections = self._blocker_header(include_marker=True)
         for task in blocked:
             sections.append(self._render_blocked_task(task))
             sections.append("")
@@ -514,6 +506,21 @@ class Forgeo:
         ]
         return "\n".join(sections)
 
+    def _blocker_header(self, *, include_marker: bool) -> list[str]:
+        """The shared ``BLOCKER.md`` preamble (intro, optional derived marker)."""
+        lines: list[str] = ["# BLOCKER: Forgeo needs your input", ""]
+        if include_marker:
+            lines.append(_TASK_BLOCKER_MARKER)
+            lines.append("")
+        lines.extend(
+            [
+                "The coding agent could not finish without a human decision. The",
+                f"forgeo is paused until this is resolved. Backlog: `{self.config.backlog}`.",
+                "",
+            ]
+        )
+        return lines
+
     def _persist_blocker(self, sections: list[str]) -> None:
         """Write the rendered blocker file (parent dir created if needed)."""
         self.config.blocker_file.parent.mkdir(parents=True, exist_ok=True)
@@ -538,13 +545,7 @@ class Forgeo:
         the derived-view model: the file is written once at block time and
         Forgeo stays paused until the human deletes it.
         """
-        sections: list[str] = [
-            "# BLOCKER: Forgeo needs your input",
-            "",
-            "The coding agent could not finish without a human decision. The",
-            f"forgeo is paused until this is resolved. Backlog: `{self.config.backlog}`.",
-            "",
-        ]
+        sections = self._blocker_header(include_marker=False)
         for entry in entries:
             sections.append(self._render_entry(entry))
             sections.append("")

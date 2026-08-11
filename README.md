@@ -27,11 +27,15 @@ agent CLI.
 The full walkthrough is in [Getting started](docs/getting-started.md).
 
 ```bash
-# 1. Install
+# 1. Install (any one of these)
+
+# Homebrew (macOS / Linux)
+brew install lucaGazzola/forgeo/forgeo
+
+# or: the one-liner (prebuilt binary, no Python required)
 curl -fsSL https://forgeo.org/install.sh | bash
 
-or
-
+# or: pipx
 pipx install forgeo-cli
 
 # 2. Create your Forgeo (guided wizard, run from your project root)

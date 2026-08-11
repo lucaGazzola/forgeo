@@ -103,7 +103,8 @@ def upgrade_notice(latest: str, installed: str) -> str:
     """The notice naming the newer version and how to upgrade."""
     return (
         f"A newer forgeo-cli version is available: {installed} -> {latest}. "
-        "Upgrade by re-running the install.sh one-liner, or with "
+        "Upgrade by re-running the install.sh one-liner, with "
+        "`brew upgrade lucaGazzola/forgeo/forgeo`, or with "
         "`pipx upgrade forgeo-cli` / `pip install --user --upgrade forgeo-cli`."
     )
 

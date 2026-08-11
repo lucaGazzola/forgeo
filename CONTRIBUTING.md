@@ -80,15 +80,20 @@ Human contributions use the normal GitHub flow:
 
 Releases are cut from `main` and published as GitHub Releases. Tagging the
 repo triggers CI, which builds the wheel, sdist, **and prebuilt standalone
-binaries** and attaches them to the release — there is no PyPI publishing yet,
-and `install.sh` downloads the matching prebuilt binary from the release
-(`pipx`/`pip` fallback only when no binary matches the platform).
+binaries** and attaches them to the release; `install.sh` downloads the
+matching prebuilt binary from the release (`pipx`/`pip` fallback only when no
+binary matches the platform), and the `publish-homebrew` job re-renders and
+pushes the formula of the `lucaGazzola/homebrew-forgeo` tap.
 
 > Patch and minor releases **must** include the built binaries, otherwise the
 > `install.sh` binary path (the default, no-Python install) breaks. The CI
 > `build-binaries` job builds them automatically on any `v*` tag, but make
 > sure the release actually carries them — the `forgeo-<os>-<arch>` assets
 > listed below are what the installer downloads.
+>
+> The `publish-homebrew` job needs the `HOMEBREW_TAP_TOKEN` repository secret
+> (a PAT with write access to `lucaGazzola/homebrew-forgeo`); a release cut
+> without it fails that job and leaves the tap outdated until re-run.
 
 1. Confirm the [quality gates](#quality-gates) are green on `main`.
 2. Bump the version in `pyproject.toml` (`version = "x.y.z"`) and in
@@ -114,6 +119,8 @@ and `install.sh` downloads the matching prebuilt binary from the release
    `forgeo-linux-amd64`, `forgeo-darwin-amd64`, `forgeo-darwin-arm64`,
    `forgeo-windows-amd64.exe` binaries) are listed under
    <https://github.com/lucaGazzola/forgeo/releases>.
+8. Confirm the `publish-homebrew` job updated the tap: `brew update` and
+   `brew upgrade lucaGazzola/forgeo/forgeo` should now install the new version.
 
 ## License
 

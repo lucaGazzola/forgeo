@@ -5,8 +5,18 @@ first backlog task.
 
 ## 1. Install
 
-Install the `forgeo` CLI from the public GitHub remote with the one-liner
+Install the `forgeo` CLI with Homebrew on macOS or Linux
 (**no Python required**):
+
+```bash
+brew install lucaGazzola/forgeo/forgeo
+```
+
+On newer Homebrew versions (4.6+) a third-party tap is untrusted by default:
+if `brew` refuses to load the formula, run `brew trust
+lucaGazzola/forgeo` first and install again.
+
+Or from the public GitHub remote with the one-liner (**no Python required**):
 
 ```bash
 curl -fsSL https://forgeo.org/install.sh | bash
@@ -18,18 +28,19 @@ Or with Python 3.11+ via pip:
 pipx install forgeo-cli
 ```
 
-The installer:
+The Homebrew formula and the one-liner both download a prebuilt standalone
+binary from the matching GitHub Release; the one-liner covers Linux, macOS,
+and Windows, while Homebrew installs the macOS (arm64/Intel) and Linux (Intel)
+binaries. All three installers:
 
-- downloads a prebuilt standalone binary from the matching GitHub Release
-  for your OS/arch (Linux, macOS, and Windows) into `~/.local/bin`;
-- falls back to `pipx` and then `pip install --user` only when no prebuilt
-  binary matches your platform and a Python 3.11+ is available;
-- never needs root;
-- re-running it upgrades the existing install (re-downloads /
-  `pipx --force` / `pip --upgrade`).
+- never need root;
+- upgrade an existing install by re-running them (`brew upgrade
+  lucaGazzola/forgeo/forgeo`, re-running the one-liner, or
+  `pipx upgrade forgeo-cli` / `pip install --user --upgrade forgeo-cli`).
 
-If the install location is not on your `PATH`, it warns you and tells you how
-to add it.
+The one-liner additionally falls back to `pipx` and then `pip install --user`
+when no prebuilt binary matches the platform and a Python 3.11+ is available,
+and warns you when the install location is not on your `PATH`.
 
 You do not need to watch for releases: when `forgeo start` or `forgeo once`
 begins a cycle, Forgeo checks PyPI at most once a day and prints a short

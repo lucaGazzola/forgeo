@@ -64,6 +64,7 @@ def test_upgrade_notice_names_version_and_command() -> None:
     assert "0.4.0" in notice
     assert "0.5.0" in notice
     assert "install.sh" in notice
+    assert "brew upgrade lucaGazzola/forgeo/forgeo" in notice
     assert "pipx upgrade forgeo-cli" in notice
     assert "pip install --user --upgrade forgeo-cli" in notice
 

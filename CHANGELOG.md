@@ -9,11 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Homebrew install support: `brew install lucaGazzola/forgeo/forgeo`
+  installs the prebuilt binary on macOS (arm64/Intel) and Linux (Intel). The
+  `publish-homebrew` CI job re-renders the tap formula (sha256 + version)
+  from `scripts/render_homebrew_formula.py` on every release; it needs the
+  `HOMEBREW_TAP_TOKEN` repository secret (PAT with write access to
+  `lucaGazzola/homebrew-forgeo`). The update notification now also names
+  `brew upgrade lucaGazzola/forgeo/forgeo`.
+
 - Update notification: when `forgeo start` or `forgeo once` begins a cycle,
   Forgeo checks PyPI at most once a day and, if a newer `forgeo-cli` release
   exists, prints/logs a short notice with the upgrade command. The check is
   best-effort (short timeout, failures logged and skipped), never modifies
   the install, and can be disabled with `FORGEO_UPDATE_CHECK=0`.
+
+### Fixed
+
+- The Linux prebuilt binary is now built on Ubuntu 22.04 (glibc 2.35) instead
+  of 24.04 (glibc 2.38), so it runs on older distros (e.g. Ubuntu 22.04,
+  Debian 12, Homebrew-on-Linux). The 0.4.0 `forgeo-linux-amd64` release
+  asset was rebuilt and re-uploaded with the same version number.
 
 ## [0.4.0] - 2026-08-10
 

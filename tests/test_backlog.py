@@ -504,3 +504,99 @@ async def test_invalid_task_row_does_not_kill_the_store(tmp_path):
     assert len(tasks) == 1
     assert tasks[0].id == "BAD"
     assert tasks[0].status is TaskStatus.FAILED
+
+
+async def test_snapshot_creates_bak_with_current_store(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(make_task(id="A"))
+    await backlog.create_task(make_task(id="B"))
+
+    await backlog.snapshot()
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [task["id"] for task in store["tasks"]] == ["A", "B"]
+
+
+async def test_snapshot_rotates_keeping_last_two(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    for i in range(1, 4):
+        await backlog.create_task(make_task(id=f"T-{i}"))
+        await backlog.snapshot()
+
+    baks = sorted(tmp_path.glob("backlog.json.bak*"))
+    assert [p.name for p in baks] == ["backlog.json.bak", "backlog.json.bak.1"]
+    newest = json.loads((tmp_path / "backlog.json.bak").read_text(encoding="utf-8"))
+    assert [task["id"] for task in newest["tasks"]] == ["T-1", "T-2", "T-3"]
+    older = json.loads((tmp_path / "backlog.json.bak.1").read_text(encoding="utf-8"))
+    assert [task["id"] for task in older["tasks"]] == ["T-1", "T-2"]
+
+
+async def test_snapshot_keeps_configured_count(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json", snapshot_count=3)
+    for i in range(1, 5):
+        await backlog.create_task(make_task(id=f"T-{i}"))
+        await backlog.snapshot()
+
+    baks = sorted(tmp_path.glob("backlog.json.bak*"))
+    assert [p.name for p in baks] == [
+        "backlog.json.bak",
+        "backlog.json.bak.1",
+        "backlog.json.bak.2",
+    ]
+
+
+async def test_snapshot_is_noop_when_backlog_missing(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.snapshot()
+    assert not (tmp_path / "backlog.json.bak").exists()
+
+
+async def test_snapshot_is_noop_when_snapshots_disabled(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json", snapshot_count=0)
+    await backlog.create_task(make_task())
+    await backlog.snapshot()
+    assert not (tmp_path / "backlog.json.bak").exists()
+
+
+async def test_corrupt_backlog_restores_from_newest_snapshot(tmp_path, caplog):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(make_task())
+    await backlog.snapshot()
+    path = tmp_path / "backlog.json"
+    path.write_text("{not valid json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="forgeo.backlog"):
+        tasks = await backlog.list_tasks()
+
+    assert [task.id for task in tasks] == ["TASK-001"]
+    assert json.loads(path.read_text(encoding="utf-8"))["tasks"][0]["id"] == "TASK-001"
+    corrupt = list(tmp_path.glob("backlog.json.corrupt-*"))
+    assert len(corrupt) == 1
+    assert corrupt[0].read_text(encoding="utf-8") == "{not valid json"
+    assert "restored from snapshot" in caplog.text
+
+
+async def test_restore_prefers_newest_snapshot(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(make_task(id="A"))
+    await backlog.snapshot()
+    await backlog.create_task(make_task(id="B"))
+    await backlog.snapshot()
+    (tmp_path / "backlog.json").write_text("{garbage", encoding="utf-8")
+
+    tasks = await backlog.list_tasks()
+    assert [task.id for task in tasks] == ["A", "B"]
+
+
+async def test_malformed_shape_restores_from_snapshot(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    await backlog.create_task(make_task())
+    await backlog.snapshot()
+    (tmp_path / "backlog.json").write_text(
+        json.dumps({"tasks": "not-a-list"}), encoding="utf-8"
+    )
+
+    tasks = await backlog.list_tasks()
+    assert [task.id for task in tasks] == ["TASK-001"]

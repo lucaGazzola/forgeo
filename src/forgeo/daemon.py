@@ -189,6 +189,10 @@ class ForgeoDaemon:
             self.config.branch,
         )
         self.write_state()
+        backlog = getattr(self.forgeo, "backlog", None)
+        if backlog is not None:
+            await backlog.snapshot()
+            logger.info("Backlog snapshot taken on startup next to %s", backlog.path)
         while not self._stop_event.is_set():
             try:
                 with self.run_lock.held() as acquired:

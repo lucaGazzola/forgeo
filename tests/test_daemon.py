@@ -7,7 +7,7 @@ import logging
 import os
 
 from forgeo.daemon import ForgeoDaemon, RunLock, acquire_run_lock, is_lock_held, read_lock_pid
-from tests.conftest import FakeForgeo, make_config
+from tests.conftest import FakeForgeo, make_config, make_forgeo, make_task
 
 
 def make_daemon(git_repo, tmp_path, interval=1, **overrides) -> ForgeoDaemon:
@@ -160,3 +160,22 @@ async def test_state_file_tracks_runs(git_repo, tmp_path):
 def test_state_file_path_next_to_backlog(git_repo, tmp_path):
     daemon = make_daemon(git_repo, tmp_path)
     assert daemon.state_file == tmp_path / "backlog.state.json"
+
+
+async def test_daemon_snapshots_backlog_on_startup(git_repo, tmp_path):
+    import json
+
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 0.01
+    task = asyncio.create_task(daemon.run_forever())
+    while daemon.last_outcome is None:
+        await asyncio.sleep(0.01)
+    daemon.stop()
+    await asyncio.wait_for(task, timeout=5)
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [entry["id"] for entry in store["tasks"]] == ["TASK-001"]

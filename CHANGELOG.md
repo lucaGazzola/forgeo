@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Backlog snapshots: before every agent run (and on daemon startup) Forgeo
+  copies the backlog to a rotating snapshot (`backlog.json.bak`,
+  `backlog.json.bak.1`, ... keeping the last 2 by default), and a read that
+  finds the backlog corrupt restores the newest valid snapshot in place —
+  with the corrupt file still preserved — instead of falling back to an
+  empty store. A missing backlog is a no-op.
+
 - Task dependencies are now enforced when picking the next task: Forgeo picks
   the oldest `OPEN` task whose `dependencies` are all `COMPLETED` instead of
   the plain oldest `OPEN` task, so a task never runs before the work it

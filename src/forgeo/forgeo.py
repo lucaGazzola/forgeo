@@ -249,8 +249,13 @@ class Forgeo:
 
         Returns the execution result and whether the SUCCESS commit path
         succeeded, so callers can apply backlog status transitions.
+
+        The backlog is snapshotted before the agent starts, so a bad write
+        during or after the run can always be rolled back to the pre-run
+        state.
         """
         self._last_task = task
+        await self.backlog.snapshot()
         result = await self.agent.run_task(
             task,
             RepoContext(repo_path=self.config.repo, branch=self.config.branch),

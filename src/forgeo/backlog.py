@@ -4,6 +4,12 @@ Forgeo pulls the oldest ``OPEN`` task whose dependencies are all ``COMPLETED``
 from here. Edit this file directly to add, remove, or reopen tasks (e.g. set a
 ``BLOCKED`` task back to ``OPEN`` once the human input has been provided).
 Writes are atomic and serialized through an asyncio lock.
+
+The backlog is the single source of truth, so it is guarded against bad
+writes: before every agent run (and on daemon startup) a rotating snapshot is
+written next to it (``backlog.json.bak``, ``backlog.json.bak.1``, ...) and a
+read that finds a corrupt store restores the newest valid snapshot in place
+instead of silently starting from an empty one.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -23,6 +30,9 @@ from forgeo.io import atomic_write_text
 from forgeo.models import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
+
+#: How many rotating backlog snapshots to keep (default 2: ``.bak``, ``.bak.1``).
+DEFAULT_SNAPSHOT_COUNT = 2
 
 #: The task fields the web console may edit through ``update_task``.
 EDITABLE_TASK_FIELDS = frozenset(
@@ -92,12 +102,41 @@ def backlog_status_counts(tasks: list[Task]) -> dict[str, int]:
     return counts
 
 
+def snapshot_paths_for(
+    path: str | Path, *, count: int = DEFAULT_SNAPSHOT_COUNT
+) -> list[Path]:
+    """The rotating snapshot paths for ``path``, newest first.
+
+    The newest snapshot lives at ``<name>.bak``; older snapshots gain an
+    index, ``<name>.bak.1``, ``<name>.bak.2``, ... up to ``<name>.bak.{count-1}``.
+    A ``count`` of ``0`` disables snapshotting entirely.
+    """
+    base = Path(path)
+    return [
+        base.with_name(
+            base.name + ".bak" if index == 0 else f"{base.name}.bak.{index}"
+        )
+        for index in range(max(0, count))
+    ]
+
+
 class JSONBacklog:
     """A backlog stored in a single JSON document on disk."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        snapshot_count: int = DEFAULT_SNAPSHOT_COUNT,
+    ) -> None:
         self.path = Path(path)
+        self.snapshot_count = max(0, snapshot_count)
         self._lock = asyncio.Lock()
+
+    @property
+    def snapshot_paths(self) -> list[Path]:
+        """The rotating snapshot paths for this backlog, newest (``.bak``) first."""
+        return snapshot_paths_for(self.path, count=self.snapshot_count)
 
     async def list_tasks(self) -> list[Task]:
         """Return all tasks, in the order they were created."""
@@ -108,6 +147,28 @@ class JSONBacklog:
         """Return the oldest OPEN task whose dependencies are all COMPLETED,
         or ``None`` when nothing is runnable."""
         return oldest_open_task(await self.list_tasks())
+
+    async def snapshot(self) -> None:
+        """Copy the current store to a rotating snapshot (``backlog.json.bak``).
+
+        Called before every agent run and on daemon startup so a bad write to
+        the backlog (a hostile agent, a half-written file, an accidental
+        manual edit) can always be rolled back to the newest valid snapshot.
+        The newest snapshot is always ``<backlog>.bak``; existing snapshots
+        are rotated up by one index and the oldest beyond ``snapshot_count``
+        is dropped. A missing backlog is a no-op and a failure is logged
+        without raising, so snapshotting can never break a cycle.
+        """
+        if not self.path.exists() or self.snapshot_count <= 0:
+            return
+        async with self._lock:
+            try:
+                store = await self._read()
+                self._rotate_snapshots()
+                self._write_snapshot(store)
+                logger.info("Backlog snapshot written to %s", self.snapshot_paths[0])
+            except OSError as exc:
+                logger.warning("Could not snapshot backlog at %s: %s", self.path, exc)
 
     async def get_task(self, task_id: str) -> Task | None:
         """Return a task by id, or ``None`` if it does not exist."""
@@ -289,36 +350,93 @@ class JSONBacklog:
         return None
 
     async def _read(self) -> dict[str, Any]:
-        """Load the store from disk, tolerating a missing or corrupt file."""
+        """Load the store from disk, tolerating a missing or corrupt file.
+
+        A missing file yields an empty store. A corrupt file (unparseable,
+        not a JSON object, or missing a ``tasks`` list) falls back to the
+        newest valid snapshot when one exists — restoring it in place and
+        preserving the corrupt file under a ``.corrupt-<timestamp>`` name —
+        and to an empty store otherwise.
+        """
         if not self.path.exists():
             return {"tasks": []}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-            corrupt_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
+            restored = await self._restore_from_snapshot()
+            if restored is not None:
+                return restored
+            self._preserve_corrupt_file()
+            return {"tasks": []}
+        if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+            restored = await self._restore_from_snapshot()
+            if restored is not None:
+                return restored
+            return {"tasks": []}
+        return {"tasks": data["tasks"]}
+
+    async def _restore_from_snapshot(self) -> dict[str, Any] | None:
+        """Return the newest valid snapshot's store, or ``None`` when none exists.
+
+        When a valid snapshot is found, the corrupt backlog is preserved
+        under a ``.corrupt-<timestamp>`` name and the snapshot is restored as
+        the current backlog (rewritten atomically) so later reads see valid
+        content. A failure to persist the restored store is logged and the
+        store is still returned for this read.
+        """
+        for snapshot in self.snapshot_paths:
+            if not snapshot.is_file():
+                continue
             try:
-                self.path.rename(corrupt_path)
+                data = json.loads(snapshot.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+                continue
+            store = {"tasks": data["tasks"]}
+            self._preserve_corrupt_file()
+            try:
+                self._write_store(self.path, store)
+            except OSError as exc:
                 logger.warning(
-                    "Corrupt backlog at %s renamed to %s; starting with empty store",
-                    self.path,
-                    corrupt_path,
+                    "Restored backlog could not be persisted to %s: %s", self.path, exc
                 )
-            except OSError:
-                logger.warning(
-                    "Corrupt backlog at %s could not be preserved; starting with empty store",
-                    self.path,
-                )
-            return {"tasks": []}
-        if not isinstance(data, dict):
-            return {"tasks": []}
-        tasks = data.get("tasks")
-        return {"tasks": tasks if isinstance(tasks, list) else []}
+            logger.warning(
+                "Corrupt backlog at %s restored from snapshot %s", self.path, snapshot
+            )
+            return store
+        return None
+
+    def _preserve_corrupt_file(self) -> None:
+        """Rename the corrupt backlog aside so nothing is silently discarded."""
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        corrupt_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
+        try:
+            self.path.rename(corrupt_path)
+            logger.warning("Corrupt backlog at %s renamed to %s", self.path, corrupt_path)
+        except OSError:
+            logger.warning("Corrupt backlog at %s could not be preserved", self.path)
+
+    def _rotate_snapshots(self) -> None:
+        """Shift existing snapshots up by one index, dropping the oldest."""
+        paths = self.snapshot_paths
+        for index in range(len(paths) - 1, 0, -1):
+            if paths[index - 1].exists():
+                os.replace(paths[index - 1], paths[index])
+
+    def _write_snapshot(self, store: dict[str, Any]) -> None:
+        """Persist ``store`` to the newest snapshot slot atomically."""
+        self._write_store(self.snapshot_paths[0], store)
 
     async def _write(self, store: dict[str, Any]) -> None:
         """Atomically persist the store (temp file + rename)."""
+        self._write_store(self.path, store)
+
+    @staticmethod
+    def _write_store(path: Path, store: dict[str, Any]) -> None:
+        """Atomically persist ``store`` to ``path`` (temp file + rename)."""
         atomic_write_text(
-            self.path,
+            path,
             json.dumps(store, indent=2, ensure_ascii=False) + "\n",
         )
 

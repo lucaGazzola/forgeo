@@ -158,11 +158,31 @@ full mapping.
 
 ## Corruption tolerance
 
-The backlog reader is defensive:
+The backlog is the single source of truth, so it is guarded on both ends:
 
 - a missing file is treated as an empty backlog (and is created on first
   write);
 - a corrupt file is renamed to `backlog.json.corrupt-<timestamp>` and the
   forgeo starts from an empty store — nothing is silently discarded;
 - an unparsable task row is kept as a `FAILED` task rather than killing the
-  whole store.
+  whole store;
+- before every agent run (and on daemon startup) the current backlog is
+  copied to a **rotating snapshot** next to it, so a bad write is always
+  recoverable.
+
+### Snapshots
+
+Forgeo writes a snapshot of the current backlog to `backlog.json.bak` before
+every agent run and whenever the daemon starts (a config change takes effect
+only on the next `forgeo restart`, so the snapshot is taken then too).
+Snapshots are rotated so only the last few are kept — by default 2:
+`backlog.json.bak` (newest) and `backlog.json.bak.1` (older). The newest
+snapshot is always `backlog.json.bak`; older snapshots gain an index.
+
+If a read ever finds the backlog corrupt (a half-written file, a hostile
+agent, an accidental manual edit), the newest **valid** snapshot is restored
+in place automatically and the corrupt file is preserved under
+`backlog.json.corrupt-<timestamp>` as before. A corrupt snapshot is skipped in
+favor of an older valid one; when no snapshot exists, the forgeo falls back to
+an empty store exactly as before. A missing backlog is a no-op — no snapshot
+is created for a file that does not exist.

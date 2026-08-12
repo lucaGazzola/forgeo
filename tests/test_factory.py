@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from typing import Self
@@ -494,3 +495,32 @@ async def test_override_is_persisted_and_survives_reload(git_repo, tmp_path):
     )
     task = await backlog.get_task("TASK-001")
     assert task.agent_command == "claude -p \"$FORGEO_TASK\" --model cheap"
+
+
+async def test_task_run_snapshots_backlog_before_agent(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    await forgeo.run_cycle()
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [task["id"] for task in store["tasks"]] == ["TASK-001"]
+
+
+async def test_refactor_run_snapshots_backlog_before_agent(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(status=TaskStatus.COMPLETED))
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+
+    await forgeo.run_cycle()
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [task["id"] for task in store["tasks"]] == ["TASK-001"]

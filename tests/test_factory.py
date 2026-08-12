@@ -49,7 +49,7 @@ async def test_task_success_is_committed_on_main(git_repo, tmp_path):
     assert outcome == "task"
     assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
     assert git(git_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
-    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing (#TASK-001)"
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing"
     assert "forgeo" not in git(git_repo, "branch")
 
 
@@ -133,7 +133,7 @@ async def test_task_success_pushes_to_remote(git_repo, tmp_path):
 
     await forgeo.run_cycle()
 
-    assert git(remote, "log", "-1", "--format=%s") == "Do the thing (#TASK-001)"
+    assert git(remote, "log", "-1", "--format=%s") == "Do the thing"
 
 
 async def test_task_error_is_failed_and_work_discarded(git_repo, tmp_path):
@@ -183,7 +183,7 @@ async def test_task_blocked_persists_reason_and_renders_blocker_file(git_repo, t
     assert task.blocker_reason == ["Which retry policy should I use?"]
     assert task.blocked_count == 1
     assert not forgeo.config.blocker_file.exists()  # derived view renders next cycle
-    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing (#TASK-001) [partial]"
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing [partial]"
 
     assert await forgeo.run_cycle() == "blocked"
     blocker = forgeo.config.blocker_file.read_text(encoding="utf-8")

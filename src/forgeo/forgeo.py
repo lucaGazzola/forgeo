@@ -214,8 +214,8 @@ class Forgeo:
         result, ok = await self._run_agent(
             task,
             instruction=task.instruction,
-            success_message=f"{task.title} (#{task.id})",
-            blocked_message=f"{task.title} (#{task.id}) [partial]",
+            success_message=task.title,
+            blocked_message=f"{task.title} [partial]",
             command=task.agent_command,
             timeout_seconds=task.agent_timeout_seconds,
         )

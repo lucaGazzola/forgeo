@@ -1081,15 +1081,24 @@ def _instance_count() -> int:
     return len(list_instances())
 
 
-async def _serve_forever(server: CentralWebServer, host: str) -> None:
+async def _serve_forever(
+    server: CentralWebServer, host: str, stop_requested: threading.Event
+) -> None:
     """Run the foreground server until SIGINT/SIGTERM, then stop it."""
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
+
+    def _on_signal() -> None:
+        stop_requested.set()
+        stop_event.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop_event.set)
+            loop.add_signal_handler(sig, _on_signal)
         except NotImplementedError:
             pass
+    if stop_requested.is_set():
+        stop_event.set()
     Console(stderr=True).print(
         Panel.fit(
             f"[bold]Forgeo central dashboard[/bold]\n"
@@ -1201,6 +1210,19 @@ def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     blocks until the user interrupts it with Ctrl-C or a SIGTERM arrives.
     The lock is always released on the way out — even after a failed bind.
     """
+    # Catch SIGINT/SIGTERM before the asyncio loop is up, so a stop signal
+    # arriving in the startup window still leads to a clean shutdown with the
+    # lock released — never an abrupt exit that orphans the lock file.
+    stop_requested = threading.Event()
+
+    def _request_stop(*_args: object) -> None:
+        stop_requested.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _request_stop)
+        except (ValueError, OSError):
+            pass
     lock = WebLock()
     try:
         lock.acquire(host=host, port=port)
@@ -1215,7 +1237,7 @@ def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
         lock.release()
         return 1
     try:
-        asyncio.run(_serve_forever(server, host))
+        asyncio.run(_serve_forever(server, host, stop_requested))
     except KeyboardInterrupt:
         pass
     finally:

@@ -35,6 +35,8 @@ use `forgeo restart` so it re-reads the file.
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
 | `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
+| `notify_webhook_url` | — | Vendor-neutral webhook URL that receives a JSON POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when unset. |
+| `notify_webhook_events` | `["blocked"]` | Which outcomes to POST to `notify_webhook_url`; a subset of `blocked`, `completed`, `failed`. |
 
 ## Minimal example
 
@@ -163,6 +165,39 @@ behavior.
 Both `telegram_bot_token` **and** `telegram_chat_id` must be set for blocked
 run notifications. A notification failure never changes the outcome of a
 cycle — it is logged as a warning.
+
+### Webhook notifications
+
+For integrations that are not Telegram (Slack, Discord, ntfy, ...), set
+`notify_webhook_url` to any HTTPS endpoint. Forgeo POSTs a small JSON payload
+with the forgeo name, the run outcome, the task id and title, and the reason:
+
+```json
+{
+  "forgeo": "my-forgeo",
+  "outcome": "blocked",
+  "task_id": "TASK-001",
+  "task_title": "Do the thing",
+  "reason": "Which retry policy should I use?"
+}
+```
+
+`outcome` is one of `blocked`, `completed` or `failed`. Blocked-run
+notifications are on whenever the URL is set; to also be notified on
+completed or failed runs, add them to `notify_webhook_events`:
+
+```yaml
+notify_webhook_url: "https://hooks.example.com/forgeo"
+notify_webhook_events:
+  - blocked
+  - completed
+  - failed
+```
+
+The payload is the JSON body of a `POST` with `Content-Type:
+application/json`; Forgeo considers any non-200 response a failure. Uses the
+stdlib only, with a 5-second timeout. A failing or unreachable webhook is
+logged as a warning and never changes the outcome of a cycle.
 
 ## Instance registry
 

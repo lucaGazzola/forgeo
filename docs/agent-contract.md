@@ -40,7 +40,7 @@ The exit code decides the outcome of the run:
 | --- | --- | --- |
 | `0` | **SUCCESS** | Everything is committed (`git add -A && git commit`) with the message `<title> (#<id>)`, pushed when a remote is set, and the task is marked `COMPLETED`. |
 | `no_changes_exit_code` (default `3`) | **SUCCESS, no changes** | The agent explicitly reports the task needs **no code change**: the task is marked `COMPLETED` without a commit (and the run record notes why). Only accepted when the working tree is clean. |
-| `blocked_exit_code` (default `2`) | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> [partial]`, the agent's reason is persisted on the task (`blocker_reason`), an optional Telegram notification is sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
+| `blocked_exit_code` (default `2`) | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> [partial]`, the agent's reason is persisted on the task (`blocker_reason`), optional Telegram and/or webhook notifications are sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
 | anything else | **ERROR** | Changes are discarded (`git reset --hard` + `git clean -fd`), the failure is logged, and the task is marked `FAILED`. |
 
 The blocked exit code is configurable via `blocked_exit_code` in

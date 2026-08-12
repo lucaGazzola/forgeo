@@ -21,6 +21,9 @@ DEFAULT_REFACTOR_PROMPT = (
     "make no changes."
 )
 
+#: The run outcomes the generic webhook notification can report.
+WEBHOOK_EVENTS = ("blocked", "completed", "failed")
+
 #: Fallback shown to the human when a blocked agent gave no explanation.
 NO_BLOCKER_REASON = "The agent did not explain what it needs."
 
@@ -251,6 +254,12 @@ class ForgeoConfig(BaseModel):
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
             Disabled unless ``telegram_bot_token`` is also set.
+        notify_webhook_url: Vendor-neutral webhook URL that receives a JSON
+            POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when
+            unset.
+        notify_webhook_events: Which outcomes to report to
+            ``notify_webhook_url``; a subset of ``blocked``, ``completed``,
+            ``failed``. Defaults to ``blocked`` only.
     """
 
     name: str = "forgeo"
@@ -275,11 +284,26 @@ class ForgeoConfig(BaseModel):
     run_history_keep: int = Field(default=2000, ge=0)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    notify_webhook_url: str | None = None
+    notify_webhook_events: list[str] = Field(
+        default_factory=lambda: [WEBHOOK_EVENTS[0]]
+    )
 
     @field_validator("agent_command")
     @classmethod
     def _command_not_blank(cls, value: str | list[str]) -> str | list[str] | None:
         return _validate_agent_command(value)
+
+    @field_validator("notify_webhook_events")
+    @classmethod
+    def _webhook_events_valid(cls, value: list[str]) -> list[str]:
+        unknown = [event for event in value if event not in WEBHOOK_EVENTS]
+        if unknown:
+            raise ValueError(
+                "notify_webhook_events must be a subset of "
+                f"{list(WEBHOOK_EVENTS)}, got {unknown}"
+            )
+        return list(dict.fromkeys(value))
 
     @field_validator("agent_sandbox_network")
     @classmethod

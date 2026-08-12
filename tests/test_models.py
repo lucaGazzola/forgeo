@@ -78,6 +78,20 @@ def test_config_defaults():
     assert config.refactor_prompt == DEFAULT_REFACTOR_PROMPT
     assert config.telegram_bot_token is None
     assert config.telegram_chat_id is None
+    assert config.notify_webhook_url is None
+    assert config.notify_webhook_events == ["blocked"]
+
+
+def test_config_rejects_unknown_webhook_events():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", notify_webhook_events=["blocked", "bogus"])
+
+
+def test_config_webhook_events_deduped():
+    config = ForgeoConfig(
+        agent_command="x", notify_webhook_events=["blocked", "blocked", "failed"]
+    )
+    assert config.notify_webhook_events == ["blocked", "failed"]
 
 
 def test_config_rejects_no_changes_exit_code_of_zero():

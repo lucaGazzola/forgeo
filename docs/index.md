@@ -68,7 +68,7 @@ forgeo.yaml ──► forgeo start (daemon)
 | `forgeo.validate` | `src/forgeo/validate.py` | Read-only dry run for `forgeo validate`: config, repo, branch, remote, backlog, agent command and lock state. |
 | `forgeo.central` | `src/forgeo/central.py` | The `forgeo web` dashboard: one HTTP API + UI for every registered instance. |
 | `forgeo.setup` | `src/forgeo/setup.py` | The guided `forgeo init` wizard. |
-| `forgeo.notify` | `src/forgeo/notify.py` | Optional Telegram notifications for blocked runs. |
+| `forgeo.notify` | `src/forgeo/notify.py` | Optional run notifications: Telegram and a vendor-neutral webhook, both never-raising. |
 | `forgeo.models` | `src/forgeo/models.py` | The data contracts: `Task`, `ForgeoConfig`, `ExecutionResult`, statuses. |
 
 ### One cycle, in detail

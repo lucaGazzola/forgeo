@@ -73,3 +73,14 @@ log_file: forgeo.log
 # reason. Uses the stdlib only; a failed notification never affects the run.
 # telegram_bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 # telegram_chat_id: "-1001234567890"
+
+# Optional vendor-neutral webhook notifications (Slack, Discord, ntfy, ...):
+# a JSON POST per run outcome with the forgeo name, outcome, task id/title,
+# and reason. The URL alone enables blocked-run notifications; add outcomes
+# to notify_webhook_events to report them too. A failed/unreachable webhook
+# is logged as a warning and never affects the run.
+# notify_webhook_url: "https://hooks.example.com/forgeo"
+# notify_webhook_events:
+#   - blocked        # default: blocked only
+#   - completed
+#   - failed

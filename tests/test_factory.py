@@ -389,6 +389,221 @@ async def test_refactor_blocked_sends_telegram_message(git_repo, tmp_path, monke
     assert "License question?" in text
 
 
+async def test_blocked_task_sends_webhook_message(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task(description="Decide the retry policy."))
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        questions=["Which retry policy should I use?"],
+    )
+    agent.effect = lambda: (git_repo / "wip.txt").write_text("partial\n", encoding="utf-8")
+
+    captured = {"calls": 0}
+
+    def fake_urlopen(request, **kwargs):
+        captured["calls"] += 1
+        captured["url"] = request.full_url
+        captured["method"] = request.method
+        captured["content_type"] = next(
+            value for key, value in request.headers.items() if key.lower() == "content-type"
+        )
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert captured["calls"] == 1
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert captured["url"] == "https://hooks.example.com/forgeo"
+    assert captured["method"] == "POST"
+    assert captured["content_type"] == "application/json"
+    assert captured["payload"] == {
+        "forgeo": "test-forgeo",
+        "outcome": "blocked",
+        "task_id": "TASK-001",
+        "task_title": "Do the thing",
+        "reason": "Which retry policy should I use?",
+    }
+
+
+async def test_no_webhook_message_when_not_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    calls = []
+
+    def fake_urlopen(request, **kwargs):
+        calls.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert calls == []
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+
+
+async def test_webhook_completed_sent_when_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo,
+        tmp_path,
+        notify_webhook_url="https://hooks.example.com/forgeo",
+        notify_webhook_events=["blocked", "completed", "failed"],
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text("changed\n", encoding="utf-8")
+
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+    assert captured == [
+        {
+            "forgeo": "test-forgeo",
+            "outcome": "completed",
+            "task_id": "TASK-001",
+            "task_title": "Do the thing",
+            "reason": "",
+        }
+    ]
+
+
+async def test_webhook_completed_not_sent_by_default(git_repo, tmp_path, monkeypatch):
+    """With only the URL set (default events), completed runs do not POST."""
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text("changed\n", encoding="utf-8")
+
+    calls = []
+
+    def fake_urlopen(request, **kwargs):
+        calls.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+    assert calls == []
+
+
+async def test_webhook_failed_sent_when_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo,
+        tmp_path,
+        notify_webhook_url="https://hooks.example.com/forgeo",
+        notify_webhook_events=["blocked", "completed", "failed"],
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="agent exploded")
+
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert captured == [
+        {
+            "forgeo": "test-forgeo",
+            "outcome": "failed",
+            "task_id": "TASK-001",
+            "task_title": "Do the thing",
+            "reason": "agent exploded",
+        }
+    ]
+
+
+async def test_webhook_failure_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def boom(request, **kwargs):
+        raise OSError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
+async def test_webhook_timeout_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def timeout(request, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", timeout)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
+async def test_webhook_non_200_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def fake_urlopen(request, **kwargs):
+        return FakeErrorResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
 async def test_refactor_pass_when_backlog_empty(git_repo, tmp_path):
     forgeo, agent, _backlog = make_forgeo(git_repo, tmp_path)
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)

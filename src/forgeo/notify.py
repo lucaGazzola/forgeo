@@ -1,13 +1,19 @@
-"""Optional Telegram notifications for blocked runs.
+"""Optional run notifications.
 
-The feature is disabled unless both ``telegram_bot_token`` and
-``telegram_chat_id`` are set in Forgeo config. Uses only the standard
-library and never raises: a failing notification is logged as a warning and
-the outcome of Forgeo cycle is left unchanged.
+Two independent, never-raising channels:
+
+* Telegram (``telegram_bot_token`` + ``telegram_chat_id``) for blocked runs.
+* A vendor-neutral webhook (``notify_webhook_url``) that receives a small
+  JSON POST on configurable outcomes — ``blocked`` by default, plus
+  ``completed`` and ``failed`` when listed in ``notify_webhook_events``.
+
+Both use only the standard library and never raise: a failing notification
+is logged as a warning and the outcome of the Forgeo cycle is left unchanged.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 import urllib.request
@@ -74,4 +80,52 @@ def send_blocked_notice(config: ForgeoConfig, notice: BlockedNotice) -> bool:
         logger.warning("Telegram notification failed: %s", exc)
         return False
     logger.info("Telegram notification sent for blocked run of task %s.", notice.task_id)
+    return True
+
+
+def send_webhook_notice(
+    config: ForgeoConfig, outcome: str, notice: BlockedNotice
+) -> bool:
+    """POST a JSON payload for one run outcome; returns True when delivered.
+
+    The payload carries the forgeo name, the outcome (``blocked``,
+    ``completed`` or ``failed``), the task id and title, and the reason.
+    Returns ``False`` without a warning when the feature is not configured
+    or the outcome is not enabled in ``notify_webhook_events`` (no
+    notification is expected). Returns ``False`` and logs a warning when the
+    endpoint rejects or is unreachable — a notification failure never changes
+    the outcome of Forgeo cycle.
+    """
+    if not config.notify_webhook_url:
+        return False
+    if outcome not in config.notify_webhook_events:
+        return False
+    payload = {
+        "forgeo": config.name,
+        "outcome": outcome,
+        "task_id": notice.task_id,
+        "task_title": notice.task_title,
+        "reason": notice.reason,
+    }
+    request = urllib.request.Request(
+        config.notify_webhook_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            if response.status != 200:
+                logger.warning(
+                    "Webhook notification failed: HTTP %s from %s.",
+                    response.status,
+                    config.notify_webhook_url,
+                )
+                return False
+    except (OSError, ValueError) as exc:
+        logger.warning("Webhook notification failed: %s", exc)
+        return False
+    logger.info(
+        "Webhook notification sent for %s run of task %s.", outcome, notice.task_id
+    )
     return True

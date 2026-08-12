@@ -42,7 +42,7 @@ from forgeo.models import (
     Task,
     TaskStatus,
 )
-from forgeo.notify import BlockedNotice, send_blocked_notice
+from forgeo.notify import BlockedNotice, send_blocked_notice, send_webhook_notice
 from forgeo.runs import RunRecorder, runs_path_for
 
 logger = logging.getLogger(__name__)
@@ -224,7 +224,9 @@ class Forgeo:
             await self.backlog.set_blocked(task.id, result.reason)
             return
         if result.status is ExecutionStatus.ERROR:
-            await self.backlog.set_failed(task.id, self._failure_reason(result))
+            reason = self._failure_reason(result)
+            await self.backlog.set_failed(task.id, reason)
+            self._notify_webhook("failed", task, "\n".join(reason))
             return
         if not ok:
             # SUCCESS whose commit (or no-change) path failed: already marked
@@ -232,6 +234,7 @@ class Forgeo:
             return
         await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
         self.config.blocker_file.unlink(missing_ok=True)
+        self._notify_webhook("completed", task, "")
         logger.info("Task %s completed.", task.id)
 
     async def _run_agent(
@@ -353,7 +356,9 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        await self.backlog.set_failed(task.id, self._failure_reason(result))
+        reason = self._failure_reason(result)
+        await self.backlog.set_failed(task.id, reason)
+        self._notify_webhook("failed", task, "\n".join(reason))
 
     async def _fail_no_changes(self, task: Task) -> None:
         """Fail a task whose agent exited 0 without producing any changes.
@@ -395,6 +400,7 @@ class Forgeo:
             )
             if not is_refactor:
                 await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON])
+                self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(
@@ -465,7 +471,7 @@ class Forgeo:
     # ------------------------------------------------------------------ #
 
     def _notify_blocked(self, entry: BlockerEntry) -> None:
-        """Send a Telegram notification for a newly blocked task or refactor pass.
+        """Send notifications for a newly blocked task or refactor pass.
 
         The message contains Forgeo name, the task id and title, and the
         first lines of the blocker reason. Notifications are optional and never
@@ -478,6 +484,21 @@ class Forgeo:
             reason="\n".join(reason) if reason else NO_BLOCKER_REASON,
         )
         send_blocked_notice(self.config, notice)
+        send_webhook_notice(self.config, "blocked", notice)
+
+    def _notify_webhook(self, outcome: str, task: Task, reason: str) -> None:
+        """Send a generic webhook notification for one run outcome.
+
+        ``outcome`` is one of ``blocked``, ``completed`` or ``failed``; the
+        notification is skipped unless ``outcome`` is enabled in the config.
+        Notifications are optional and never change the outcome of the cycle:
+        a failure is only logged.
+        """
+        send_webhook_notice(
+            self.config,
+            outcome,
+            BlockedNotice(task_id=task.id, task_title=task.title, reason=reason),
+        )
 
     async def _render_blocker(self, blocked: list[Task]) -> None:
         """Render ``BLOCKER.md`` as a derived view of the backlog's BLOCKED tasks.

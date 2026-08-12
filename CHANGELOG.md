@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `forgeo validate` — a read-only dry run that checks whether a forgeo is
+  ready to run before starting it: the config schema, the repository (exists,
+  is a git repo, `git` on PATH), the branch and remote resolution, the
+  backlog parsing, a non-blank agent command, and the run lock state. It
+  reports every problem at once, never invokes the agent, and makes no writes
+  (no lock, no backlog changes). Exit code `0` when healthy, `1` with a
+  summary of problems otherwise. Supports `--config` and `--name`.
+
 - `run_history_keep` config key: `runs.jsonl` is trimmed to that many records
   on append (default `2000`), so a busy Forgeo's run history never grows
   forever. Trimming is atomic (temp file + rename) and a failed trim is

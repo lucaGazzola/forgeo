@@ -16,6 +16,10 @@ Commands:
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
+* ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
+   config, repository, branch and remote resolution, backlog, agent command,
+   and lock state. Reports all problems at once, never invokes the agent, and
+   exits non-zero when any problem is found.
 * ``forgeo status --config forgeo.yaml`` — print a read-only summary of the
    forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
    starts an agent.
@@ -42,9 +46,9 @@ Commands:
    ``~/.config/forgeo/web.lock`` (or ``$FORGEO_CONFIG_DIR/web.lock``),
    independent of any per-repo backlog lock.
 
-``start``, ``once``, ``status``, ``stop`` and ``restart`` each accept either
-``--config PATH`` (a config file) or ``--name NAME`` (an instance resolved
-from the registry); the two options are mutually exclusive.
+``start``, ``once``, ``status``, ``validate``, ``stop`` and ``restart`` each
+accept either ``--config PATH`` (a config file) or ``--name NAME`` (an
+instance resolved from the registry); the two options are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
@@ -101,6 +106,7 @@ from forgeo.models import ForgeoConfig, SandboxMode, Task, TaskStatus
 from forgeo.runs import RunRecorder, runs_path_for
 from forgeo.setup import run_setup
 from forgeo.update import check_for_update, update_state_path
+from forgeo.validate import render_report, validate_config
 
 DEFAULT_CONFIG = Path("forgeo.yaml")
 
@@ -147,6 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a read-only summary of Forgeo (never starts an agent).",
     )
     _add_config_or_name(status_parser)
+
+    validate_parser = sub.add_parser(
+        "validate",
+        help="Read-only dry run: check config, repo, branch, remote, backlog, "
+        "agent command and lock state without starting anything.",
+    )
+    _add_config_or_name(validate_parser)
 
     stop_parser = sub.add_parser(
         "stop",
@@ -627,6 +640,43 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Handle ``forgeo validate``: read-only dry run; never starts an agent.
+
+    Loads and validates the config, then checks the repository, branch and
+    remote resolution, the backlog, the agent command and the run lock state.
+    Never invokes the agent and makes no writes; exits non-zero when any
+    problem is found.
+    """
+    config_path = _resolved_config_path(args)
+    if config_path is None:
+        return 1
+    if not config_path.exists():
+        console.print(f"[red]Config file not found: {config_path}[/red]")
+        return 1
+    try:
+        config = load_config(config_path)
+    except yaml.YAMLError as exc:
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return 1
+    except ValidationError as exc:
+        console.print(
+            f"[red]Config file {config_path} is invalid:[/red]",
+            soft_wrap=True,
+        )
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error["loc"])
+            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+        return 1
+    report = validate_config(config)
+    console.print(render_report(config, report), soft_wrap=True)
+    return 0 if report.healthy else 1
+
+
 def _stop_daemon(config: ForgeoConfig, timeout: float) -> bool:
     """SIGTERM the running daemon and wait for it to exit; False on failure."""
     try:
@@ -843,6 +893,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "once": cmd_once,
     "init": cmd_init,
     "status": cmd_status,
+    "validate": cmd_validate,
     "stop": cmd_stop,
     "restart": cmd_restart,
     "instance": cmd_instance,

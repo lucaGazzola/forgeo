@@ -57,7 +57,7 @@ forgeo.yaml ──► forgeo start (daemon)
 
 | Component | Source | Responsibility |
 | --- | --- | --- |
-| `forgeo.cli` | `src/forgeo/cli.py` | `init`, `start`, `once`, `status`, `stop`, `restart` commands. |
+| `forgeo.cli` | `src/forgeo/cli.py` | `init`, `start`, `once`, `status`, `validate`, `stop`, `restart` commands. |
 | `forgeo.daemon` | `src/forgeo/daemon.py` | The scheduled worker: wakes every `interval_minutes`, holds the run locks, records `last_outcome`. |
 | `forgeo.daemon_control` | `src/forgeo/daemon_control.py` | Daemon lifecycle shared by the CLI and web console: SIGTERM + wait, detached start/restart. |
 | `forgeo.forgeo` | `src/forgeo/forgeo.py` | One cycle of work: task run, refactor pass, blocker handling, git side effects. |
@@ -65,6 +65,7 @@ forgeo.yaml ──► forgeo start (daemon)
 | `forgeo.agent` | `src/forgeo/agent.py` | `ShellAgent`: runs your command, maps exit codes to outcomes, delivers `FORGEO_TASK`. |
 | `forgeo.git` | `src/forgeo/git.py` | Single-branch git operations: ensure branch, commit all, push, hard reset. |
 | `forgeo.config` | `src/forgeo/config.py` | Loads and validates `forgeo.yaml`. |
+| `forgeo.validate` | `src/forgeo/validate.py` | Read-only dry run for `forgeo validate`: config, repo, branch, remote, backlog, agent command and lock state. |
 | `forgeo.central` | `src/forgeo/central.py` | The `forgeo web` dashboard: one HTTP API + UI for every registered instance. |
 | `forgeo.setup` | `src/forgeo/setup.py` | The guided `forgeo init` wizard. |
 | `forgeo.notify` | `src/forgeo/notify.py` | Optional Telegram notifications for blocked runs. |

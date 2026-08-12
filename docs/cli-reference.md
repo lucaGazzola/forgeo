@@ -1,9 +1,10 @@
 # CLI reference
 
 All commands read `forgeo.yaml` from the current directory; pass
-`--config <file>` to use a different one. `start`, `once`, `status`, `stop`
-and `restart` also accept `--name <instance>` to resolve the config from the
-**instance registry** — see [`forgeo instance`](#forgeo-instance) below.
+`--config <file>` to use a different one. `start`, `once`, `status`,
+`validate`, `stop` and `restart` also accept `--name <instance>` to resolve
+the config from the **instance registry** — see [`forgeo instance`](#forgeo-instance)
+below.
 
 ```
 forgeo --version
@@ -120,6 +121,47 @@ last outcome: task
 - `daemon` — whether the per-forgeo lock is currently held.
 - `last outcome` — the most recent run recorded in `runs.jsonl`.
 
+## `forgeo validate`
+
+Read-only **dry run**: checks that Forgeo is ready to run without starting
+anything. It never invokes the agent and makes no writes — no lock is taken,
+no backlog or snapshot is touched — so it is safe to run at any time, even
+while a daemon is active.
+
+| Flag | Description |
+| --- | --- |
+| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+
+It validates, reporting **all** problems at once:
+
+- the config file parses and matches the schema (a blank `agent_command`,
+  missing `agent_sandbox_image` in docker mode, ...);
+- the repository exists and is a git working tree (and `git` is on `PATH`);
+- the branch resolves — a missing branch is a warning (it is created on the
+  first cycle), unless the repository has no commits to create it from;
+- the remote resolves when `remote` is set (`git remote get-url`);
+- the backlog parses and every task is valid (a missing backlog is fine: it
+  is treated as empty on the first cycle);
+- the run lock state (`backlog.lock`); a held lock is a warning, since
+  `forgeo start`/`forgeo once` will refuse to run until it is released.
+
+Output on a healthy setup:
+
+```
+name: my-forgeo
+repo: /path/to/repo
+branch: main
+agent command: claude -p "$FORGEO_TASK"
+backlog: /path/to/backlog.json (2 tasks)
+lock: not held
+
+Forgeo is ready to run.
+```
+
+Exit code is `0` when no problem is found, `1` otherwise (with a summary of
+every problem found).
+
 ## `forgeo stop`
 
 Stop a running daemon gracefully (SIGTERM; a cycle in progress finishes
@@ -152,10 +194,11 @@ On success it prints the new daemon PID and interval.
 
 ### `--config` vs `--name`
 
-On `start`, `once`, `status`, `stop` and `restart`, `--name` resolves the
-`forgeo.yaml` from the instance registry instead of reading `--config`. The
-two flags are mutually exclusive — passing both is an argparse error. An
-unknown instance name prints a clear error and exits non-zero.
+On `start`, `once`, `status`, `validate`, `stop` and `restart`, `--name`
+resolves the `forgeo.yaml` from the instance registry instead of reading
+`--config`. The two flags are mutually exclusive — passing both is an
+argparse error. An unknown instance name prints a clear error and exits
+non-zero.
 
 `start` and `stop` with `--config` register Forgeo under its config's
 `name` when it is not registered yet, so instances are created automatically

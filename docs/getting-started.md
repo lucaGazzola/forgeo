@@ -129,6 +129,14 @@ run outcome. To run exactly one cycle without leaving a daemon up:
 forgeo once
 ```
 
+Before starting for the first time you can run a read-only dry run that
+validates the config, repository, branch/remote, backlog, agent command and
+lock state without invoking the agent or writing anything:
+
+```bash
+forgeo validate
+```
+
 ## 6. Multiple repositories / instances
 
 Forgeo runs one config per repository — nothing stops you from running

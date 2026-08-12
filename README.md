@@ -53,7 +53,8 @@ it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <ht
 ![Forgeo web console](docs/img/console.png)
 
 One-off commands: `forgeo once` (single cycle), `forgeo status` (summary),
-`forgeo stop`, `forgeo restart`, every command is in the
+`forgeo validate` (read-only dry run before starting), `forgeo stop`,
+`forgeo restart`, every command is in the
 [CLI reference](docs/cli-reference.md).
 
 You can run several factories at once, one per repository, each config is

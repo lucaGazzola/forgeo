@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `run_history_keep` config key: `runs.jsonl` is trimmed to that many records
+  on append (default `2000`), so a busy Forgeo's run history never grows
+  forever. Trimming is atomic (temp file + rename) and a failed trim is
+  logged and skipped, never fatal to the cycle; `run_history_keep: 0`
+  disables retention entirely (the previous grow-forever behavior).
+
 - Backlog snapshots: before every agent run (and on daemon startup) Forgeo
   copies the backlog to a rotating snapshot (`backlog.json.bak`,
   `backlog.json.bak.1`, ... keeping the last 2 by default), and a read that

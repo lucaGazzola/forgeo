@@ -266,3 +266,93 @@ async def test_corrupt_runs_never_break_a_cycle(git_repo, tmp_path, caplog):
     assert len(records) == 1
     assert records[0].outcome is RunOutcome.SUCCESS
     assert records[0].task_id == "TASK-001"
+
+
+def make_record(task_id: str | None = None) -> RunRecord:
+    return RunRecord(
+        started_at=datetime(2026, 8, 1, tzinfo=UTC),
+        finished_at=datetime(2026, 8, 1, 0, 0, 10, tzinfo=UTC),
+        kind=RunKind.TASK,
+        task_id=task_id,
+        outcome=RunOutcome.SUCCESS,
+        duration_seconds=1.0,
+    )
+
+
+def test_keep_trims_growing_file(tmp_path):
+    """With retention set, the file never grows past ``keep`` lines and the
+    oldest records are dropped first."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=3)
+    for index in range(10):
+        recorder.append(make_record(f"T-{index}"))
+
+    lines = read_lines(recorder.path)
+    assert len(lines) == 3
+    assert [line["task_id"] for line in lines] == ["T-7", "T-8", "T-9"]
+    assert {r.task_id for r in recorder.read()} == {"T-7", "T-8", "T-9"}
+
+
+def test_keep_below_limit_leaves_file_untouched(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=5)
+    for index in range(3):
+        recorder.append(make_record(f"T-{index}"))
+
+    assert len(read_lines(recorder.path)) == 3
+    assert [line["task_id"] for line in read_lines(recorder.path)] == ["T-0", "T-1", "T-2"]
+
+
+def test_keep_zero_disables_retention(tmp_path):
+    """``run_history_keep: 0`` keeps every record, exactly as before."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=0)
+    for index in range(5):
+        recorder.append(make_record(f"T-{index}"))
+
+    lines = read_lines(recorder.path)
+    assert len(lines) == 5
+    assert [line["task_id"] for line in lines] == ["T-0", "T-1", "T-2", "T-3", "T-4"]
+
+
+def test_keep_one_keeps_only_latest(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=1)
+    for index in range(4):
+        recorder.append(make_record(f"T-{index}"))
+
+    assert [line["task_id"] for line in read_lines(recorder.path)] == ["T-3"]
+
+
+def test_trim_failure_is_logged_not_raised(tmp_path, caplog, monkeypatch):
+    """A failed trim is logged and skipped; the record still lands via the
+    plain append so retention can never break a cycle."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=1)
+    recorder.append(make_record("T-0"))
+    recorder.append(make_record("T-1"))
+    assert len(read_lines(recorder.path)) == 1
+
+    def boom(*args, **kwargs):
+        raise OSError("read only")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", boom)
+    with caplog.at_level(logging.ERROR, logger="forgeo.runs"):
+        recorder.append(make_record("T-2"))
+
+    with recorder.path.open(encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    assert "Could not trim run history" in caplog.text
+    assert len(lines) == 2
+    assert lines[-1] == make_record("T-2").model_dump_json()
+
+
+async def test_cycle_applies_configured_retention(git_repo, tmp_path):
+    """The daemon's recorder trims per ``run_history_keep`` from the config."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_history_keep=2)
+    runs = runs_path_for(forgeo.config.backlog)
+    await backlog.create_task(make_task())
+
+    for _ in range(4):
+        agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+        assert await forgeo.run_cycle() == "task"
+        await backlog.update_status("TASK-001", TaskStatus.OPEN)
+
+    lines = read_lines(runs)
+    assert len(lines) == 2
+    assert all(line["task_id"] == "TASK-001" for line in lines)

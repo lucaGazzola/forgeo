@@ -90,7 +90,9 @@ class Forgeo:
         self.backlog = backlog
         self.agent = agent
         self.git = git
-        self.recorder = RunRecorder(runs_path_for(config.backlog))
+        self.recorder = RunRecorder(
+            runs_path_for(config.backlog), keep=config.run_history_keep
+        )
         self._last_task: Task | None = None
         self._last_agent_result: ExecutionResult | None = None
         self._last_commit_sha: str | None = None

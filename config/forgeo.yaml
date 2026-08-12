@@ -14,6 +14,9 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
                                 # outside the repository so it is never committed.
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.
+# run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest
+                                # lines are trimmed atomically on append. Set 0 to
+                                # disable retention (file grows forever).
 
 # The coding agent: any shell command. Read $FORGEO_TASK for the task, work in the
 # repo directory, and exit with:

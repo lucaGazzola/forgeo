@@ -244,6 +244,9 @@ class ForgeoConfig(BaseModel):
         refactor_prompt: Instruction used for the refactoring run that
             happens when the backlog has no runnable task.
         log_file: Where the scheduled forgeo writes its log.
+        run_history_keep: How many finished runs ``runs.jsonl`` keeps (oldest
+            lines are trimmed atomically on append). ``0`` disables retention
+            entirely so the file grows forever, exactly as before.
         telegram_bot_token: Telegram bot token for blocked-run
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
@@ -269,6 +272,7 @@ class ForgeoConfig(BaseModel):
     git_timeout_seconds: float = Field(default=120, gt=0)
     refactor_prompt: str = DEFAULT_REFACTOR_PROMPT
     log_file: str = "forgeo.log"
+    run_history_keep: int = Field(default=2000, ge=0)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 

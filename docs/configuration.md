@@ -31,6 +31,7 @@ use `forgeo restart` so it re-reads the file.
 | `no_changes_exit_code` | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
 | `refactor_prompt` | default refactor prompt | Instruction used when the backlog is empty. |
 | `log_file` | `forgeo.log` | Where the daemon writes its log. |
+| `run_history_keep` | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
 | `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
@@ -143,6 +144,19 @@ Relative paths resolve against the config file's directory.
 When set, successful commits are pushed to `<remote> <branch>`. When omitted,
 Forgeo only commits locally. A push failure never discards the commit —
 the work stays committed locally and the error is logged.
+
+### `run_history_keep`
+
+Every finished cycle appends one line to `runs.jsonl` (next to the backlog).
+On a busy Forgeo that file would grow forever and is read fully by `forgeo
+status` and the web console, so Forgeo trims it on append: when the file
+holds `run_history_keep` lines or more, the oldest lines are dropped before
+the new record is written. Trimming is atomic (temp file + rename), so a
+reader never sees a half-trimmed file, and a failed trim is logged and
+skipped — it can never change the outcome of a cycle.
+
+Set `0` to disable retention entirely, keeping the original grow-forever
+behavior.
 
 ### Telegram notifications
 

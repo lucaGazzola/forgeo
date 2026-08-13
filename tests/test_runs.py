@@ -8,6 +8,7 @@ import pathlib
 from datetime import UTC, datetime
 
 from forgeo.models import (
+    DEFAULT_RUN_OUTPUT_LINES,
     NO_CHANGES_REASON,
     NO_CHANGES_REPORTED_REASON,
     ExecutionResult,
@@ -114,6 +115,84 @@ async def test_task_error_record(git_repo, tmp_path):
     assert record["outcome"] == "ERROR"
     assert record["agent_exit_code"] == 3
     assert record["commit_sha"] is None
+
+
+async def test_run_record_persists_bounded_output_tail(git_repo, tmp_path):
+    """The agent's stdout/stderr is persisted as the bounded tail (last lines)."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_output_lines=3)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        output_logs=[f"line {index}" for index in range(10)],
+        questions=["?"],
+        exit_code=2,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    assert record["output_logs"] == ["line 7", "line 8", "line 9"]
+
+
+async def test_run_record_default_output_cap_is_200(git_repo, tmp_path):
+    """Without an explicit cap a run stores at most the default tail length."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.SUCCESS,
+        output_logs=[f"line {index}" for index in range(500)],
+        exit_code=0,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    assert len(record["output_logs"]) == DEFAULT_RUN_OUTPUT_LINES
+    assert record["output_logs"][0] == "line 300"
+    assert record["output_logs"][-1] == "line 499"
+
+
+async def test_run_record_without_output_logs_is_null(git_repo, tmp_path):
+    """A run that captured no agent output stores output_logs as null, not []."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    assert record["output_logs"] is None
+
+
+async def test_run_output_lines_zero_disables_persistence(git_repo, tmp_path):
+    """run_output_lines: 0 stops persisting agent output entirely."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_output_lines=0)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        output_logs=["important"],
+        questions=["?"],
+        exit_code=2,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    assert record["output_logs"] is None
+
+
+def test_old_records_without_output_logs_field_read_fine(tmp_path):
+    """Records written before output_logs existed parse with output_logs=None."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    recorder.append(make_record("OLD"))
+    raw = json.loads(recorder.path.read_text(encoding="utf-8").strip())
+    del raw["output_logs"]
+    recorder.path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+
+    records = recorder.read()
+    assert len(records) == 1
+    assert records[0].task_id == "OLD"
+    assert records[0].output_logs is None
 
 
 async def test_refactor_record(git_repo, tmp_path):

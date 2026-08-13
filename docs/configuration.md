@@ -32,6 +32,7 @@ use `forgeo restart` so it re-reads the file.
 | `refactor_prompt` | default refactor prompt | Instruction used when the backlog is empty. |
 | `log_file` | `forgeo.log` | Where the daemon writes its log. |
 | `run_history_keep` | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
+| `run_output_lines` | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
 | `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
@@ -159,6 +160,18 @@ skipped — it can never change the outcome of a cycle.
 
 Set `0` to disable retention entirely, keeping the original grow-forever
 behavior.
+
+### `run_output_lines`
+
+Every run record in `runs.jsonl` can carry the tail of what the agent printed
+(stdout and stderr), so a failed or blocked run is fully explainable later.
+To keep the file bounded, each record stores at most `run_output_lines` lines
+(the last ones) — a chatty agent can never blow up a run record. The web
+console's **History** tab shows this tail in a read-only, collapsible view.
+
+Set `0` to stop persisting agent output entirely (run records stay small and
+the History tab shows nothing for them). Old run records written before this
+field existed simply have no output.
 
 ### Telegram notifications
 

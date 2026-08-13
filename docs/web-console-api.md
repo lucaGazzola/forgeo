@@ -77,7 +77,9 @@ open-by-default behavior.
   paginated table — time, kind, task id and title, an outcome badge, duration,
   commit SHA and reason — newest first, with a pager once more than a page of
   runs exist (a friendly empty state is shown when no runs have been recorded
-  yet). The **Config** tab renders `forgeo.yaml` as an
+  yet). Runs that carry persisted agent output show a collapsible
+  "agent output" row under the record: a read-only, monospace view of the
+  bounded stdout/stderr tail (see `run_output_lines`). The **Config** tab renders `forgeo.yaml` as an
   editable form (interval, agent command, sandbox, telegram settings, ...):
   **Save** persists it via `PUT /api/instances/<name>/config`, surfaces
   validation errors inline (highlighted next to the failing field), and shows
@@ -493,9 +495,13 @@ controls), and `limit`/`offset` echo the request. Each record has
 started/finished timestamps, the run kind (`task` or `refactor`), the task id
 and title when applicable, the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the
 agent exit code, the commit SHA when a commit was created, the duration in
-seconds, and an optional `reason` when the run completed without a commit (a
+seconds, an optional `reason` when the run completed without a commit (a
 no-change SUCCESS is surfaced here instead of silently showing a null commit
-SHA). A missing or empty `runs.jsonl` yields `runs: []` with `total: 0`.
+SHA), and `output_logs`: the bounded tail of the agent's stdout/stderr for
+that run (at most `run_output_lines` lines) or `null` for runs that never
+reached the agent or that predate the field. The web console renders this
+tail in a read-only, collapsible view in the **History** tab. A missing or
+empty `runs.jsonl` yields `runs: []` with `total: 0`.
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/runs
@@ -516,7 +522,12 @@ curl "http://127.0.0.1:8790/api/instances/my-repo/runs?limit=25&offset=25"
       "agent_exit_code": 0,
       "commit_sha": "a1b2c3d4e5f6",
       "duration_seconds": 310.2,
-      "reason": null
+      "reason": null,
+      "output_logs": [
+        "[stdout] Creating module fibonacci.py",
+        "[stdout] Running tests: 12 passed, 0 failed",
+        "[shell] Task TASK-001 finished successfully (exit 0)."
+      ]
     }
   ],
   "total": 1,

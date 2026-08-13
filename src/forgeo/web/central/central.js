@@ -949,6 +949,25 @@
       row.appendChild(commit);
       row.appendChild(el("td", run.reason ? "run-reason" : null, run.reason || "—"));
       tbody.appendChild(row);
+
+      if (run.output_logs && run.output_logs.length > 0) {
+        var outputRow = el("tr", "run-output-row");
+        var outputCell = el("td", null);
+        outputCell.colSpan = 7;
+        var details = el("details", "run-output");
+        var summary = el("summary", "run-output__summary");
+        summary.appendChild(el("span", null, "agent output"));
+        summary.appendChild(
+          el("span", "run-output__count", run.output_logs.length + " lines")
+        );
+        details.appendChild(summary);
+        var pre = el("pre", "run-output__pre");
+        pre.textContent = run.output_logs.join("\n");
+        details.appendChild(pre);
+        outputCell.appendChild(details);
+        outputRow.appendChild(outputCell);
+        tbody.appendChild(outputRow);
+      }
     });
     table.appendChild(tbody);
     body.appendChild(table);
@@ -1019,6 +1038,7 @@
     { key: "backlog", label: "Backlog file", type: "text", hint: "Path of the JSON backlog file (created on first use)." },
     { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
     { key: "log_file", label: "Log file", type: "text" },
+    { key: "run_output_lines", label: "Run output lines", type: "number", min: 0, step: 1, hint: "How many agent output lines each run record keeps in runs.jsonl (bounded tail, shown in the History tab). 0 = don't persist agent output." },
     { key: "agent_sandbox", label: "Agent sandbox", type: "select", options: ["none", "docker"], hint: "none = run directly on the host; docker = run inside a container." },
     { key: "agent_sandbox_image", label: "Sandbox image", type: "text", optional: true, hint: "Container image used when agent_sandbox is docker. Required in that mode." },
     { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },

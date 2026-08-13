@@ -42,6 +42,11 @@ NO_CHANGES_REPORTED_REASON = "Agent reported no changes needed"
 #: dirty — a contradiction that must not be silently accepted.
 NO_CHANGES_DIRTY_REASON = "Agent reported no changes but left uncommitted changes"
 
+#: Default number of agent output lines kept per run record in ``runs.jsonl``;
+#: overridden by the ``run_output_lines`` config key. ``0`` disables
+#: persisting agent output entirely.
+DEFAULT_RUN_OUTPUT_LINES = 200
+
 
 def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | None:
     """Shared validation: an agent command must be a non-blank string or list."""
@@ -123,6 +128,13 @@ class RunRecord(BaseModel):
         default=None,
         description="Human-readable note surfacing a no-change SUCCESS "
         "(no commit was produced), so it is never a silent null commit_sha.",
+    )
+    output_logs: list[str] | None = Field(
+        default=None,
+        description="Bounded tail of the agent's stdout/stderr for this run "
+        "(at most ``run_output_lines`` lines). ``None`` for runs that never "
+        "reached the agent or that predate the field, so old records render "
+        "as empty instead of erroring.",
     )
 
 
@@ -250,6 +262,9 @@ class ForgeoConfig(BaseModel):
         run_history_keep: How many finished runs ``runs.jsonl`` keeps (oldest
             lines are trimmed atomically on append). ``0`` disables retention
             entirely so the file grows forever, exactly as before.
+        run_output_lines: How many agent output lines each run record keeps
+            in ``runs.jsonl`` (the bounded tail of the agent's stdout/stderr).
+            ``0`` disables persisting agent output entirely.
         telegram_bot_token: Telegram bot token for blocked-run
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
@@ -282,6 +297,7 @@ class ForgeoConfig(BaseModel):
     refactor_prompt: str = DEFAULT_REFACTOR_PROMPT
     log_file: str = "forgeo.log"
     run_history_keep: int = Field(default=2000, ge=0)
+    run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_webhook_url: str | None = None

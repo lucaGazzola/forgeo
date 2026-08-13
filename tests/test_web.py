@@ -1285,6 +1285,67 @@ def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
     assert data["runs"][0]["reason"] == "Agent exited 0 but produced no changes"
 
 
+def test_runs_endpoint_surfaces_output_logs(registry, central_server):
+    """The runs API returns the persisted bounded agent-output tail."""
+    record = run_record("TASK-001", RunOutcome.BLOCKED)
+    record.output_logs = [
+        "[stdout] Trying a heuristic",
+        "[stdout] Needs a human decision",
+    ]
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.BLOCKED)],
+        runs=[record],
+    )
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    assert data["runs"][0]["output_logs"] == [
+        "[stdout] Trying a heuristic",
+        "[stdout] Needs a human decision",
+    ]
+
+
+def test_runs_endpoint_old_record_without_output_logs_renders_null(
+    registry, central_server,
+):
+    """Records that predate the output_logs field surface null and render fine."""
+    record = run_record("TASK-001", RunOutcome.SUCCESS)
+    raw = json.loads(record.model_dump_json())
+    del raw["output_logs"]
+    runs_path = registry / "alpha" / "runs.jsonl"
+    runs_path.parent.mkdir(parents=True, exist_ok=True)
+    runs_path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    (registry / "alpha" / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {registry / 'alpha' / 'backlog.json'}\n"
+        f"blocker_file: {registry / 'alpha' / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {registry / 'alpha' / 'forgeo.log'}\n"
+        "interval_minutes: 30\n",
+        encoding="utf-8",
+    )
+    add_instance("alpha", registry / "alpha" / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    run = data["runs"][0]
+    assert run["task_id"] == "TASK-001"
+    assert run["output_logs"] is None
+
+
+def test_history_script_renders_collapsible_agent_output(web_env):
+    """The served History-tab script renders persisted output collapsibly."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "output_logs" in body
+    assert "run-output" in body
+    assert "agent output" in body
+
+
 def test_blocker_endpoint(web_env):
     server, _ = web_env
     status, data = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/blocker")

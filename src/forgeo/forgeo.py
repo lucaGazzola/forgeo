@@ -167,9 +167,29 @@ class Forgeo:
                 agent_exit_code=self._run_exit_code(outcome),
                 commit_sha=self._last_commit_sha if outcome in ("task", "refactor") else None,
                 reason=self._last_run_reason if outcome in ("task", "refactor") else None,
+                output_logs=self._run_output_logs(outcome),
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
             )
         )
+
+    def _run_output_logs(self, outcome: str) -> list[str] | None:
+        """The bounded agent-output tail to persist for a finished cycle.
+
+        Kept only for cycles that actually ran the agent (``task``/``refactor``)
+        and capped at ``run_output_lines`` lines so a chatty agent can never
+        blow up a run record. ``None`` (not ``[]``) when nothing was captured,
+        keeping records without output indistinguishable from pre-field ones.
+        """
+        if outcome not in ("task", "refactor"):
+            return None
+        result = self._last_agent_result
+        logs = result.output_logs if result is not None else None
+        if not logs:
+            return None
+        cap = self.config.run_output_lines
+        if cap <= 0:
+            return None
+        return logs[-cap:]
 
     def _run_kind(self, outcome: str) -> RunKind | None:
         if outcome in ("task", "blocked"):

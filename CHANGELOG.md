@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logged and skipped, never fatal to the cycle; `run_history_keep: 0`
   disables retention entirely (the previous grow-forever behavior).
 
+- Persisted agent output per run: each `RunRecord` now stores a bounded tail
+  of the agent's stdout/stderr (last `run_output_lines` lines, default `200`),
+  so failed and blocked runs keep the full tail of what the agent said. The
+  web console's **History** tab shows it in a read-only, monospace,
+  collapsible view; `run_output_lines: 0` disables persistence, and records
+  written before the field existed render as empty.
+
 - Backlog snapshots: before every agent run (and on daemon startup) Forgeo
   copies the backlog to a rotating snapshot (`backlog.json.bak`,
   `backlog.json.bak.1`, ... keeping the last 2 by default), and a read that

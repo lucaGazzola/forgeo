@@ -18,6 +18,10 @@ blocker_file: BLOCKER.md        # Written with a detailed explanation when the a
 # run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest
                                 # lines are trimmed atomically on append. Set 0 to
                                 # disable retention (file grows forever).
+# run_output_lines: 200         # How many agent output lines each run record keeps
+                                # in runs.jsonl (the bounded tail of the agent's
+                                # stdout/stderr, shown in the web console History
+                                # tab). Set 0 to stop persisting agent output.
 
 # The coding agent: any shell command. Read $FORGEO_TASK for the task, work in the
 # repo directory, and exit with:

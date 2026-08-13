@@ -114,6 +114,16 @@ open-by-default behavior.
   expanding the column, and expanded/show-more state survives the 30-second
   auto-refresh. This is presentation only — the task data itself is never
   trimmed or reordered server-side.
+
+  Above the board, a **search box** and a **status filter** find a specific
+  task without scrolling. Typing filters the columns by `id`, `title`, and
+  `description` substring as you type (matching is case-insensitive), and the
+  status select narrows the board to a single status column. While either
+  filter is active every match is rendered — no "show more" or collapsed
+  columns — and a "no matching tasks" state is shown when nothing fits. Both
+  filters are reflected in the URL (`?q=…&status=…`) so the view survives
+  reloads and can be shared; they are applied entirely client-side against the
+  full backlog already returned by the API.
 - `GET /style.css`, `/central/central.js`, `/central/central.css` — the
   shared dark theme and dashboard scripts (no frameworks).
 

@@ -247,6 +247,81 @@
   display: none;
 }
 
+/* ---------- Backlog toolbar (search + status filter) ---------- */
+
+#tab-backlog {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#tab-backlog[hidden] {
+  display: none;
+}
+
+.backlog-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.backlog-toolbar__search {
+  flex: 1 1 240px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.backlog-toolbar__search:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.backlog-toolbar__status {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.backlog-toolbar__status:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.backlog-toolbar__count {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.backlog-toolbar__count[hidden] {
+  display: none;
+}
+
+#backlog-board {
+  flex: 1;
+  margin-top: 18px;
+  padding: 0 0 40px;
+}
+
 /* ---------- Code panels (logs / blocker / config) ---------- */
 
 .code-panel {

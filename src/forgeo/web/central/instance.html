@@ -56,10 +56,28 @@
     <button class="tab" data-tab="config" type="button">Config</button>
   </nav>
 
-  <main id="tab-backlog" class="tab-panel board" aria-live="polite">
-    <div class="empty-state" id="empty-state" hidden>
-      <p class="empty-title">No tasks</p>
-      <p class="empty-sub">The backlog is empty. The forgeo will run a refactoring pass until a task lands.</p>
+  <main id="tab-backlog" class="tab-panel" aria-live="polite">
+    <div class="backlog-toolbar">
+      <input type="search" class="backlog-toolbar__search" id="backlog-search"
+        placeholder="Search by id, title, description…" autocomplete="off" aria-label="Search tasks">
+      <select class="backlog-toolbar__status" id="backlog-status" aria-label="Filter by status">
+        <option value="all">All statuses</option>
+        <option value="OPEN">Open</option>
+        <option value="BLOCKED">Blocked</option>
+        <option value="COMPLETED">Completed</option>
+        <option value="FAILED">Failed</option>
+      </select>
+      <span class="backlog-toolbar__count" id="backlog-count" hidden></span>
+    </div>
+    <div class="board" id="backlog-board">
+      <div class="empty-state" id="empty-state" hidden>
+        <p class="empty-title">No tasks</p>
+        <p class="empty-sub">The backlog is empty. The forgeo will run a refactoring pass until a task lands.</p>
+      </div>
+      <div class="empty-state" id="no-matches-state" hidden>
+        <p class="empty-title">No matching tasks</p>
+        <p class="empty-sub">Nothing matches the current search and status filter. Try a different term or reset the filters.</p>
+      </div>
     </div>
   </main>
   <main id="tab-create" class="tab-panel" hidden>

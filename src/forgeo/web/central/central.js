@@ -27,6 +27,15 @@
   var expandedColumns = {};
   var showAllColumns = {};
 
+  /* Backlog search + status filter: the search box matches id/title/
+     description substrings and the status select narrows which columns are
+     shown. Both live in the URL as ?q=... and ?status=... so a view survives
+     reloads and can be shared. While a filter is active every match is shown
+     (no column compaction), so searching a large backlog never hides results
+     behind "show more". */
+  var filterQuery = "";
+  var filterStatus = "all";
+
   /* Run history pagination: one page of recent runs at a time, newest first.
      runsPage is the current page index (0 = the newest page) and survives the
      30s auto-refresh, like the board's expanded-column state. */
@@ -241,7 +250,7 @@
   /* ------------------------------------------------------------------ */
 
   function buildColumns() {
-    var board = document.getElementById("tab-backlog");
+    var board = document.getElementById("backlog-board");
     if (!board) return;
     STATUS_ORDER.forEach(function (status) {
       var col = document.createElement("section");
@@ -349,21 +358,23 @@
       return;
     }
 
-    if (isColumnCollapsed(status, group.length)) {
+    var filterActive = isFilterActive();
+
+    if (!filterActive && isColumnCollapsed(status, group.length)) {
       list.appendChild(expandColumnButton(status, group.length, list, group));
       return;
     }
 
     var visible = group;
     var older = [];
-    if (group.length > MAX_VISIBLE_PER_COLUMN && !showAllColumns[status]) {
+    if (!filterActive && group.length > MAX_VISIBLE_PER_COLUMN && !showAllColumns[status]) {
       older = group.slice(0, group.length - MAX_VISIBLE_PER_COLUMN);
       visible = group.slice(older.length);
     }
 
     if (older.length > 0) {
       list.appendChild(showMoreButton(status, older, list, group));
-    } else if (COLLAPSED_BY_DEFAULT[status] && group.length > COLLAPSE_MIN_TASKS) {
+    } else if (!filterActive && COLLAPSED_BY_DEFAULT[status] && group.length > COLLAPSE_MIN_TASKS) {
       list.appendChild(collapseColumnButton(status, list, group));
     }
 
@@ -372,29 +383,104 @@
     });
   }
 
+  function isFilterActive() {
+    return filterQuery.trim() !== "" || filterStatus !== "all";
+  }
+
+  function filterTasks(tasks) {
+    var q = filterQuery.trim().toLowerCase();
+    return tasks.filter(function (task) {
+      var status = (task.status || "OPEN").toUpperCase();
+      if (filterStatus !== "all" && status !== filterStatus) return false;
+      if (!q) return true;
+      var haystack = (
+        (task.id || "") + " " +
+        (task.title || "") + " " +
+        (task.description || "")
+      ).toLowerCase();
+      return haystack.indexOf(q) !== -1;
+    });
+  }
+
   function renderTasks(tasks) {
-    var board = document.getElementById("tab-backlog");
+    var board = document.getElementById("backlog-board");
     var empty = document.getElementById("empty-state");
+    var noMatches = document.getElementById("no-matches-state");
     if (!board) return;
-    var hasAny = false;
     allTasks = tasks || [];
+    var filtered = filterTasks(allTasks);
+    var filterActive = isFilterActive();
+
+    if (empty) empty.hidden = allTasks.length > 0;
+    if (noMatches) {
+      noMatches.hidden = !(allTasks.length > 0 && filterActive && filtered.length === 0);
+    }
+    var countNode = document.getElementById("backlog-count");
+    if (countNode) {
+      var showing = filterActive && allTasks.length > 0;
+      countNode.hidden = !showing;
+      if (showing) {
+        countNode.textContent = filtered.length + " of " + allTasks.length + " tasks";
+      }
+    }
 
     STATUS_ORDER.forEach(function (status) {
       var col = board.querySelector('.status-col[data-status="' + status + '"]');
       if (!col) return;
       var list = col.querySelector(".status-col__list");
       var count = col.querySelector(".status-col__count");
-      var group = tasks.filter(function (t) {
+      var group = filtered.filter(function (t) {
         return (t.status || "OPEN").toUpperCase() === status;
       });
+      col.hidden = filterStatus !== "all" && status !== filterStatus;
       count.textContent = String(group.length);
-      if (group.length > 0) hasAny = true;
       renderColumn(list, status, group);
     });
 
-    if (empty) empty.hidden = hasAny || tasks.length > 0;
+    syncModal(allTasks);
+  }
 
-    syncModal(tasks);
+  /* Backlog filter wiring: read ?q= and ?status= from the URL on load and
+     push changes back into it so filters survive reloads and are shareable. */
+  function readFilters() {
+    var params = new URLSearchParams(location.search);
+    filterQuery = params.get("q") || "";
+    var status = params.get("status") || "all";
+    filterStatus = STATUS_ORDER.indexOf(status) !== -1 ? status : "all";
+    var search = document.getElementById("backlog-search");
+    if (search) search.value = filterQuery;
+    var statusSelect = document.getElementById("backlog-status");
+    if (statusSelect) statusSelect.value = filterStatus;
+  }
+
+  function syncFilterUrl() {
+    var params = new URLSearchParams(location.search);
+    if (filterQuery) params.set("q", filterQuery);
+    else params.delete("q");
+    if (filterStatus !== "all") params.set("status", filterStatus);
+    else params.delete("status");
+    var search = params.toString();
+    var url = location.pathname + (search ? "?" + search : "") + location.hash;
+    history.replaceState(null, "", url);
+  }
+
+  function wireBacklogFilters() {
+    var search = document.getElementById("backlog-search");
+    if (search) {
+      search.addEventListener("input", function () {
+        filterQuery = search.value;
+        syncFilterUrl();
+        renderTasks(allTasks);
+      });
+    }
+    var statusSelect = document.getElementById("backlog-status");
+    if (statusSelect) {
+      statusSelect.addEventListener("change", function () {
+        filterStatus = statusSelect.value;
+        syncFilterUrl();
+        renderTasks(allTasks);
+      });
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -1500,6 +1586,8 @@
 
   function wire() {
     if (page === "instance") {
+      readFilters();
+      wireBacklogFilters();
       wireNewTask();
       wireDaemonActions();
       var configForm = document.getElementById("config-form");

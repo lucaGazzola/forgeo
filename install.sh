@@ -14,11 +14,9 @@ set -eu
 
 REPO_OWNER="lucaGazzola"
 REPO_NAME="forgeo"
-VERSION="0.4.0"
+DEFAULT_VERSION="0.4.0"
 MIN_PYTHON="3.11"
 PYPI_PACKAGE="forgeo-cli"
-
-BASE_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/v$VERSION"
 PREFIX="${FORGEO_PREFIX:-${HOME:-}/.local}"
 BIN_DIR="$PREFIX/bin"
 
@@ -28,6 +26,28 @@ warn() { printf '%s\n' "$*" >&2; }
 die() {
     warn "error: $*"
     exit 1
+}
+
+# Print the version (without the leading "v") of the latest GitHub release,
+# or $DEFAULT_VERSION when the API is unreachable or rate-limited.
+latest_version() {
+    url="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
+    body=""
+    if command -v curl >/dev/null 2>&1; then
+        body="$(curl -fsSL "$url" 2>/dev/null || true)"
+    elif command -v wget >/dev/null 2>&1; then
+        body="$(wget -qO- "$url" 2>/dev/null || true)"
+    fi
+    tag="$(printf '%s\n' "$body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    case "$tag" in
+        v[0-9]*.[0-9]*.[0-9]*)
+            printf '%s\n' "${tag#v}"
+            ;;
+        *)
+            warn "warning: could not determine the latest release from GitHub; falling back to v$DEFAULT_VERSION."
+            printf '%s\n' "$DEFAULT_VERSION"
+            ;;
+    esac
 }
 
 # Print "<os>-<arch>" when a prebuilt binary is published for this platform,
@@ -126,6 +146,8 @@ install_from_source() {
 }
 
 OS_ARCH="$(detect_os_arch 2>/dev/null || true)"
+VERSION="$(latest_version)"
+BASE_URL="https://github.com/$REPO_OWNER/$REPO_NAME/releases/download/v$VERSION"
 
 if [ -n "$OS_ARCH" ] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then
     install_binary "$OS_ARCH"

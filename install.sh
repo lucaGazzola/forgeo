@@ -30,6 +30,8 @@ die() {
 
 # Print the version (without the leading "v") of the latest GitHub release,
 # or $DEFAULT_VERSION when the API is unreachable or rate-limited.
+# Uses only shell parameter expansion (no sed/grep/head) so the script keeps
+# working in minimal environments and in the hermetic test harness.
 latest_version() {
     url="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
     body=""
@@ -38,7 +40,9 @@ latest_version() {
     elif command -v wget >/dev/null 2>&1; then
         body="$(wget -qO- "$url" 2>/dev/null || true)"
     fi
-    tag="$(printf '%s\n' "$body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    tag="${body#*\"tag_name\"}"   # drop everything through the first "tag_name"
+    tag="${tag#*\"}"              # drop through the opening quote of the value
+    tag="${tag%%\"*}"             # keep only up to the closing quote
     case "$tag" in
         v[0-9]*.[0-9]*.[0-9]*)
             printf '%s\n' "${tag#v}"

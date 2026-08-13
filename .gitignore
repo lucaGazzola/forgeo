@@ -27,6 +27,7 @@ build/
 dist/
 
 # AI assistant context
+AGENTS.md
 CONTEXT.md
 
 # Local deploy script (server-specific paths)

@@ -37,20 +37,31 @@ Routes:
 An unknown instance name returns ``404``; a registered instance with missing
 data files renders with empty data and ``daemon_running=false`` rather than
 erroring.
+
+Authentication: ``forgeo web`` takes an optional bearer token (the
+``--token`` CLI flag and/or the ``~/.config/forgeo/web.toml`` token file,
+auto-generated and printed once when it is unset). When configured, every
+``/api/*`` route requires ``Authorization: Bearer <token>`` and answers
+``401`` otherwise; static pages and the token-prompt login flow stay
+reachable without a token. With no token configured the dashboard behaves
+exactly as before (no auth).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
 import threading
 import time
+import tomllib
 from collections.abc import Callable
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -116,6 +127,76 @@ def forgeo_config_dir() -> Path:
 def web_lock_path() -> Path:
     """The host-global dashboard lock file (one per user, not per-repo)."""
     return forgeo_config_dir() / "web.lock"
+
+
+def web_token_path() -> Path:
+    """The dashboard auth token file: ``$FORGEO_CONFIG_DIR/web.toml``."""
+    return forgeo_config_dir() / "web.toml"
+
+
+AUTOGENERATE_TOKEN = object()
+"""Sentinel for ``forgeo web --token`` given without a value: generate one."""
+
+
+def load_web_token(path: Path | None = None) -> str | None:
+    """The bearer token configured in ``web.toml``, or ``None`` when absent.
+
+    A missing, unreadable, or malformed file, or one without a usable
+    ``token`` value, reads as ``None`` (auth stays off until a token exists).
+    """
+    path = web_token_path() if path is None else path
+    if not path.is_file():
+        return None
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    token = data.get("token")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def save_web_token(token: str, path: Path | None = None) -> None:
+    """Persist ``token`` to the dashboard token file (``0600``).
+
+    A failed write is logged and skipped — the token still takes effect for
+    this process — never fatal to ``forgeo web``.
+    """
+    path = web_token_path() if path is None else path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'token = "{token}"\n', encoding="utf-8")
+        path.chmod(0o600)
+    except OSError:
+        logger.warning("Could not persist web token to %s.", path)
+
+
+def resolve_web_token(cli_token: Any) -> tuple[str | None, bool]:
+    """Resolve the effective dashboard token; ``(token, generated_now)``.
+
+    * A non-blank ``cli_token`` string (``forgeo web --token TOKEN``) is
+      persisted to ``web.toml`` and used.
+    * Otherwise a token already saved in ``web.toml`` is reused.
+    * Otherwise, when ``cli_token`` is the :data:`AUTOGENERATE_TOKEN`
+      sentinel (``forgeo web --token`` with no value) or ``web.toml`` exists
+      but holds no token, a fresh token is generated, persisted, and reported
+      as ``generated_now`` so the caller can print it exactly once.
+    * No flag and no token file yields ``(None, False)``: auth stays off —
+      the historical one-command local behavior.
+    """
+    path = web_token_path()
+    if isinstance(cli_token, str) and cli_token.strip():
+        save_web_token(cli_token.strip(), path)
+        return cli_token.strip(), False
+    existing = load_web_token(path)
+    if existing is not None:
+        return existing, False
+    if cli_token is AUTOGENERATE_TOKEN or path.exists():
+        generated = secrets.token_urlsafe(24)
+        save_web_token(generated, path)
+        return generated, True
+    return None, False
 
 
 class WebLockError(Exception):
@@ -412,10 +493,19 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
     }
 
 
-def make_handler() -> type[BaseHTTPRequestHandler]:
-    """Build the request-handler class for the central dashboard."""
+def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """Build the request-handler class for the central dashboard.
+
+    ``token`` enables optional bearer auth: when set, every ``/api/*`` route
+    requires an ``Authorization: Bearer <token>`` header and answers ``401``
+    otherwise. Static pages (including the token-prompt login flow) stay
+    reachable without a token, so a shared host never leaks backlog contents
+    to anonymous clients.
+    """
 
     class CentralRequestHandler(BaseHTTPRequestHandler):
+        _token = token
+
         def log_message(self, format: str, *args: Any) -> None:
             logger.debug("central web %s - %s", self.address_string(), format % args)
 
@@ -427,6 +517,31 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_unauthorized(self) -> None:
+            body = json_bytes({"error": "unauthorized"})
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("WWW-Authenticate", 'Bearer realm="forgeo"')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _maybe_authorize(self, path: str) -> bool:
+            """True when the request may proceed; a 401 is sent otherwise.
+
+            With bearer auth configured, every ``/api/*`` route requires an
+            ``Authorization: Bearer <token>`` header, compared in constant
+            time. Static pages and assets never need a token.
+            """
+            if self._token is None or not path.startswith("/api/"):
+                return True
+            expected = "Bearer " + self._token
+            if hmac.compare_digest(self.headers.get("Authorization", ""), expected):
+                return True
+            self._send_unauthorized()
+            return False
 
         def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -454,6 +569,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(500, {"error": "internal server error"})
 
         def do_GET(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_get)
 
         def _do_get(self) -> None:
@@ -480,6 +597,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_post)
 
         def _do_post(self) -> None:
@@ -492,6 +611,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_PATCH(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_patch)
 
         def _do_patch(self) -> None:
@@ -504,6 +625,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_DELETE(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_delete)
 
         def _do_delete(self) -> None:
@@ -516,6 +639,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_PUT(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_put)
 
         def _do_put(self) -> None:
@@ -1020,9 +1145,15 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
 class CentralWebServer:
     """Threading HTTP server lifecycle around the central dashboard."""
 
-    def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        token: str | None = None,
+    ) -> None:
         self.host = host
         self._port = port
+        self._token = token
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -1035,7 +1166,7 @@ class CentralWebServer:
 
     def start(self) -> bool:
         """Bind and start serving in a background thread. False on bind failure."""
-        handler = make_handler()
+        handler = make_handler(self._token)
         try:
             httpd = ThreadingHTTPServer((self.host, self._port), handler)
         except OSError as exc:
@@ -1202,13 +1333,20 @@ def start_web_detached(
     )
 
 
-def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
+def run_foreground(
+    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, token: Any = None
+) -> int:
     """Start ``forgeo web`` in the foreground; returns the process exit code.
 
     Takes the host-global dashboard lock (refusing while another dashboard
     runs), binds the dashboard, prints the listening banner to stderr, and
     blocks until the user interrupts it with Ctrl-C or a SIGTERM arrives.
     The lock is always released on the way out — even after a failed bind.
+
+    ``token`` is the ``--token`` CLI value (or the
+    :data:`AUTOGENERATE_TOKEN` sentinel); it resolves to the effective bearer
+    token via :func:`resolve_web_token`. When a fresh token was generated it
+    is printed to stderr exactly once, with a note about where it lives.
     """
     # Catch SIGINT/SIGTERM before the asyncio loop is up, so a stop signal
     # arriving in the startup window still leads to a clean shutdown with the
@@ -1229,13 +1367,19 @@ def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
     except WebLockError as exc:
         Console(stderr=True).print(f"[red]{exc}[/red]")
         return 1
-    server = CentralWebServer(host=host, port=port)
+    token, generated = resolve_web_token(token)
+    server = CentralWebServer(host=host, port=port, token=token)
     if not server.start():
         Console(stderr=True).print(
             f"[red]Central dashboard failed to bind {host}:{port}.[/red]"
         )
         lock.release()
         return 1
+    if generated:
+        Console(stderr=True).print(
+            f"[bold]Web token:[/bold] {token}\n"
+            f"[dim]Required on every /api/* request; saved to {web_token_path()}.[/dim]"
+        )
     try:
         asyncio.run(_serve_forever(server, host, stop_requested))
     except KeyboardInterrupt:

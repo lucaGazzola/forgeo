@@ -52,6 +52,12 @@ it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <ht
 
 ![Forgeo web console](docs/img/console.png)
 
+By default the dashboard is open to anyone who can reach the port. On a
+shared host, protect it with bearer-token auth: `forgeo web --token`
+generates a token (printed once, saved to `~/.config/forgeo/web.toml`) and
+requires `Authorization: Bearer <token>` on every `/api/*` route — see
+[Web console & HTTP API](docs/web-console-api.md).
+
 One-off commands: `forgeo once` (single cycle), `forgeo status` (summary),
 `forgeo validate` (read-only dry run before starting), `forgeo stop`,
 `forgeo restart`, every command is in the

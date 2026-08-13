@@ -36,15 +36,19 @@ Commands:
 * ``forgeo instance list`` / ``forgeo list`` — a table of every registered
    instance: config path, repository, daemon state, last outcome, and
    backlog counts.
-* ``forgeo web [--host HOST] [--port PORT]`` — serve the central
-   multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
+* ``forgeo web [--host HOST] [--port PORT] [--token [TOKEN]]`` — serve the
+   central multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
    aggregating every registered instance straight from its files. With
    ``-d``/``--detach`` it starts in the background and returns once the
    server reports it bound; ``forgeo web stop`` SIGTERMs a running
    dashboard and ``forgeo web status`` reports whether one is running.
    The dashboard is host-global (one per user): its lock lives at
    ``~/.config/forgeo/web.lock`` (or ``$FORGEO_CONFIG_DIR/web.lock``),
-   independent of any per-repo backlog lock.
+   independent of any per-repo backlog lock. ``--token`` (optional) turns on
+   bearer auth on every ``/api/*`` route: the token is persisted to
+   ``~/.config/forgeo/web.toml`` (generated and printed once when given with
+   no value), and a token already present there enables auth even without
+   the flag. With no flag and no token file the dashboard stays open.
 
 ``start``, ``once``, ``status``, ``validate``, ``stop`` and ``restart`` each
 accept either ``--config PATH`` (a config file) or ``--name NAME`` (an
@@ -79,6 +83,7 @@ from forgeo.backlog import (
     unsatisfied_dependencies,
 )
 from forgeo.central import (
+    AUTOGENERATE_TOKEN,
     DEFAULT_HOST,
     DEFAULT_PORT,
     WEB_START_TIMEOUT_SECONDS,
@@ -238,6 +243,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--detach",
         action="store_true",
         help="Start the dashboard in the background and return once it binds.",
+    )
+    web_parser.add_argument(
+        "--token",
+        nargs="?",
+        const=AUTOGENERATE_TOKEN,
+        default=None,
+        metavar="TOKEN",
+        help="Require a bearer token on every /api/* route. With a value, "
+        "that token is persisted to ~/.config/forgeo/web.toml; without a "
+        "value a fresh token is generated, printed once, and saved. When "
+        "web.toml already holds a token, auth is on even without this flag; "
+        "with no flag and no token file the dashboard stays open (no auth).",
     )
     web_parser.add_argument(
         "--timeout",
@@ -808,7 +825,8 @@ def cmd_web(args: argparse.Namespace) -> int:
 
     Runs in the foreground by default, or detached in the background with
     ``-d``; ``forgeo web stop`` and ``forgeo web status`` manage a running
-    dashboard through its host-global lock file.
+    dashboard through its host-global lock file. ``--token`` (optional)
+    turns on bearer auth on every ``/api/*`` route.
     """
     from forgeo.central import run_foreground
 
@@ -819,7 +837,7 @@ def cmd_web(args: argparse.Namespace) -> int:
         return cmd_web_status(args)
     if args.detach:
         return cmd_web_detach(args)
-    return run_foreground(host=args.host, port=args.port)
+    return run_foreground(host=args.host, port=args.port, token=args.token)
 
 
 def cmd_web_detach(args: argparse.Namespace) -> int:
@@ -827,9 +845,11 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
 
     Refuses while another live dashboard holds the host-global lock; a stale
     lock (dead recorded PID) is taken over with a warning, matching the
-    daemon's lock behavior.
+    daemon's lock behavior. The bearer token is resolved up front and
+    persisted to ``web.toml`` so the detached child picks it up; a freshly
+    generated token is printed to the console exactly once.
     """
-    from forgeo.central import WebLock, WebLockError, start_web_detached
+    from forgeo.central import WebLock, WebLockError, resolve_web_token, start_web_detached
 
     lock = WebLock()
     if lock.is_held():
@@ -843,6 +863,7 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
             f"[yellow]Stale dashboard lock {lock.lock_path} "
             f"(pid {lock.pid} is dead); taking over.[/yellow]"
         )
+    token, generated = resolve_web_token(args.token)
     try:
         pid = start_web_detached(args.host, args.port, args.timeout)
     except WebLockError as exc:
@@ -852,6 +873,11 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
         f"[green]Forgeo central dashboard started in the background "
         f"(pid {pid}, http://{args.host}:{args.port}).[/green]"
     )
+    if generated:
+        console.print(
+            f"[bold]Web token:[/bold] {token}\n"
+            f"[dim]Required on every /api/* request; saved to web.toml.[/dim]"
+        )
     return 0
 
 

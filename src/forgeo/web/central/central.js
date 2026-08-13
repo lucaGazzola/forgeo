@@ -10,6 +10,13 @@
   var STATUS_ORDER = ["OPEN", "BLOCKED", "COMPLETED", "FAILED"];
   var TABS = ["backlog", "create", "logs", "runs", "blocker", "config"];
 
+  /* Optional bearer auth: the token lives in localStorage under TOKEN_KEY.
+     When the dashboard requires one (any /api/* call answers 401), the user
+     is sent to the token prompt (LOGIN_PATH) unless a token is already
+     stored — a `?token=...` URL also signs in automatically. */
+  var TOKEN_KEY = "forgeo.web.token";
+  var LOGIN_PATH = "/central/login.html";
+
   /* Board compaction: non-OPEN columns collapse behind a count + expand
      toggle once they exceed COLLAPSE_MIN_TASKS, and every column renders at
      most MAX_VISIBLE_PER_COLUMN cards (the most recent) until "show more" is
@@ -70,11 +77,60 @@
     return span;
   }
 
+  function getStoredToken() {
+    try {
+      return localStorage.getItem(TOKEN_KEY) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function storeToken(token) {
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch (e) {}
+  }
+
+  function clearStoredToken() {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch (e) {}
+  }
+
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = getStoredToken();
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
+  function goToLogin(returnUrl) {
+    if (location.pathname.indexOf(LOGIN_PATH) === 0) return;
+    var next = returnUrl ? encodeURIComponent(returnUrl) : "";
+    window.location.href = LOGIN_PATH + "?next=" + next;
+  }
+
+  /* fetch() that always attaches the stored bearer token (when present) and
+     sends 401 responses to the token prompt — the login flow is the only
+     static page that must work without a token. */
+  function apiFetch(url, options) {
+    options = options || {};
+    options.headers = authHeaders(options.headers || {});
+    return fetch(url, options).then(function (resp) {
+      if (resp.status === 401) {
+        clearStoredToken();
+        goToLogin(url);
+        throw new Error("unauthorized");
+      }
+      return resp;
+    });
+  }
+
   function fetchJSON(url) {
     var controller = typeof AbortController === "function" ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, TIMEOUT_MS) : null;
-    var opts = controller ? { signal: controller.signal } : undefined;
-    return fetch(url, opts)
+    var opts = controller ? { signal: controller.signal } : {};
+    return apiFetch(url, opts)
       .then(function (resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
@@ -588,7 +644,7 @@
       return;
     }
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectEditForm()),
@@ -623,7 +679,7 @@
     var error = document.getElementById("task-modal-delete-error");
     if (error) error.hidden = true;
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
       method: "DELETE",
     })
       .then(function (resp) {
@@ -656,7 +712,7 @@
     var reopenBtn = document.getElementById("task-modal-reopen");
     if (reopenBtn) reopenBtn.disabled = true;
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/reopen", {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/reopen", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
@@ -772,7 +828,7 @@
     if (!API) return;
     setDaemonBusy(true);
     showDaemonFeedback(action + "…", false);
-    fetch(API + action, { method: "POST" })
+    apiFetch(API + action, { method: "POST" })
       .then(function (resp) {
         return resp.json().then(function (data) {
           if (!resp.ok) {
@@ -1108,7 +1164,7 @@
       status.dataset.state = "saving";
     }
 
-    fetch(API + "config", {
+    apiFetch(API + "config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectConfig()),
@@ -1307,7 +1363,7 @@
       var commandInput = document.getElementById("task-command");
       var command = commandInput ? commandInput.value.trim() : "";
 
-      fetch(API + "tasks", {
+      apiFetch(API + "tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1393,6 +1449,20 @@
   /* ------------------------------------------------------------------ */
   /* Boot                                                                */
   /* ------------------------------------------------------------------ */
+
+  /* Token-URL form: a `?token=...` query signs the browser in and is
+     stripped from the URL so it never lingers in the address bar. */
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var urlToken = params.get("token");
+    if (urlToken) {
+      storeToken(urlToken);
+      params.delete("token");
+      var search = params.toString();
+      var cleanUrl = location.pathname + (search ? "?" + search : "") + location.hash;
+      history.replaceState(null, "", cleanUrl);
+    }
+  })();
 
   function refresh() {
     if (page === "home") {

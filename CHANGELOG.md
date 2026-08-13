@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional bearer-token auth for the central web dashboard (`forgeo web`):
+  `forgeo web --token` (or a `token` key in `~/.config/forgeo/web.toml`)
+  requires `Authorization: Bearer <token>` on every `/api/*` route and
+  answers `401` otherwise. `forgeo web --token` with no value generates a
+  token, prints it once on startup, and saves it (mode `0600`); a generated
+  token is only ever printed once. Static assets and the new token prompt
+  page (`/central/login.html`) stay reachable without a token, and a
+  `?token=...` URL signs the browser in automatically. With no flag and no
+  token file the dashboard keeps its historical open-by-default behavior.
+
 - `forgeo validate` — a read-only dry run that checks whether a forgeo is
   ready to run before starting it: the config schema, the repository (exists,
   is a git repo, `git` on PATH), the branch and remote resolution, the

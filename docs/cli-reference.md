@@ -252,6 +252,7 @@ running.
 | `--host <address>` | Bind address (default `0.0.0.0`). |
 | `--port <port>` | Bind port (default `8790`). |
 | `-d`, `--detach` | Start the dashboard in the background and return once it binds. |
+| `--token [TOKEN]` | Require a bearer token on every `/api/*` route (see below). |
 | `--timeout <seconds>` | How long to wait for the dashboard to bind when detached (default `30`). |
 
 Without `-d` the dashboard runs in the foreground (like `forgeo start`);
@@ -264,6 +265,25 @@ reuse a per-instance `backlog.lock`. Instead it owns a lock file at
 the running PID plus its `host`/`port` (written atomically with `O_EXCL`).
 A second `forgeo web -d` is refused while the lock is held; a stale lock
 whose PID is dead is taken over with a warning.
+
+**Optional bearer-token auth.** By default the dashboard is open — anyone who
+can reach the port can read every instance's backlog, logs, and config, and
+can add/edit/delete tasks or start/stop/restart daemons. On a shared host,
+turn on auth so every `/api/*` route requires
+`Authorization: Bearer <token>` and answers `401` otherwise:
+
+```bash
+forgeo web --token           # generate a token: printed once, saved to web.toml
+forgeo web --token supersecret  # use your own token
+```
+
+The token is persisted to `~/.config/forgeo/web.toml` (or
+`$FORGEO_CONFIG_DIR/web.toml`, mode `0600`); once it exists, auth is enabled
+even without the flag, and the generated token is only ever printed at the
+moment it is created. The token prompt page (`/central/login.html`) is served
+without a token and stores your token in the browser; opening the console
+with `?token=YOUR_TOKEN` in the URL signs in automatically. Delete
+`web.toml` to go back to the open-by-default behavior.
 
 - `GET /` — home page listing every registered instance (daemon state, last
   outcome, next run, backlog counts).

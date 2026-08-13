@@ -14,7 +14,17 @@ from pathlib import Path
 
 import pytest
 
-from forgeo.central import WebLock, WebLockError, stop_web, web_lock_path
+from forgeo.central import (
+    AUTOGENERATE_TOKEN,
+    WebLock,
+    WebLockError,
+    load_web_token,
+    resolve_web_token,
+    save_web_token,
+    stop_web,
+    web_lock_path,
+    web_token_path,
+)
 from forgeo.cli import build_parser, cmd_web, cmd_web_status, cmd_web_stop
 from forgeo.daemon import read_lock_pid
 
@@ -54,6 +64,81 @@ def test_web_lock_default_path():
 def test_web_lock_honors_config_dir_env(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
     assert web_lock_path() == tmp_path / "web.lock"
+
+
+# --------------------------------------------------------------------------- #
+# Token file + bearer auth resolution                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_web_token_default_path():
+    assert web_token_path() == Path.home() / ".config" / "forgeo" / "web.toml"
+
+
+def test_web_token_honors_config_dir_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    assert web_token_path() == tmp_path / "web.toml"
+
+
+def test_load_web_token_absent_or_blank_is_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    assert load_web_token() is None
+    (tmp_path / "web.toml").write_text("", encoding="utf-8")
+    assert load_web_token() is None
+    (tmp_path / "web.toml").write_text("token = \"\"", encoding="utf-8")
+    assert load_web_token() is None
+
+
+def test_save_and_load_web_token_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    save_web_token("abc-123")
+    assert load_web_token() == "abc-123"
+    assert (tmp_path / "web.toml").read_text(encoding="utf-8") == (
+        'token = "abc-123"\n'
+    )
+
+
+def test_resolve_web_token_no_auth_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    token, generated = resolve_web_token(None)
+    assert token is None
+    assert generated is False
+    assert not (tmp_path / "web.toml").exists()
+
+
+def test_resolve_web_token_reuses_existing(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    save_web_token("existing-token")
+    token, generated = resolve_web_token(None)
+    assert token == "existing-token"
+    assert generated is False
+
+
+def test_resolve_web_token_explicit_value_is_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    token, generated = resolve_web_token("my-secret")
+    assert token == "my-secret"
+    assert generated is False
+    assert load_web_token() == "my-secret"
+
+
+def test_resolve_web_token_autogenerates_and_persists(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    token, generated = resolve_web_token(AUTOGENERATE_TOKEN)
+    assert generated is True
+    assert token
+    assert load_web_token() == token
+
+
+def test_resolve_web_token_autogenerates_when_file_without_token(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "web.toml").write_text("", encoding="utf-8")
+    token, generated = resolve_web_token(None)
+    assert generated is True
+    assert token
+    assert load_web_token() == token
 
 
 # --------------------------------------------------------------------------- #
@@ -293,6 +378,53 @@ def test_web_detach_refuses_while_running(tmp_path, monkeypatch, capsys):
         lock.release()
 
 
+def test_web_detach_generates_and_prints_token_once(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+
+    def fake_popen(*_args, **_kwargs) -> _FakeProc:
+        return _FakeProc(os.getpid(), tmp_path / "web.lock", running=True)
+
+    monkeypatch.setattr("forgeo.central.subprocess.Popen", fake_popen)
+    try:
+        assert cmd_web(web_args("-d", "--token")) == 0
+        out = capsys.readouterr().out
+        assert "Web token:" in out
+        assert "saved to web.toml" in out
+        assert load_web_token() is not None
+    finally:
+        WebLock().release()
+
+
+def test_web_detach_reuses_file_token_without_print(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+    save_web_token("known-token")
+
+    def fake_popen(*_args, **_kwargs) -> _FakeProc:
+        return _FakeProc(os.getpid(), tmp_path / "web.lock", running=True)
+
+    monkeypatch.setattr("forgeo.central.subprocess.Popen", fake_popen)
+    try:
+        assert cmd_web(web_args("-d")) == 0
+        assert "Web token:" not in capsys.readouterr().out
+    finally:
+        WebLock().release()
+
+
+def test_web_detach_explicit_token_flag_is_persisted(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+
+    def fake_popen(*_args, **_kwargs) -> _FakeProc:
+        return _FakeProc(os.getpid(), tmp_path / "web.lock", running=True)
+
+    monkeypatch.setattr("forgeo.central.subprocess.Popen", fake_popen)
+    try:
+        assert cmd_web(web_args("-d", "--token", "explicit-token")) == 0
+        assert "Web token:" not in capsys.readouterr().out
+        assert load_web_token() == "explicit-token"
+    finally:
+        WebLock().release()
+
+
 def test_web_detach_warns_on_stale_lock(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
     (tmp_path / "web.lock").write_text("pid=999999999\n", encoding="utf-8")
@@ -332,3 +464,58 @@ def test_web_parser_flags():
     assert stop.timeout == 5.0
 
     assert build_parser().parse_args(["web", "status"]).web_action == "status"
+
+
+def test_web_parser_token_flag():
+    assert build_parser().parse_args(["web"]).token is None
+    assert build_parser().parse_args(["web", "--token", "abc"]).token == "abc"
+    assert (
+        build_parser().parse_args(["web", "--token"]).token is AUTOGENERATE_TOKEN
+    )
+
+
+def _run_foreground_noop(monkeypatch, tmp_path):
+    """Patch the foreground server plumbing so ``run_foreground`` returns
+    immediately after printing its banner instead of serving forever."""
+    monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
+
+    async def fake_serve_forever(server, host, stop_requested):
+        return None
+
+    monkeypatch.setattr("forgeo.central._serve_forever", fake_serve_forever)
+    monkeypatch.setattr("forgeo.central.signal.signal", lambda *a, **k: None)
+    monkeypatch.setattr("forgeo.central.CentralWebServer.start", lambda self: True)
+
+
+def test_run_foreground_prints_generated_token_once(tmp_path, monkeypatch, capsys):
+    from forgeo.central import run_foreground
+
+    _run_foreground_noop(monkeypatch, tmp_path)
+    rc = run_foreground(host="127.0.0.1", port=0, token=AUTOGENERATE_TOKEN)
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Web token:" in err
+    assert load_web_token() is not None
+    assert not WebLock().is_held()
+
+
+def test_run_foreground_reuses_file_token_without_print(tmp_path, monkeypatch, capsys):
+    from forgeo.central import run_foreground
+
+    _run_foreground_noop(monkeypatch, tmp_path)
+    save_web_token("known-token")
+    rc = run_foreground(host="127.0.0.1", port=0)
+    assert rc == 0
+    assert "Web token:" not in capsys.readouterr().err
+    assert not WebLock().is_held()
+
+
+def test_run_foreground_no_token_stays_open(tmp_path, monkeypatch, capsys):
+    from forgeo.central import run_foreground
+
+    _run_foreground_noop(monkeypatch, tmp_path)
+    rc = run_foreground(host="127.0.0.1", port=0)
+    assert rc == 0
+    assert "Web token:" not in capsys.readouterr().err
+    assert not (tmp_path / "web.toml").exists()
+    assert not WebLock().is_held()

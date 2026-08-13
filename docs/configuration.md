@@ -244,6 +244,12 @@ The daemons bind no ports. The central dashboard (`forgeo web`, default port
 whether or not each daemon is running — see
 [Web console & HTTP API](web-console-api.md).
 
+The dashboard's own settings live next to its lock, in
+`~/.config/forgeo/web.toml` (or `$FORGEO_CONFIG_DIR/web.toml`): a `token`
+key turns on bearer auth for every `/api/*` route. `forgeo web --token`
+generates one, prints it once, and saves it here; with no `web.toml` the
+dashboard stays open (no auth).
+
 ## Default refactor prompt
 
 When `refactor_prompt` is omitted, Forgeo uses:

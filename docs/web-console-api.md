@@ -15,6 +15,7 @@ forgeo web --host 127.0.0.1
 forgeo web -d            # start it in the background and return
 forgeo web status        # running? pid + host + port
 forgeo web stop          # SIGTERM the background dashboard
+forgeo web --token       # optional: generate a token and require it on /api/*
 ```
 
 It runs in the foreground like `forgeo start`, or in the background with
@@ -29,6 +30,35 @@ firewall too).
 
 The server is implemented with the standard library (`forgeo.central`);
 static files in `src/forgeo/web/` are served at their URL paths.
+
+## Authentication (optional)
+
+By default the dashboard is **open**: anyone who can reach the port can read
+every instance's backlog, logs, and config, and can mutate tasks or manage
+daemons. On a shared host, enable **bearer-token auth** so every `/api/*`
+route requires an `Authorization: Bearer <token>` header and answers `401`
+otherwise:
+
+```bash
+forgeo web --token            # generates a token, prints it once, saves it
+forgeo web --token my-secret  # or set your own token
+```
+
+The token is stored in `~/.config/forgeo/web.toml` (or
+`$FORGEO_CONFIG_DIR/web.toml`, mode `0600`). Once the file holds a token,
+auth is on even without the flag; a generated token is printed exactly once
+at the moment it is created. Every `curl`/client then adds the header:
+
+```bash
+curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8790/api/instances
+```
+
+Static assets and the **token prompt page** (`/central/login.html`) stay
+reachable without a token: the page asks for the token and stores it in the
+browser, so the console itself keeps working. Opening the dashboard with
+`?token=YOUR_TOKEN` in the URL signs the browser in automatically (the token
+is stripped from the address bar). Delete `web.toml` to return to the
+open-by-default behavior.
 
 ## Pages
 
@@ -513,6 +543,14 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
   visible from your LAN. Exposing it publicly (`--host 0.0.0.0` on a public
   interface) makes every instance's backlog, logs, and config visible to
   every host that can reach the port — only do that on a trusted network.
+- **Bearer-token auth** (see [Authentication](#authentication-optional))
+  closes the API to anonymous clients: every `/api/*` route — read *and*
+  write — requires `Authorization: Bearer <token>` and returns `401`
+  otherwise, while static pages and the token prompt stay public. It does
+  not add transport encryption: put the dashboard behind a TLS proxy (or an
+  SSH tunnel) when you use the token over the network, so the token is not
+  sent in cleartext. The `?token=...` URL convenience form puts the token in
+  the address bar and server logs — prefer pasting it on the prompt page.
 - The write endpoints are `POST /api/instances/<name>/tasks` and `PATCH
   /api/instances/<name>/tasks/<id>` (and `POST
   /api/instances/<name>/tasks/<id>/reopen` to retry a `BLOCKED` task, plus

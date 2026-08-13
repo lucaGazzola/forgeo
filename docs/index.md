@@ -111,6 +111,9 @@ forgeo.yaml ──► forgeo start (daemon)
 - `backlog.run` — per-iteration lock that prevents two agents running at once.
 - `backlog.update.json` — remembers when the once-a-day PyPI update check last
   ran, so it never phones home every cycle.
+- `~/.config/forgeo/web.toml` — the central dashboard's optional bearer
+  token (`forgeo web --token`): when present, every `/api/*` route requires
+  `Authorization: Bearer <token>`; with no file the dashboard stays open.
 
 ## Next steps
 

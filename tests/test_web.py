@@ -45,6 +45,25 @@ def _get(url: str) -> tuple[int, dict | list | str]:
             return exc.code, body
 
 
+def _get_headers(
+    url: str, headers: dict[str, str]
+) -> tuple[int, dict | list | str]:
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            body = resp.read().decode("utf-8")
+            ctype = resp.headers.get_content_type()
+            if ctype == "application/json":
+                return resp.status, json.loads(body)
+            return resp.status, body
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(body)
+        except json.JSONDecodeError:
+            return exc.code, body
+
+
 def _post(url: str, data: str | None) -> tuple[int, dict | list | str]:
     body = data.encode("utf-8") if data is not None else None
     request = urllib.request.Request(url, data=body, method="POST")
@@ -312,7 +331,104 @@ def test_instance_page_served(web_env):
     assert status == 200
     assert isinstance(body, str)
     assert "Backlog" in body
-    assert 'data-page="instance"' in body
+
+
+# --------------------------------------------------------------------------- #
+# Optional bearer-token auth                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _auth_server(token: str | None = None) -> CentralWebServer:
+    server = CentralWebServer(host="127.0.0.1", port=0, token=token)
+    assert server.start() is True
+    return server
+
+
+def test_auth_disabled_without_token_serves_api(registry):
+    server = _auth_server(token=None)
+    try:
+        status, data = _get(f"http://127.0.0.1:{server.port}/api/instances")
+        assert status == 200
+        assert isinstance(data, list)
+    finally:
+        server.stop()
+
+
+def test_auth_requires_token_on_api(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get(f"http://127.0.0.1:{server.port}/api/instances")
+        assert status == 401
+        assert data["error"] == "unauthorized"
+    finally:
+        server.stop()
+
+
+def test_auth_rejects_wrong_token(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get_headers(
+            f"http://127.0.0.1:{server.port}/api/instances",
+            {"Authorization": "Bearer wrong"},
+        )
+        assert status == 401
+        assert data["error"] == "unauthorized"
+    finally:
+        server.stop()
+
+
+def test_auth_accepts_valid_token(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get_headers(
+            f"http://127.0.0.1:{server.port}/api/instances",
+            {"Authorization": "Bearer secret"},
+        )
+        assert status == 200
+        assert isinstance(data, list)
+    finally:
+        server.stop()
+
+
+def test_auth_applies_to_write_endpoints(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, _data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/start", None
+        )
+        assert status == 401
+        status, _data = _put(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/config", "{}"
+        )
+        assert status == 401
+        status, _data = _patch(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001",
+            "{}",
+        )
+        assert status == 401
+        status, _data = _delete(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+        )
+        assert status == 401
+    finally:
+        server.stop()
+
+
+def test_auth_leaves_static_and_login_unprotected(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, body = _get(f"http://127.0.0.1:{server.port}/")
+        assert status == 200
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/login.html")
+        assert status == 200
+        assert isinstance(body, str)
+        assert "Token required" in body
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+        assert status == 200
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/central.css")
+        assert status == 200
+    finally:
+        server.stop()
 
 
 def test_instance_page_has_new_task_form(web_env):

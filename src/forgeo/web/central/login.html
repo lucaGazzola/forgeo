@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forgeo &middot; Sign in</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/central/central.css">
+</head>
+<body data-page="login">
+<div class="shell login-shell">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">Forgeo &middot; Sign in</span>
+    </div>
+  </header>
+
+  <main class="login">
+    <div class="login-card">
+      <h1 class="login-title">Token required</h1>
+      <p class="login-sub">
+        This dashboard protects its <code>/api/*</code> routes with a bearer
+        token. Paste the token that <code>forgeo web --token</code> printed on
+        startup (or that you saved to <code>~/.config/forgeo/web.toml</code>)
+        to continue.
+      </p>
+      <form class="login-form" id="login-form" novalidate>
+        <label class="login-field" for="token-input">
+          <span>Token</span>
+          <input id="token-input" name="token" type="password"
+                 placeholder="paste your token" autocomplete="off" required>
+        </label>
+        <p class="login-error" id="login-error" role="alert" hidden></p>
+        <button class="login-submit" id="login-submit" type="submit">Sign in</button>
+      </form>
+      <p class="login-hint">
+        Tip: you can also sign in automatically by opening the dashboard with
+        <code>?token=YOUR_TOKEN</code> in the URL &mdash; for example
+        <code>/instances/&lt;name&gt;/?token=YOUR_TOKEN</code>.
+      </p>
+    </div>
+  </main>
+
+</div>
+<script>
+  (function () {
+    "use strict";
+    var TOKEN_KEY = "forgeo.web.token";
+    var params = new URLSearchParams(location.search);
+    var next = params.get("next") || "/";
+
+    function storeToken(token) {
+      try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
+    }
+
+    var form = document.getElementById("login-form");
+    var input = document.getElementById("token-input");
+    var error = document.getElementById("login-error");
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var token = input.value.trim();
+      if (!token) {
+        error.textContent = "a token is required";
+        error.hidden = false;
+        return;
+      }
+      storeToken(token);
+      window.location.href = next;
+    });
+  })();
+</script>
+</body>
+</html>

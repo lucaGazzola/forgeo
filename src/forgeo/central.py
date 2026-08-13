@@ -11,12 +11,12 @@ Routes:
 * ``GET /`` — home page listing every registered instance: name, repo,
   daemon state, last outcome, next run, and backlog counts.
 * ``GET /instances/<name>/`` — per-instance page: that instance's kanban
-  backlog (with a form to add tasks) plus tabs for logs, runs, blocker, and
+  backlog (with a form to add tasks) plus tabs for logs, history, blocker, and
   config.
 * ``GET /api/instances`` — JSON summary of every registered instance.
 * ``GET /api/instances/<name>/tasks``, ``/tasks/<id>``, ``/status``,
-  ``/logs?lines=N``, ``/runs?limit=N``, ``/blocker``, ``/config`` — the
-  per-instance API.
+  ``/logs?lines=N``, ``/runs?limit=N&offset=M``, ``/blocker``, ``/config`` —
+  the per-instance API.
 * ``PUT /api/instances/<name>/config`` — validate and persist an instance's
   ``forgeo.yaml`` from a config payload (applies on the daemon's next
   restart; ``name`` and ``telegram_bot_token`` are not editable).
@@ -88,8 +88,10 @@ from forgeo.runs import RunRecorder, runs_path_for
 from forgeo.web_common import (
     DEFAULT_LOG_LINES,
     DEFAULT_RUN_LIMIT,
+    DEFAULT_RUN_OFFSET,
     MAX_LOG_LINES,
     MAX_RUN_LIMIT,
+    MAX_RUN_OFFSET,
     clamp_query_int,
     guess_content_type,
     iso,
@@ -1121,12 +1123,25 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_json(200, {"lines": lines})
                 return
             if endpoint == "runs":
-                n = clamp_query_int(query, "limit", DEFAULT_RUN_LIMIT, MAX_RUN_LIMIT)
+                limit = clamp_query_int(query, "limit", DEFAULT_RUN_LIMIT, MAX_RUN_LIMIT)
+                offset = clamp_query_int(query, "offset", DEFAULT_RUN_OFFSET, MAX_RUN_OFFSET)
                 if info.config is None:
-                    self._send_json(200, [])
+                    self._send_json(
+                        200,
+                        {"runs": [], "total": 0, "offset": offset, "limit": limit},
+                    )
                     return
-                records = RunRecorder(runs_path_for(info.config.backlog)).read(limit=n)
-                self._send_json(200, [r.model_dump(mode="json") for r in records])
+                recorder = RunRecorder(runs_path_for(info.config.backlog))
+                records = recorder.read(limit=limit, offset=offset)
+                self._send_json(
+                    200,
+                    {
+                        "runs": [r.model_dump(mode="json") for r in records],
+                        "total": recorder.total(),
+                        "offset": offset,
+                        "limit": limit,
+                    },
+                )
                 return
             if endpoint == "blocker":
                 self._send_json(200, {"content": _blocker_content(info.config)})

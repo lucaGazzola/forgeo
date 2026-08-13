@@ -51,7 +51,7 @@
     <button class="tab is-active" data-tab="backlog" type="button">Backlog</button>
     <button class="tab" data-tab="create" type="button">Create</button>
     <button class="tab" data-tab="logs" type="button">Logs</button>
-    <button class="tab" data-tab="runs" type="button">Runs</button>
+    <button class="tab" data-tab="history" type="button">History</button>
     <button class="tab" data-tab="blocker" type="button">Blocker</button>
     <button class="tab" data-tab="config" type="button">Config</button>
   </nav>
@@ -93,8 +93,8 @@
   <main id="tab-logs" class="tab-panel" hidden>
     <pre class="code-panel" id="logs-body">(loading &hellip;)</pre>
   </main>
-  <main id="tab-runs" class="tab-panel" hidden>
-    <div class="table-wrap" id="runs-body"></div>
+  <main id="tab-history" class="tab-panel" hidden>
+    <div class="table-wrap" id="history-body"></div>
   </main>
   <main id="tab-blocker" class="tab-panel" hidden>
     <pre class="code-panel" id="blocker-body">(loading &hellip;)</pre>
@@ -150,7 +150,7 @@
           <p class="modal__desc" id="task-modal-blocker-reason"></p>
           <p class="modal__blocked-note">
             The agent's partial work was committed and preserved on
-            <code>main</code> (the <code>[partial]</code> commit is in the Runs
+            <code>main</code> (the <code>[partial]</code> commit is in the History
             tab). Edit the task to correct it, then Reopen — Forgeo retries on
             its next scheduled run, building on top of the partial work.
           </p>
@@ -160,7 +160,7 @@
           <p class="modal__desc" id="task-modal-failure-reason"></p>
           <p class="modal__blocked-note">
             The agent errored and its changes were discarded. The failure
-            reason is recorded on the task; see the Logs and Runs tabs for the
+            reason is recorded on the task; see the Logs and History tabs for the
             full output.
           </p>
         </section>

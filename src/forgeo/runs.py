@@ -89,11 +89,12 @@ class RunRecorder:
             )
             return False
 
-    def read(self, limit: int | None = None) -> list[RunRecord]:
-        """Return the newest ``limit`` records, newest first.
+    def read(self, limit: int | None = None, offset: int = 0) -> list[RunRecord]:
+        """Return the newest records, newest first, skipping the first ``offset``.
 
         A missing file yields an empty list; corrupt lines are skipped with a
-        warning. ``limit=None`` returns every readable record.
+        warning. ``limit=None`` returns every readable record after ``offset``
+        (``offset=0`` starts at the newest).
         """
         try:
             text = self.path.read_text(encoding="utf-8", errors="replace")
@@ -110,9 +111,19 @@ class RunRecorder:
                     "Skipping corrupt run record in %s on line %s", self.path, line_no
                 )
         records.sort(key=lambda record: record.finished_at, reverse=True)
+        if offset > 0:
+            records = records[offset:]
         if limit is None:
             return records
         return records[: max(0, limit)]
+
+    def total(self) -> int:
+        """The number of readable records in the run history, or ``0``.
+
+        A missing, empty, or corrupt-only file counts as zero; corrupt lines
+        are skipped with a warning, matching :meth:`read`.
+        """
+        return len(self.read())
 
     def read_last(self) -> RunRecord | None:
         """Return the most recent record, or ``None`` when none exists."""

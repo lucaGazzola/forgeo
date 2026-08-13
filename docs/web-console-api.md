@@ -66,14 +66,18 @@ open-by-default behavior.
   daemon state (lock held), last outcome, next run, and per-status backlog
   counts, each linking to its instance page.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
-  **Create** tab with a form to add tasks, plus tabs for **logs**, **runs**,
+  **Create** tab with a form to add tasks, plus tabs for **logs**, **history**,
   **blocker** and **config**. The header carries a **DAEMON** section with the
   daemon status tag (`running`/`stopped`) and **Start**/**Stop**/**Restart**
   buttons that call `POST /api/instances/<name>/start|stop|restart`; the
   buttons reflect the current state (Start is disabled while running, Stop
   while stopped), give inline success/error feedback, and the status tag
   refreshes after each action and on the 30-second auto-refresh. The
-  **Config** tab renders `forgeo.yaml` as an
+  **History** tab lists recent finished cycles from `runs.jsonl` in a
+  paginated table — time, kind, task id and title, an outcome badge, duration,
+  commit SHA and reason — newest first, with a pager once more than a page of
+  runs exist (a friendly empty state is shown when no runs have been recorded
+  yet). The **Config** tab renders `forgeo.yaml` as an
   editable form (interval, agent command, sandbox, telegram settings, ...):
   **Save** persists it via `PUT /api/instances/<name>/config`, surfaces
   validation errors inline (highlighted next to the failing field), and shows
@@ -478,19 +482,47 @@ curl http://127.0.0.1:8790/api/instances/my-repo/logs
 curl "http://127.0.0.1:8790/api/instances/my-repo/logs?lines=50"
 ```
 
-### `GET /api/instances/<name>/runs?limit=N`
+### `GET /api/instances/<name>/runs?limit=N&offset=M`
 
-That instance's durable run history from `runs.jsonl`, newest first (`limit`
-defaults to `10`, max `10000`). Each record has started/finished timestamps,
-the run kind (`task` or `refactor`), the task id and title when applicable,
-the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the agent exit code, the commit
-SHA when a commit was created, the duration in seconds, and an optional
-`reason` when the run completed without a commit (a no-change SUCCESS is
-surfaced here instead of silently showing a null commit SHA).
+That instance's durable run history from `runs.jsonl`, newest first and
+paginated. `limit` defaults to `10` (max `10000`); `offset` defaults to `0`
+and skips that many of the newest records, so the web console's **History**
+tab pages through old runs. The response is an object: `runs` holds the
+requested page, `total` is the number of readable records (for pager
+controls), and `limit`/`offset` echo the request. Each record has
+started/finished timestamps, the run kind (`task` or `refactor`), the task id
+and title when applicable, the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the
+agent exit code, the commit SHA when a commit was created, the duration in
+seconds, and an optional `reason` when the run completed without a commit (a
+no-change SUCCESS is surfaced here instead of silently showing a null commit
+SHA). A missing or empty `runs.jsonl` yields `runs: []` with `total: 0`.
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/runs
 curl "http://127.0.0.1:8790/api/instances/my-repo/runs?limit=5"
+curl "http://127.0.0.1:8790/api/instances/my-repo/runs?limit=25&offset=25"
+```
+
+```json
+{
+  "runs": [
+    {
+      "started_at": "2026-08-01T11:55:00Z",
+      "finished_at": "2026-08-01T12:00:10Z",
+      "kind": "task",
+      "task_id": "TASK-001",
+      "task_title": "Implement fibonacci module",
+      "outcome": "SUCCESS",
+      "agent_exit_code": 0,
+      "commit_sha": "a1b2c3d4e5f6",
+      "duration_seconds": 310.2,
+      "reason": null
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 10
+}
 ```
 
 ### `GET /api/instances/<name>/blocker`

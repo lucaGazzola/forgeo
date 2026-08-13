@@ -227,6 +227,48 @@ def test_read_returns_newest_first(tmp_path):
     assert recorder.read_last().kind is RunKind.REFACTOR
 
 
+def test_read_supports_offset_pagination(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    for index in range(1, 6):
+        recorder.append(
+            RunRecord(
+                started_at=datetime(2026, 8, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 1, 0, index, 10, tzinfo=UTC),
+                kind=RunKind.TASK,
+                task_id=f"T-{index}",
+                outcome=RunOutcome.SUCCESS,
+                duration_seconds=1.0,
+            )
+        )
+
+    assert [r.task_id for r in recorder.read(limit=2)] == ["T-5", "T-4"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=2)] == ["T-3", "T-2"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=4)] == ["T-1"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=99)] == []
+    assert [r.task_id for r in recorder.read(offset=1)] == ["T-4", "T-3", "T-2", "T-1"]
+
+
+def test_total_counts_readable_records(tmp_path, caplog):
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    assert recorder.total() == 0
+    recorder.append(
+        RunRecord(
+            started_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 10, tzinfo=UTC),
+            kind=RunKind.TASK,
+            task_id="GOOD",
+            outcome=RunOutcome.SUCCESS,
+            duration_seconds=1.0,
+        )
+    )
+    assert recorder.total() == 1
+    with recorder.path.open("a", encoding="utf-8") as handle:
+        handle.write("{not json\n")
+    with caplog.at_level(logging.WARNING, logger="forgeo.runs"):
+        assert recorder.total() == 1
+    assert "Skipping corrupt run record" in caplog.text
+
+
 def test_read_skips_corrupt_lines_with_warning(tmp_path, caplog):
     recorder = RunRecorder(tmp_path / "runs.jsonl")
     recorder.append(

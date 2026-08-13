@@ -1,5 +1,5 @@
 /* Central dashboard script: renders the home instance list and the
-   per-instance page (kanban backlog + logs/runs/blocker/config tabs).
+   per-instance page (kanban backlog + logs/history/blocker/config tabs).
    Plain JS, no frameworks, refreshes every 30 seconds. */
 
 (function () {
@@ -8,7 +8,7 @@
   var REFRESH_MS = 30000;
   var TIMEOUT_MS = 5000;
   var STATUS_ORDER = ["OPEN", "BLOCKED", "COMPLETED", "FAILED"];
-  var TABS = ["backlog", "create", "logs", "runs", "blocker", "config"];
+  var TABS = ["backlog", "create", "logs", "history", "blocker", "config"];
 
   /* Optional bearer auth: the token lives in localStorage under TOKEN_KEY.
      When the dashboard requires one (any /api/* call answers 401), the user
@@ -26,6 +26,12 @@
   var COLLAPSED_BY_DEFAULT = { BLOCKED: true, COMPLETED: true, FAILED: true };
   var expandedColumns = {};
   var showAllColumns = {};
+
+  /* Run history pagination: one page of recent runs at a time, newest first.
+     runsPage is the current page index (0 = the newest page) and survives the
+     30s auto-refresh, like the board's expanded-column state. */
+  var RUNS_PAGE_SIZE = 25;
+  var runsPage = 0;
 
   var page = document.body.dataset.page || "home";
   var match = page === "instance" ? location.pathname.match(/^\/instances\/([^/]+)\/?/) : null;
@@ -872,18 +878,51 @@
     return "OPEN";
   }
 
-  function renderRuns(runs) {
-    var body = document.getElementById("runs-body");
+  function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined || isNaN(seconds)) return "—";
+    var total = Math.max(0, Math.round(seconds));
+    if (total < 60) return total + "s";
+    var minutes = Math.floor(total / 60);
+    var rest = total % 60;
+    return rest ? minutes + "m " + rest + "s" : minutes + "m";
+  }
+
+  function shortSha(sha) {
+    if (!sha) return "—";
+    return sha.length > 8 ? sha.slice(0, 7) : sha;
+  }
+
+  function historyEmptyState() {
+    var empty = el("div", "empty-state");
+    empty.appendChild(el("p", "empty-title", "No runs yet"));
+    empty.appendChild(
+      el(
+        "p",
+        "empty-sub",
+        "Finished forgeo cycles appear here, newest first. Each cycle writes one record to runs.jsonl."
+      )
+    );
+    return empty;
+  }
+
+  function renderHistory(data) {
+    var body = document.getElementById("history-body");
     if (!body) return;
     body.textContent = "";
-    if (!runs.length) {
-      body.appendChild(el("p", "status-col__empty", "no runs recorded"));
+    var runs = (data && data.runs) || [];
+    var total = data && typeof data.total === "number" ? data.total : runs.length;
+    if (total === 0) {
+      runsPage = 0;
+      body.appendChild(historyEmptyState());
       return;
     }
+    var pages = Math.max(1, Math.ceil(total / RUNS_PAGE_SIZE));
+    if (runsPage > pages - 1) runsPage = pages - 1;
+
     var table = el("table", "run-table");
     var thead = el("thead");
     var headRow = el("tr");
-    ["finished", "kind", "task", "outcome", "exit", "commit", "duration", "reason"].forEach(function (h) {
+    ["time", "kind", "task", "outcome", "duration", "commit", "reason"].forEach(function (h) {
       headRow.appendChild(el("th", null, h));
     });
     thead.appendChild(headRow);
@@ -894,20 +933,67 @@
       var row = el("tr");
       row.appendChild(el("td", null, formatTime(run.finished_at)));
       row.appendChild(el("td", null, run.kind || "—"));
-      row.appendChild(el("td", "mono", run.task_id || "—"));
+
+      var task = el("td", "run-task");
+      task.appendChild(el("span", "run-task-id", run.task_id || "—"));
+      if (run.task_title) {
+        task.appendChild(document.createTextNode(" "));
+        task.appendChild(el("span", "run-task-title", run.task_title));
+      }
+      row.appendChild(task);
+
       row.appendChild(el("td", "badge badge--" + outcomeBadge(run.outcome), run.outcome));
-      row.appendChild(
-        el("td", "mono", run.agent_exit_code === null || run.agent_exit_code === undefined ? "—" : String(run.agent_exit_code))
-      );
-      row.appendChild(el("td", "mono", run.commit_sha || "—"));
-      row.appendChild(
-        el("td", "mono", run.duration_seconds === null || run.duration_seconds === undefined ? "—" : run.duration_seconds + "s")
-      );
+      row.appendChild(el("td", "mono", formatDuration(run.duration_seconds)));
+      var commit = el("td", "mono", shortSha(run.commit_sha));
+      if (run.commit_sha) commit.title = run.commit_sha;
+      row.appendChild(commit);
       row.appendChild(el("td", run.reason ? "run-reason" : null, run.reason || "—"));
       tbody.appendChild(row);
     });
     table.appendChild(tbody);
     body.appendChild(table);
+
+    var pager = el("div", "run-pager");
+    var prevBtn = el("button", "run-pager__btn", "← Newer");
+    prevBtn.setAttribute("type", "button");
+    prevBtn.disabled = runsPage === 0;
+    prevBtn.addEventListener("click", function () {
+      if (runsPage > 0) {
+        runsPage -= 1;
+        loadRuns();
+      }
+    });
+    var info = el(
+      "span",
+      "run-pager__info",
+      "page " + (runsPage + 1) + " of " + pages + " · " + total + (total === 1 ? " run" : " runs")
+    );
+    var nextBtn = el("button", "run-pager__btn", "Older →");
+    nextBtn.setAttribute("type", "button");
+    nextBtn.disabled = runsPage >= pages - 1;
+    nextBtn.addEventListener("click", function () {
+      if (runsPage < pages - 1) {
+        runsPage += 1;
+        loadRuns();
+      }
+    });
+    pager.appendChild(prevBtn);
+    pager.appendChild(info);
+    pager.appendChild(nextBtn);
+    body.appendChild(pager);
+  }
+
+  function loadRuns() {
+    if (!API) return;
+    var url = API + "runs?limit=" + RUNS_PAGE_SIZE + "&offset=" + runsPage * RUNS_PAGE_SIZE;
+    fetchJSON(url)
+      .then(function (data) {
+        renderHistory(data);
+        setDown(false);
+      })
+      .catch(function () {
+        setDown(true);
+      });
   }
 
   function renderTextPanel(id, text, fallback) {
@@ -1240,15 +1326,8 @@
         .catch(function () {
           setDown(true);
         });
-    } else if (tab === "runs") {
-      fetchJSON(API + "runs?limit=50")
-        .then(function (data) {
-          renderRuns(data);
-          setDown(false);
-        })
-        .catch(function () {
-          setDown(true);
-        });
+    } else if (tab === "history") {
+      loadRuns();
     } else if (tab === "blocker") {
       fetchJSON(API + "blocker")
         .then(function (data) {

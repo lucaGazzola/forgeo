@@ -1228,8 +1228,44 @@ def test_runs_endpoint(web_env):
     server, _ = web_env
     status, data = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/runs")
     assert status == 200
-    assert [run["task_id"] for run in data] == ["TASK-001"]
-    assert data[0]["outcome"] == "SUCCESS"
+    assert data["runs"][0]["task_id"] == "TASK-001"
+    assert data["runs"][0]["outcome"] == "SUCCESS"
+    assert data["total"] == 1
+    assert data["offset"] == 0
+    assert data["limit"] == 10
+
+
+def test_runs_endpoint_paginates(registry, central_server):
+    """The runs endpoint pages newest-first and reports the real total."""
+    records = []
+    for index in range(1, 8):
+        record = run_record(f"TASK-{index:03d}", RunOutcome.SUCCESS)
+        record.finished_at = FINISHED.replace(second=index)
+        records.append(record)
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        runs=records,
+    )
+    base = f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs"
+
+    status, data = _get(f"{base}?limit=3&offset=0")
+    assert status == 200
+    assert data["total"] == 7
+    assert data["limit"] == 3
+    assert data["offset"] == 0
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-007", "TASK-006", "TASK-005"]
+
+    status, data = _get(f"{base}?limit=3&offset=3")
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-004", "TASK-003", "TASK-002"]
+
+    status, data = _get(f"{base}?limit=3&offset=6")
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-001"]
+
+    status, data = _get(f"{base}?limit=3&offset=99")
+    assert data["runs"] == []
+    assert data["total"] == 7
 
 
 def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
@@ -1245,8 +1281,8 @@ def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
     )
     status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
     assert status == 200
-    assert data[0]["commit_sha"] is None
-    assert data[0]["reason"] == "Agent exited 0 but produced no changes"
+    assert data["runs"][0]["commit_sha"] is None
+    assert data["runs"][0]["reason"] == "Agent exited 0 but produced no changes"
 
 
 def test_blocker_endpoint(web_env):
@@ -1554,7 +1590,8 @@ def test_missing_data_files_render_empty(registry, central_server):
 
     status, data = _get(f"{base}/runs")
     assert status == 200
-    assert data == []
+    assert data["runs"] == []
+    assert data["total"] == 0
 
     status, data = _get(f"{base}/blocker")
     assert status == 200

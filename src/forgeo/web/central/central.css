@@ -265,7 +265,7 @@
   overflow: auto;
 }
 
-/* ---------- Run table ---------- */
+/* ---------- Run history table ---------- */
 
 .table-wrap {
   background: var(--surface);
@@ -312,6 +312,63 @@
 .run-table .run-reason {
   color: var(--blocked);
   white-space: normal;
+}
+
+.run-table .run-task {
+  max-width: 360px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-table .run-task-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.run-table .run-task-title {
+  color: var(--text-muted);
+}
+
+.run-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.run-pager__btn {
+  appearance: none;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.run-pager__btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--border);
+}
+
+.run-pager__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.run-pager__info {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Footer ---------- */

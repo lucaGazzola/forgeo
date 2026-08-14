@@ -124,6 +124,15 @@
   .step h3 { margin-top: 14px; font-size: 18.5px; font-weight: 700; }
   .step p { margin-top: 10px; font-size: 14.5px; color: var(--muted); }
 
+  /* ---------- video ---------- */
+  .video-wrap { margin-top: 48px; }
+  .video-frame { border-radius: var(--radius); border: 1px solid var(--panel-border); overflow: hidden;
+    background: #0a0f1c; box-shadow: 0 40px 100px rgba(0,0,0,0.6), 0 0 80px rgba(34,211,238,0.07); }
+  .video-frame iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; }
+  .video-caption { margin-top: 20px; text-align: center; color: var(--muted); font-size: 14.5px; }
+  .video-caption a { color: #a5b4fc; font-weight: 600; }
+  .video-caption a:hover { text-decoration: underline; }
+
   /* ---------- screenshot ---------- */
   .shot-wrap { margin-top: 56px; }
   .browser { border-radius: var(--radius); border: 1px solid var(--panel-border); overflow: hidden;
@@ -196,6 +205,7 @@
     </a>
     <div class="nav-links">
       <a href="#how">How it works</a>
+      <a href="#watch">Watch</a>
       <a href="#console">Dashboard</a>
       <a href="#features">Features</a>
       <a href="/docs/">Docs</a>
@@ -268,6 +278,20 @@
         <h3>Or refactors on its own</h3>
         <p>Empty backlog? The same agent reviews the codebase and cleans it up. Forgeo only interrupts you when a decision is genuinely yours.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="watch">
+  <div class="wrap">
+    <span class="eyebrow">Watch it in action</span>
+    <h2>See Forgeo run end to end</h2>
+    <p class="sub">From a plain backlog to shipped commits: a walkthrough of Forgeo running a coding agent through real tasks, with the live dashboard alongside.</p>
+    <div class="video-wrap">
+      <div class="video-frame">
+        <iframe src="https://www.youtube.com/embed/D3Q2W84Qggo" title="Forgeo in action" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+      </div>
+      <p class="video-caption">Watch on <a href="https://www.youtube.com/watch?v=D3Q2W84Qggo">YouTube</a>.</p>
     </div>
   </div>
 </section>

@@ -29,50 +29,92 @@ agent CLI.
 
 The full walkthrough is in [Getting started](docs/getting-started.md).
 
-```bash
-# 1. Install (any one of these)
+### 1. Install the CLI
 
-# Homebrew (macOS / Linux)
+Pick any one installer (no root needed; re-running it upgrades Forgeo).
+
+```bash
+# Homebrew (macOS / Linux): prebuilt binary, no Python required
 brew install lucaGazzola/forgeo/forgeo
 
-# or: the one-liner (prebuilt binary, no Python required)
+# One-liner (Linux / macOS / Windows): prebuilt binary, falls back to pip
 curl -fsSL https://forgeo.org/install.sh | bash
 
-# or: pipx
+# pip (Python 3.11+)
 pipx install forgeo-cli
-
-# 2. Create your Forgeo (guided wizard, run from your project root)
-forgeo init
-
-# 3. Start Forgeo (detached in the background; exits immediately)
-forgeo start   # every interval_minutes, implement the oldest OPEN task (dependencies first)
-forgeo stop    # stop the daemon again
 ```
 
-`forgeo init` writes `forgeo.yaml` and a `.forgeo/` folder for the backlog
-and logs. Fill the backlog with plain JSON tasks (see
-[Backlog format](docs/backlog.md)) or add them from the web console while
-it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <http://0.0.0.0:8790>), or keep it always-on with `forgeo web -d` (stop it with `forgeo web stop`, check it with `forgeo web status`):
+### 2. Create your Forgeo
+
+```bash
+forgeo init
+```
+
+Guided wizard, run from your project root. Writes `forgeo.yaml` (the
+config) and a `.forgeo/` folder for the backlog, logs and blocker files.
+
+The base flow is then three steps: fill the backlog, check the
+configuration, start the daemon.
+
+### 3. Fill the backlog
+
+```bash
+# Either: edit the backlog file by hand — a plain JSON task list (see
+# Backlog format), created on first use:
+#   .forgeo/backlog.json
+
+# Or: add tasks from the web console once your forgeo is registered
+# (first `forgeo start` registers it automatically):
+forgeo web      # dashboard at http://0.0.0.0:8790, or keep it on with `forgeo web -d`
+```
 
 ![Forgeo web console](docs/img/console.png)
 
-By default the dashboard is open to anyone who can reach the port. On a
-shared host, protect it with bearer-token auth: `forgeo web --token`
-generates a token (printed once, saved to `~/.config/forgeo/web.toml`) and
-requires `Authorization: Bearer <token>` on every `/api/*` route — see
-[Web console & HTTP API](docs/web-console-api.md).
+### 4. Check the configuration
 
-One-off commands: `forgeo once` (single cycle), `forgeo status` (summary),
-`forgeo validate` (read-only dry run before starting), `forgeo stop`,
-`forgeo restart`, every command is in the
-[CLI reference](docs/cli-reference.md).
+```bash
+forgeo validate
+```
 
-You can run several factories at once, one per repository, each config is
-fully independent (own backlog, logs, locks). Register each `forgeo.yaml`
-in the instance registry with `forgeo instance add NAME --config PATH`,
-manage any of them by name with `forgeo start/status/stop --name NAME`,
-list them all with `forgeo list`, and get one aggregate overview with the
-central dashboard, `forgeo web`.
+Read-only dry run before the first start: verifies `forgeo.yaml`, the git
+repo, branch and remote, that the backlog parses (fetching it once when it
+is an HTTP endpoint), the agent command, and the lock state. Never invokes
+the agent and writes nothing.
+
+### 5. Start the daemon
+
+```bash
+forgeo start
+```
+
+Starts the daemon **detached in the background** and exits. Every
+`interval_minutes` it runs one cycle: pick the oldest `OPEN` task whose
+dependencies are all `COMPLETED`, run your coding agent on it, commit the
+result. When the backlog is empty, the same agent runs a refactoring pass
+over the codebase instead.
+
+### Day-to-day commands
+
+```bash
+forgeo status    # Config, backlog counts, next runnable task, daemon running?, last outcome
+forgeo once      # Run exactly one cycle in the foreground, no daemon left behind
+forgeo stop      # Stop the background daemon
+forgeo restart   # Stop and start again (re-reads forgeo.yaml after edits)
+forgeo web       # Dashboard: every instance's backlog, run history and logs
+```
+
+`forgeo web` defaults to an open dashboard on `http://0.0.0.0:8790`; on a
+shared host protect it with `forgeo web --token` (requires
+`Authorization: Bearer <token>` on every `/api/*` route — see
+[Web console & HTTP API](docs/web-console-api.md)).
+
+### Multiple repositories (instances)
+
+Run several factories at once, one per repository; each config is fully
+independent (own backlog, logs, locks). Register each `forgeo.yaml` with
+`forgeo instance add NAME --config PATH`, manage any of them by name with
+`forgeo start/status/stop --name NAME`, list them all with `forgeo list`,
+and get one aggregate overview with the central dashboard, `forgeo web`.
 
 ## Documentation
 

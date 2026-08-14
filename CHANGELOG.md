@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `forgeo validate` (and the pre-flight check before a detached
+  `forgeo start`) distinguishes a repository with no commits yet: a clean
+  tree is now a warning — the first cycle creates the initial commit — while
+  a non-clean tree is a problem that names the fix
+  (`git add -A && git commit -m "Initial commit"`), since every file is
+  untracked and every cycle would otherwise refuse as dirty. Previously
+  "no commits" was always a hard problem with a misleading message.
+
 - `forgeo start` now starts the daemon **detached in the background and
   exits**, like `forgeo restart` and the web console's start button already
   did; the daemon is managed with `forgeo stop`/`forgeo restart`/`forgeo

@@ -145,7 +145,11 @@ It validates, reporting **all** problems at once:
   missing `agent_sandbox_image` in docker mode, ...);
 - the repository exists and is a git working tree (and `git` is on `PATH`);
 - the branch resolves — a missing branch is a warning (it is created on the
-  first cycle), unless the repository has no commits to create it from;
+  first cycle), as is a repository with no commits and a clean tree (the
+  first cycle creates the initial commit). A repository with no commits and
+  a non-clean tree is a problem: every file is untracked, so every cycle
+  would refuse as dirty — make an initial commit first
+  (`git add -A && git commit -m "Initial commit"`);
 - the remote resolves when `remote` is set (`git remote get-url`);
 - the backlog parses and every task is valid (a missing backlog is fine: it
   is treated as empty on the first cycle);

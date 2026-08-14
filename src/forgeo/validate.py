@@ -104,16 +104,27 @@ def _check_branch(config: ForgeoConfig, git: GitManager, report: ValidationRepor
     try:
         git._run("rev-parse", "--verify", f"refs/heads/{config.branch}")
     except GitError:
-        # The daemon creates a missing branch from HEAD on its first cycle,
-        # so this only becomes a real problem when there is no HEAD to
-        # create it from (a repository with no commits yet).
+        # The daemon creates a missing branch from HEAD on its first cycle.
+        # With no commits at all the branch can still be created on the
+        # unborn HEAD (git switch -c works), and the first cycle's commit
+        # anchors it — but only a clean tree can run: a repository with no
+        # commits has every file untracked, so any file at all would make
+        # every cycle refuse as dirty.
         try:
             git._run("rev-parse", "--verify", "HEAD")
         except GitError:
-            report.problems.append(
-                f"branch {config.branch!r} does not exist and the repository "
-                "has no commits to create it from"
-            )
+            if git._run("status", "--porcelain"):
+                report.problems.append(
+                    "repository has no commits yet and the working tree is "
+                    "not clean; make an initial commit first "
+                    "(`git add -A && git commit -m \"Initial commit\"`) — "
+                    "forgeo never commits uncommitted work"
+                )
+            else:
+                report.warnings.append(
+                    "repository has no commits yet; the first cycle will "
+                    "create the initial commit"
+                )
         else:
             report.warnings.append(
                 f"branch {config.branch!r} does not exist yet; it will be "

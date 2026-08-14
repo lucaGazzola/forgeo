@@ -563,6 +563,32 @@ def test_validate_remote_resolves(git_repo, tmp_path, capsys):
     assert "Forgeo is ready to run." in out
 
 
+def test_validate_empty_repo_with_files_needs_initial_commit(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "forgeo.yaml").write_text("agent_command: echo\n", encoding="utf-8")
+    config_path = write_config(repo, tmp_path)
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "no commits yet" in out
+    assert "git add -A && git commit" in out
+
+
+def test_validate_empty_repo_with_clean_tree_is_warning(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    config_path = write_config(repo, tmp_path)
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "no commits yet" in out
+    assert "first cycle will create the initial commit" in out
+    assert "Forgeo is ready to run." in out
+
+
 def test_validate_bad_backlog_json(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
     (tmp_path / "backlog.json").write_text("{not json\n", encoding="utf-8")

@@ -80,6 +80,19 @@ def test_run_setup_defaults(tmp_path):
     assert (project / ".forgeo").is_dir()
 
 
+def test_run_setup_dumps_prompts_as_literal_block_scalars(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    _run_setup(project, "", "", "n", "Line one.", "Line two.", "", "y")
+
+    text = (project / "forgeo.yaml").read_text(encoding="utf-8")
+    assert "agent_command: |-" in text
+    assert "refactor_prompt: |-" in text
+    data = yaml.safe_load(text)
+    assert data["refactor_prompt"] == "Line one.\nLine two."
+    assert data["agent_command"] == build_agent_command(DEFAULT_AGENT_COMMAND)
+
+
 def test_run_setup_custom_values(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

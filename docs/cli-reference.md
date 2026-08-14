@@ -33,18 +33,24 @@ See [Getting Started](getting-started.md) for what the wizard asks.
 
 ## `forgeo start`
 
-Start the scheduled forgeo daemon for a repository. Runs in the foreground;
-interrupt with Ctrl-C or stop from another terminal with `forgeo stop`.
+Start the scheduled forgeo daemon for a repository. By default the daemon is
+started **detached in the background** and the command exits immediately; the
+daemon keeps running, logs to `log_file`, and is managed with `forgeo stop`
+and `forgeo restart`. Pass `-f`/`--foreground` to run the daemon in the
+foreground instead, interruptible with Ctrl-C.
 
 | Flag | Description |
 | --- | --- |
 | `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
 | `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
 | `--interval-minutes <n>` | Override the schedule interval from the config for this run. |
+| `-f`, `--foreground` | Run the daemon in the foreground instead of starting it detached. |
 
 The daemon wakes every `interval_minutes` and runs one cycle. When no config
 exists, `forgeo start` offers the guided setup. A second `start` (or `once`)
-is refused while the per-forgeo lock is held.
+is refused while the per-forgeo lock is held. Before detaching, `start` runs
+the same read-only checks as `forgeo validate` and refuses to start when it
+finds problems, so a broken config never leaves a silently dead daemon.
 
 When given `--config` and that config is not in the instance registry yet,
 `forgeo start` registers it automatically under the config's `name` field —
@@ -261,9 +267,8 @@ running.
 | `--token [TOKEN]` | Require a bearer token on every `/api/*` route (see below). |
 | `--timeout <seconds>` | How long to wait for the dashboard to bind when detached (default `30`). |
 
-Without `-d` the dashboard runs in the foreground (like `forgeo start`);
-interrupt it with Ctrl-C or stop it from another terminal with
-`forgeo web stop`.
+Without `-d` the dashboard runs in the foreground; interrupt it with Ctrl-C
+or stop it from another terminal with `forgeo web stop`.
 
 The dashboard is **host-global** (one per user, not per-repo), so it cannot
 reuse a per-instance `backlog.lock`. Instead it owns a lock file at

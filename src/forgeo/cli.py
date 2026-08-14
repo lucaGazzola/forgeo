@@ -6,13 +6,15 @@ Commands:
   forgeo folder, the coding agent command, and the refactor prompt, then
   writes a ``forgeo.yaml``. Running ``forgeo`` or ``forgeo start`` without
   a config triggers it automatically.
-* ``forgeo start --config forgeo.yaml`` — run the scheduled forgeo on one
-  repository. Every ``interval_minutes`` it picks an ``OPEN`` task from the
-  backlog, or runs a refactoring pass when the backlog is empty; everything
-  is committed and pushed on the main branch. When the agent needs human
-  input, a detailed ``BLOCKER.md`` file is written with what you must do.
-  The daemon binds no ports; live state is written to ``daemon.state.json``
-  and is served to you by ``forgeo web``. The daemon watches
+* ``forgeo start --config forgeo.yaml`` — start the scheduled forgeo on one
+  repository detached in the background and exit. Every ``interval_minutes``
+  it picks an ``OPEN`` task from the backlog, or runs a refactoring pass when
+  the backlog is empty; everything is committed and pushed on the main
+  branch. When the agent needs human input, a detailed ``BLOCKER.md`` file is
+  written with what you must do. The daemon binds no ports; live state is
+  written to ``daemon.state.json`` and is served to you by ``forgeo web``.
+  ``forgeo start -f`` (``--foreground``) runs the daemon in the foreground
+  instead, interruptible with Ctrl-C. The daemon watches
   ``forgeo.yaml`` and re-reads it on the next cycle boundary when it changes
   (or on ``SIGHUP``); path changes (``repo``, ``backlog``, ``blocker_file``,
   ``log_file``) still need a ``forgeo restart``.
@@ -27,9 +29,9 @@ Commands:
    forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
    starts an agent.
 * ``forgeo stop --config forgeo.yaml`` — stop a running daemon gracefully
-   (SIGTERM; a cycle in progress finishes first).
+  (SIGTERM; a cycle in progress finishes first).
 * ``forgeo restart --config forgeo.yaml`` — stop the daemon when running,
-   then start it again detached in the background, re-reading the config.
+  then start it again detached in the background, re-reading the config.
 * ``forgeo instance add NAME --config PATH`` — register an existing
    ``forgeo.yaml`` under a stable instance name. Optional: ``start`` and
    ``stop`` register Forgeo automatically under its config's ``name``
@@ -93,11 +95,12 @@ from forgeo.central import (
     WEB_STOP_TIMEOUT_SECONDS,
 )
 from forgeo.config import load_config
-from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held
+from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.daemon_control import (
     STOP_TIMEOUT_SECONDS,
     DaemonError,
     restart_daemon,
+    start_daemon,
     stop_daemon,
 )
 from forgeo.forgeo import Forgeo
@@ -144,13 +147,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Overwrite an existing config file."
     )
 
-    start_parser = sub.add_parser("start", help="Start the scheduled forgeo for a repository.")
+    start_parser = sub.add_parser(
+        "start", help="Start the scheduled forgeo daemon for a repository."
+    )
     _add_config_or_name(start_parser)
     start_parser.add_argument(
         "--interval-minutes",
         type=int,
         default=None,
         help="Override the schedule interval from the config file.",
+    )
+    start_parser.add_argument(
+        "-f",
+        "--foreground",
+        action="store_true",
+        help="Run the daemon in the foreground instead of starting it "
+        "detached in the background.",
     )
 
     once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
@@ -455,11 +467,11 @@ def _prepare_worker(
 ) -> tuple[Path, ForgeoConfig, Forgeo, Any] | None:
     """Resolve the config, take the run lock, and build Forgeo.
 
-    Shared by ``start`` and ``once``. With ``register=True`` the instance is
-    added to the registry *before* the run lock is taken, so a visible lock
-    always implies a registered instance. Returns ``None`` (after printing
-    an error) when any step fails; on success the caller owns the lock and
-    must close it.
+    Shared by ``once`` and the foreground ``start``. With ``register=True``
+    the instance is added to the registry *before* the run lock is taken, so
+    a visible lock always implies a registered instance. Returns ``None``
+    (after printing an error) when any step fails; on success the caller
+    owns the lock and must close it.
     """
     config_path = _resolved_config_path(args)
     if config_path is None:
@@ -486,7 +498,80 @@ def _prepare_worker(
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    """Handle ``forgeo start``: the persistent scheduled worker."""
+    """Handle ``forgeo start``: the scheduled worker.
+
+    By default the daemon is started detached in the background and this
+    command exits; ``--foreground`` runs it in the foreground instead.
+    """
+    if getattr(args, "foreground", False):
+        return _cmd_start_foreground(args)
+    return _cmd_start_detached(args)
+
+
+def _cmd_start_detached(args: argparse.Namespace) -> int:
+    """Handle ``forgeo start`` without ``--foreground``: detach and exit.
+
+    Resolves and registers the config like the foreground path, refuses when
+    the per-forgeo lock is already held, fails fast when ``forgeo validate``
+    finds problems (so a broken config never leaves a silently dead daemon),
+    then launches the detached daemon and returns its pid.
+    """
+    config_path = _resolved_config_path(args)
+    if config_path is None:
+        return 1
+    try:
+        config = _resolve_config(args, config_path)
+    except yaml.YAMLError as exc:
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return 1
+    except ValidationError as exc:
+        console.print(
+            f"[red]Config file {config_path} is invalid:[/red]",
+            soft_wrap=True,
+        )
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error["loc"])
+            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+        return 1
+    if config is None:
+        return 1
+    _register_if_missing(args, config_path, config)
+    lock_path = config.backlog.with_suffix(".lock")
+    if is_lock_held(lock_path):
+        pid = read_lock_pid(lock_path)
+        suffix = f" (pid {pid})" if pid is not None else ""
+        console.print(
+            f"[red]Forgeo {config.name!r} is already running{suffix}; "
+            f"stop it with `forgeo stop`.[/red]"
+        )
+        return 1
+    report = validate_config(config)
+    if not report.healthy:
+        console.print(render_report(config, report), soft_wrap=True)
+        return 1
+    extra_args = (
+        ["--interval-minutes", str(args.interval_minutes)]
+        if args.interval_minutes is not None
+        else None
+    )
+    try:
+        pid = start_daemon(config_path, config, extra_args=extra_args)
+    except DaemonError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    console.print(
+        f"[green]Forgeo {config.name!r} started in the background "
+        f"(pid {pid}, interval {config.interval_minutes} min).[/green]"
+    )
+    return 0
+
+
+def _cmd_start_foreground(args: argparse.Namespace) -> int:
+    """Handle ``forgeo start -f``: the persistent scheduled worker."""
     prepared = _prepare_worker(args, register=True)
     if prepared is None:
         return 1

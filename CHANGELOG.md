@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `forgeo start` now starts the daemon **detached in the background and
+  exits**, like `forgeo restart` and the web console's start button already
+  did; the daemon is managed with `forgeo stop`/`forgeo restart`/`forgeo
+  status`. `forgeo start -f` (`--foreground`) keeps the historical
+  foreground behavior. A detached start refuses while the per-forgeo lock is
+  held and runs the same read-only checks as `forgeo validate` first, so a
+  broken config fails fast instead of leaving a silently dead daemon.
+  `--interval-minutes` is forwarded to the detached daemon.
+
 - The daemon reloads `forgeo.yaml` on the next cycle boundary when the file
   changes (or on `SIGHUP`): a valid change is revalidated, logged, and used
   from the next cycle; an invalid change is logged and the last valid config

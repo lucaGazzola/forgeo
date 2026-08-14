@@ -4,10 +4,10 @@
 ``POST /api/instances/<name>/start``, ``/stop`` and ``/restart`` operate on
 the same per-instance lock file: SIGTERM the recorded PID and wait for the
 lock to drop (a cycle in progress always finishes first), then — for start
-and restart — launch a detached ``forgeo start`` process that re-reads
-``forgeo.yaml`` on boot. A plain config edit is picked up by the running
-daemon on its next cycle; a restart is how path changes (which the daemon
-pins to its startup values) take effect.
+and restart — launch a detached ``forgeo start --foreground`` process that
+re-reads ``forgeo.yaml`` on boot. A plain config edit is picked up by the
+running daemon on its next cycle; a restart is how path changes (which the
+daemon pins to its startup values) take effect.
 
 Everything here is lock-file driven and never touches the config-save flow.
 """
@@ -103,16 +103,34 @@ def stop_daemon(
     )
 
 
-def start_daemon(config_path: str | Path, config: ForgeoConfig) -> int:
-    """Launch a detached ``forgeo start`` daemon; returns its recorded pid.
+def start_daemon(
+    config_path: str | Path,
+    config: ForgeoConfig,
+    *,
+    extra_args: list[str] | None = None,
+) -> int:
+    """Launch a detached ``forgeo start --foreground`` daemon; returns its pid.
 
     The daemon re-reads ``forgeo.yaml`` on boot, so a config saved from the
-    web console applies on the next start. Raises :class:`DaemonError` when
-    the daemon fails to start within :data:`START_TIMEOUT_SECONDS`.
+    web console applies on the next start. ``extra_args`` (e.g. an
+    ``--interval-minutes`` override) are forwarded to the child. Raises
+    :class:`DaemonError` when the daemon fails to start within
+    :data:`START_TIMEOUT_SECONDS`.
     """
     lock_path = _lock_path(config)
+    command = [
+        sys.executable,
+        "-m",
+        "forgeo",
+        "start",
+        "--foreground",
+        "--config",
+        str(config_path),
+    ]
+    if extra_args:
+        command.extend(extra_args)
     proc = subprocess.Popen(
-        [sys.executable, "-m", "forgeo", "start", "--config", str(config_path)],
+        command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

@@ -24,6 +24,7 @@ from forgeo.cli import (
     cmd_instance_rm,
     cmd_once,
     cmd_restart,
+    cmd_start,
     cmd_status,
     cmd_stop,
     cmd_validate,
@@ -94,6 +95,14 @@ def restart_args(config_path: Path, timeout: float = 30.0) -> argparse.Namespace
     return argparse.Namespace(config=config_path, timeout=timeout)
 
 
+def start_args(config_path: Path) -> argparse.Namespace:
+    return argparse.Namespace(
+        config=config_path,
+        interval_minutes=None,
+        foreground=False,
+    )
+
+
 def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
     """Poll ``predicate`` until it holds; False on timeout."""
     deadline = time.monotonic() + timeout
@@ -105,9 +114,9 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
 
 
 def spawn_daemon(config_path: Path) -> subprocess.Popen[bytes]:
-    """Start a real ``forgeo start`` subprocess, detached like restart does."""
+    """Start a real ``forgeo start --foreground`` subprocess, like restart does."""
     return subprocess.Popen(
-        [sys.executable, "-m", "forgeo", "start", "--config", str(config_path)],
+        [sys.executable, "-m", "forgeo", "start", "--foreground", "--config", str(config_path)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -683,15 +692,48 @@ def test_start_registers_instance_in_registry(git_repo, tmp_path, monkeypatch, c
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
     lock_path = tmp_path / "backlog.lock"
 
+    assert cmd_start(start_args(config_path)) == 0
+    try:
+        out = capsys.readouterr().out
+        assert "started in the background" in out
+        assert "interval 600 min" in out
+        assert wait_for(lambda: is_lock_held(lock_path))
+        assert load_registry() == {"test-forgeo": str(config_path.resolve())}
+        assert read_lock_pid(lock_path) is not None
+        assert cmd_stop(stop_args(config_path)) == 0
+        assert wait_for(lambda: not is_lock_held(lock_path))
+    finally:
+        if is_lock_held(lock_path):
+            cmd_stop(stop_args(config_path))
+
+
+def test_start_detached_refuses_when_already_running(git_repo, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path, interval_minutes=600)
+    lock_path = tmp_path / "backlog.lock"
     proc = spawn_daemon(config_path)
     try:
         assert wait_for(lambda: is_lock_held(lock_path))
-        assert load_registry() == {"test-forgeo": str(config_path.resolve())}
-        assert cmd_stop(stop_args(config_path)) == 0
-        assert wait_for(lambda: proc.poll() is not None)
+
+        assert cmd_start(start_args(config_path)) == 1
+        assert "already running" in capsys.readouterr().out
     finally:
         if proc.poll() is None:
             proc.kill()
+        if is_lock_held(lock_path):
+            cmd_stop(stop_args(config_path))
+
+
+def test_start_detached_invalid_config_fails_fast(git_repo, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path, interval_minutes=600)
+    lock_path = tmp_path / "backlog.lock"
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("repo: /nonexistent/forgeo-repo\n")
+
+    assert cmd_start(start_args(config_path)) == 1
+    assert not is_lock_held(lock_path)
+    assert "not ready to run" in capsys.readouterr().out
 
 
 def test_stop_unknown_name_does_not_register(tmp_path, monkeypatch, capsys):

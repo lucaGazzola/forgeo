@@ -194,7 +194,9 @@ def test_offer_setup_accepts(monkeypatch):
 
 def test_cmd_start_missing_config_offers_setup(monkeypatch, tmp_path):
     monkeypatch.setattr("forgeo.cli.Confirm.ask", lambda *a, **k: False)
-    args = argparse.Namespace(config=tmp_path / "forgeo.yaml", interval_minutes=None)
+    args = argparse.Namespace(
+        config=tmp_path / "forgeo.yaml", interval_minutes=None, foreground=False
+    )
     assert cmd_start(args) == 1
 
 

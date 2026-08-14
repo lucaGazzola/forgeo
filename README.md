@@ -44,8 +44,9 @@ pipx install forgeo-cli
 # 2. Create your Forgeo (guided wizard, run from your project root)
 forgeo init
 
-# 3. Start Forgeo
-forgeo start   # run forever: every interval_minutes, implement the oldest OPEN task (dependencies first)
+# 3. Start Forgeo (detached in the background; exits immediately)
+forgeo start   # every interval_minutes, implement the oldest OPEN task (dependencies first)
+forgeo stop    # stop the daemon again
 ```
 
 `forgeo init` writes `forgeo.yaml` and a `.forgeo/` folder for the backlog

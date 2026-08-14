@@ -18,7 +18,7 @@ forgeo web stop          # SIGTERM the background dashboard
 forgeo web --token       # optional: generate a token and require it on /api/*
 ```
 
-It runs in the foreground like `forgeo start`, or in the background with
+It runs in the foreground by default, or in the background with
 `-d`/`--detach` (managed through `forgeo web stop`/`forgeo web status` and
 its host-global `~/.config/forgeo/web.lock` — see the
 [CLI reference](cli-reference.md#forgeo-web)). By default it binds
@@ -469,7 +469,8 @@ tab that moves paths is applied: the daemon re-reads `forgeo.yaml` on every
 start, so a restart picks up the saved settings (a plain config edit is
 picked up on the next cycle without one). No request body is required.
 
-- `start` — launch a detached `forgeo start` for the instance. Refused with
+- `start` — launch a detached `forgeo start` for the instance (the same
+  background daemon `forgeo start` launches). Refused with
   `409` when the daemon is already running.
 - `stop` — SIGTERM the running daemon and wait for it to exit. A cycle in
   progress always finishes first, so partial work is never lost. When the

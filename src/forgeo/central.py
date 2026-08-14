@@ -378,16 +378,28 @@ def _read_tasks(config: ForgeoConfig | None) -> list[Task]:
     return parsed
 
 
-def _task_payload(task: Task, tasks: list[Task]) -> dict[str, Any]:
+def _task_payload(
+    task: Task,
+    tasks: list[Task],
+    config: ForgeoConfig | None = None,
+) -> dict[str, Any]:
     """Serialize a task for the API, annotating its unsatisfied dependencies.
 
     The extra ``unsatisfied_dependencies`` field lists every dependency id
     that is not ``COMPLETED`` yet (with its current status, or ``missing``
     when it does not exist), so the web console can explain why a task is
-    waiting before Forgeo may pick it.
+    waiting before Forgeo may pick it. When the instance's config is
+    available, the task also carries its effective retry budget
+    (``retry_budget``, the per-task ``retries_left`` override falling back to
+    the config's ``failed_retry_max``) and ``retries_remaining`` so the
+    console can show whether a FAILED task will be retried automatically.
     """
     payload = task.model_dump(mode="json")
     payload["unsatisfied_dependencies"] = unsatisfied_dependencies(tasks, task)
+    if config is not None:
+        budget = task.retries_left if task.retries_left is not None else config.failed_retry_max
+        payload["retry_budget"] = budget
+        payload["retries_remaining"] = max(0, budget - task.retry_count)
     return payload
 
 
@@ -1093,7 +1105,8 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 if len(parts) == 2:
                     tasks = _read_tasks(info.config)
                     self._send_json(
-                        200, [_task_payload(t, tasks) for t in tasks]
+                        200,
+                        [_task_payload(t, tasks, info.config) for t in tasks],
                     )
                     return
                 if len(parts) == 3:
@@ -1101,7 +1114,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     tasks = _read_tasks(info.config)
                     for task in tasks:
                         if task.id == task_id:
-                            self._send_json(200, _task_payload(task, tasks))
+                            self._send_json(200, _task_payload(task, tasks, info.config))
                             return
                     self._send_json(404, {"error": "not found"})
                     return

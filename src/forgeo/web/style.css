@@ -396,6 +396,11 @@ body {
   color: var(--failed);
   background: rgba(224, 108, 117, 0.1);
 }
+.badge--retry {
+  color: var(--open);
+  background: rgba(143, 183, 255, 0.14);
+  border: 1px solid rgba(143, 183, 255, 0.4);
+}
 
 .task__title {
   margin: 0;

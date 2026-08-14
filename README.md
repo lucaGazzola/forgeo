@@ -17,7 +17,10 @@ a backlog, and it decides what to work on next, runs your
 agent on it, and commits the result. Progress, pending decisions, and history
 are tracked in plain files you can inspect at any time, plus a web dashboard.
 Forgeo only interrupts you when a decision is genuinely yours to
-make, everything else happens autonomously.
+make, everything else happens autonomously. Transient failures (a network
+blip, a flaky test) are retried automatically when the retry policy is
+enabled, and only a task that keeps failing or genuinely needs a human
+decision ever reaches you.
 
 All you need is basic comfort with a terminal, a git repository, and any coding
 agent CLI.

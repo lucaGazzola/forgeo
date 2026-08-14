@@ -175,6 +175,7 @@
         </section>
         <section class="modal__section modal__banner modal__banner--failed" id="task-modal-failure-section" hidden>
           <h3>Failed</h3>
+          <p class="modal__failed-count" id="task-modal-failed-count"></p>
           <p class="modal__desc" id="task-modal-failure-reason"></p>
           <p class="modal__blocked-note">
             The agent errored and its changes were discarded. The failure
@@ -215,6 +216,10 @@
           <h3>Agent command</h3>
           <pre class="modal__command" id="task-modal-command"></pre>
         </section>
+        <section class="modal__section" id="task-modal-retries-section" hidden>
+          <h3>Retry budget</h3>
+          <p class="modal__desc" id="task-modal-retries"></p>
+        </section>
       </div>
       <form class="modal__edit" id="task-modal-edit-form" hidden>
         <div class="modal__edit-field">
@@ -244,6 +249,10 @@
         <div class="modal__edit-field">
           <label for="task-edit-timeout">Agent timeout (seconds)</label>
           <input id="task-edit-timeout" name="agent_timeout_seconds" type="text" autocomplete="off">
+        </div>
+        <div class="modal__edit-field">
+          <label for="task-edit-retries">Retries left (blank = config default)</label>
+          <input id="task-edit-retries" name="retries_left" type="text" autocomplete="off">
         </div>
         <p class="modal__error" id="task-modal-error" hidden></p>
         <div class="modal__edit-actions">

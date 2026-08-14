@@ -553,6 +553,10 @@ details[open] > .run-output__summary::before {
   color: var(--failed);
 }
 
+.modal__banner--failed .modal__failed-count {
+  color: var(--failed);
+}
+
 .modal__banner--waiting {
   border-color: rgba(143, 183, 255, 0.4);
   background: rgba(143, 183, 255, 0.08);
@@ -569,6 +573,15 @@ details[open] > .run-output__summary::before {
   text-transform: uppercase;
   letter-spacing: 0.09em;
   color: var(--blocked);
+}
+
+.modal__failed-count {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--failed);
 }
 
 .modal__blocked-note {

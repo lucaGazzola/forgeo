@@ -136,6 +136,12 @@ class RunRecord(BaseModel):
         "reached the agent or that predate the field, so old records render "
         "as empty instead of erroring.",
     )
+    retry_count: int | None = Field(
+        default=None,
+        description="How many times the task had already been retried when "
+        "this run happened (task runs only; ``None`` for refactor runs and "
+        "records that predate the field).",
+    )
 
 
 class Task(BaseModel):
@@ -146,6 +152,9 @@ class Task(BaseModel):
     times that happened, respectively. ``failure_reason`` is likewise
     engine-managed: the agent's error when the task becomes ``FAILED``. None
     of them are editable through the web console's ``PATCH`` endpoint.
+    ``retries_left`` is a human-set per-task override of the retry budget
+    (``failed_retry_max`` in the config); ``retry_count`` and
+    ``failed_wait_cycles`` are engine-managed retry state.
     """
 
     id: str
@@ -162,6 +171,25 @@ class Task(BaseModel):
     blocker_reason: list[str] = Field(default_factory=list)
     blocked_count: int = Field(default=0, ge=0)
     failure_reason: list[str] = Field(default_factory=list)
+    retries_left: int | None = Field(
+        default=None,
+        ge=0,
+        description="Per-task override of the retry budget: how many times a "
+        "FAILED task may be retried automatically. ``None`` falls back to the "
+        "config's ``failed_retry_max``; ``0`` disables retries for this task.",
+    )
+    retry_count: int = Field(
+        default=0,
+        ge=0,
+        description="Engine-managed: how many times this task has already "
+        "been retried (shown in run records and the web console).",
+    )
+    failed_wait_cycles: int = Field(
+        default=0,
+        ge=0,
+        description="Engine-managed: how many cycles this task has been FAILED "
+        "awaiting a retry (backed off by ``failed_retry_wait_cycles``).",
+    )
 
     @property
     def instruction(self) -> str:
@@ -265,6 +293,12 @@ class ForgeoConfig(BaseModel):
         run_output_lines: How many agent output lines each run record keeps
             in ``runs.jsonl`` (the bounded tail of the agent's stdout/stderr).
             ``0`` disables persisting agent output entirely.
+        failed_retry_max: How many times a ``FAILED`` task is retried
+            automatically (``0`` = disabled: a task stays ``FAILED`` until a
+            human reopens it, exactly as before). A task may override this
+            budget per-task with ``retries_left``.
+        failed_retry_wait_cycles: How many cycles a retry-eligible ``FAILED``
+            task waits (backoff) before it is moved back to ``OPEN``.
         telegram_bot_token: Telegram bot token for blocked-run
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
@@ -298,6 +332,8 @@ class ForgeoConfig(BaseModel):
     log_file: str = "forgeo.log"
     run_history_keep: int = Field(default=2000, ge=0)
     run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
+    failed_retry_max: int = Field(default=0, ge=0)
+    failed_retry_wait_cycles: int = Field(default=1, ge=1)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_webhook_url: str | None = None

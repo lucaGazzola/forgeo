@@ -44,6 +44,7 @@ EDITABLE_TASK_FIELDS = frozenset(
         "files_to_modify",
         "agent_command",
         "agent_timeout_seconds",
+        "retries_left",
     }
 )
 
@@ -191,12 +192,23 @@ class JSONBacklog:
 
         Any transition away from ``FAILED`` clears the persisted
         ``failure_reason``, so a task that stops being failed no longer shows
-        the stale reason.
+        the stale reason. A transition that leaves ``FAILED`` (e.g. a human
+        setting the status back to ``OPEN``) also resets the engine-managed
+        retry state (``retry_count`` and ``failed_wait_cycles``), so the
+        manual retry starts with a fresh retry budget. A task completing
+        normally keeps its ``retry_count``, so the run record can show it.
         """
         def mutate(entry: dict[str, Any]) -> None:
+            leaving_failed = (
+                entry.get("status") == TaskStatus.FAILED.value
+                and status is not TaskStatus.FAILED
+            )
             entry["status"] = status.value
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
+                if leaving_failed:
+                    entry["retry_count"] = 0
+                    entry["failed_wait_cycles"] = 0
 
         return await self._update_entry(task_id, mutate)
 
@@ -221,12 +233,43 @@ class JSONBacklog:
 
         ``reason`` is stored on the task as ``failure_reason`` (shown in the
         web console's task modal) every time a task transitions into
-        ``FAILED``. An unknown ``task_id`` returns ``None`` without writing
-        anything.
+        ``FAILED``. The engine-managed retry wait counter is reset, so a fresh
+        failure restarts the ``failed_retry_wait_cycles`` backoff. An unknown
+        ``task_id`` returns ``None`` without writing anything.
         """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
+            entry["failed_wait_cycles"] = 0
+
+        return await self._update_entry(task_id, mutate)
+
+    async def bump_failed_wait(self, task_id: str) -> Task | None:
+        """Increment a retry-eligible ``FAILED`` task's wait-cycle counter.
+
+        Called once per cycle while a task is ``FAILED`` and awaiting a
+        retry, so the ``failed_retry_wait_cycles`` backoff counts real
+        cycles. An unknown ``task_id`` returns ``None`` without writing
+        anything.
+        """
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["failed_wait_cycles"] = int(entry.get("failed_wait_cycles", 0)) + 1
+
+        return await self._update_entry(task_id, mutate)
+
+    async def retry_task(self, task_id: str) -> Task | None:
+        """Move a retry-eligible ``FAILED`` task back to ``OPEN`` for a retry.
+
+        Increments the engine-managed ``retry_count`` and resets the wait
+        counter; the persisted ``failure_reason`` is cleared because the task
+        is no longer failed (a fresh failure records a fresh reason). An
+        unknown ``task_id`` returns ``None`` without writing anything.
+        """
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["status"] = TaskStatus.OPEN.value
+            entry["retry_count"] = int(entry.get("retry_count", 0)) + 1
+            entry["failed_wait_cycles"] = 0
+            entry["failure_reason"] = []
 
         return await self._update_entry(task_id, mutate)
 
@@ -297,6 +340,12 @@ class JSONBacklog:
                 or not all(isinstance(item, str) for item in updates[field])
             ):
                 raise ValueError(f"{field} must be a list of strings")
+        if "retries_left" in updates and updates["retries_left"] is not None and (
+            not isinstance(updates["retries_left"], int)
+            or isinstance(updates["retries_left"], bool)
+            or updates["retries_left"] < 0
+        ):
+            raise ValueError("retries_left must be a non-negative integer or null")
 
         async with self._lock:
             store = await self._read()

@@ -33,6 +33,8 @@ use `forgeo restart` so it re-reads the file.
 | `log_file` | `forgeo.log` | Where the daemon writes its log. |
 | `run_history_keep` | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
 | `run_output_lines` | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
+| `failed_retry_max` | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
+| `failed_retry_wait_cycles` | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
 | `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
@@ -172,6 +174,35 @@ console's **History** tab shows this tail in a read-only, collapsible view.
 Set `0` to stop persisting agent output entirely (run records stay small and
 the History tab shows nothing for them). Old run records written before this
 field existed simply have no output.
+
+### `failed_retry_max` / `failed_retry_wait_cycles`
+
+Some failures are transient — a network blip, a flaky test, a dependency
+version hiccup — and a retry would succeed without a human. By default
+(`failed_retry_max: 0`) a `FAILED` task stays `FAILED` forever and needs a
+human to reopen it, exactly as before. Set a positive `failed_retry_max` and
+Forgeo retries a failed task automatically:
+
+- while a task is `FAILED` and retry-eligible, each cycle bumps its internal
+  wait counter; once `failed_retry_wait_cycles` cycles have passed it is
+  moved back to `OPEN` and Forgeo picks it up again (so with the default
+  `1`, the retry happens on the next cycle);
+- a task that keeps failing exhausts its budget and stays `FAILED` with its
+  original `failure_reason` preserved — a human reopens it as before;
+- the retry count is visible in `runs.jsonl` (the run record that finally
+  succeeds carries it) and in the web console (task card, task modal, and a
+  **retry** column in the History tab);
+- a `BLOCKED` task is **never** auto-retried — blocking still needs a human.
+
+A single task can override the global budget with its own `retries_left`
+field in the backlog (see [Backlog format](backlog.md)): set it to a number
+to cap or allow retries for just that task, or `0` to opt the task out of
+retries even when the config would retry it.
+
+```yaml
+failed_retry_max: 3           # retry each FAILED task up to 3 times
+failed_retry_wait_cycles: 2   # back off 2 cycles before each retry
+```
 
 ### Telegram notifications
 

@@ -19,6 +19,9 @@ def test_task_defaults_to_open():
     assert task.acceptance_criteria == []
     assert task.agent_command is None
     assert task.agent_timeout_seconds is None
+    assert task.retries_left is None
+    assert task.retry_count == 0
+    assert task.failed_wait_cycles == 0
 
 
 def test_task_requires_description():
@@ -62,6 +65,16 @@ def test_task_rejects_non_positive_agent_timeout():
         Task(id="TASK-001", title="t", description="Do it.", agent_timeout_seconds=0)
 
 
+def test_task_accepts_retries_left_override():
+    task = Task(id="TASK-001", title="t", description="Do it.", retries_left=3)
+    assert task.retries_left == 3
+
+
+def test_task_rejects_negative_retries_left():
+    with pytest.raises(ValidationError):
+        Task(id="TASK-001", title="t", description="Do it.", retries_left=-1)
+
+
 def test_config_requires_agent_command():
     with pytest.raises(ValidationError):
         ForgeoConfig(name="x", agent_command="")
@@ -80,6 +93,21 @@ def test_config_defaults():
     assert config.telegram_chat_id is None
     assert config.notify_webhook_url is None
     assert config.notify_webhook_events == ["blocked"]
+    assert config.failed_retry_max == 0
+    assert config.failed_retry_wait_cycles == 1
+
+
+def test_config_rejects_negative_retry_settings():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", failed_retry_max=-1)
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", failed_retry_wait_cycles=0)
+
+
+def test_config_accepts_retry_settings():
+    config = ForgeoConfig(agent_command="x", failed_retry_max=3, failed_retry_wait_cycles=2)
+    assert config.failed_retry_max == 3
+    assert config.failed_retry_wait_cycles == 2
 
 
 def test_config_rejects_unknown_webhook_events():

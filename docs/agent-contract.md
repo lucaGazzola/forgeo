@@ -47,6 +47,12 @@ The blocked exit code is configurable via `blocked_exit_code` in
 [forgeo.yaml](configuration.md), and the no-change exit code via
 `no_changes_exit_code`.
 
+A `FAILED` task stays `FAILED` until a human reopens it — unless the retry
+policy is enabled (`failed_retry_max`, see [Configuration](configuration.md)),
+in which case Forgeo moves the task back to `OPEN` after
+`failed_retry_wait_cycles` cycles and runs it again, incrementing its retry
+count. `BLOCKED` is never retried automatically: it always waits for a human.
+
 ## The no-change contract
 
 Forgeo cannot tell "the agent deliberately made no changes" from "the agent

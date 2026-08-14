@@ -477,3 +477,39 @@ async def test_cycle_applies_configured_retention(git_repo, tmp_path):
     lines = read_lines(runs)
     assert len(lines) == 2
     assert all(line["task_id"] == "TASK-001" for line in lines)
+
+
+async def test_retried_run_record_carries_retry_count(git_repo, tmp_path):
+    """The run that finally succeeds after a retry records the retry count,
+    so the History tab shows it was a retry; the original failure does not."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=1)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom", exit_code=4)
+
+    assert await forgeo.run_cycle() == "task"
+
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+    assert await forgeo.run_cycle() == "task"
+
+    records = RunRecorder(runs_path_for(forgeo.config.backlog)).read()
+    assert [record.retry_count for record in records] == [1, None]
+    assert records[0].outcome is RunOutcome.SUCCESS
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+
+
+async def test_never_retried_run_records_have_null_retry_count(git_repo, tmp_path):
+    """A task that never retries records retry_count null on every run."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = RunRecorder(runs_path_for(forgeo.config.backlog)).read_last()
+    assert record.retry_count is None

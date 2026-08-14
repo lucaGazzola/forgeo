@@ -40,6 +40,9 @@ Each entry in `tasks` is a task object:
 | `blocker_reason` | list[string] | `[]` | Engine-managed: the agent's explanation (its questions, falling back to captured output) when the task becomes `BLOCKED`. Cleared on reopen; not editable via `PATCH`. |
 | `blocked_count` | integer | `0` | Engine-managed: how many times the task has transitioned into `BLOCKED`. Kept as history when the task is reopened, so you can see a task that keeps blocking needs splitting or rewriting rather than a blind retry. Not editable via `PATCH`. |
 | `failure_reason` | list[string] | `[]` | Engine-managed: the agent's error when the task becomes `FAILED` (e.g. a timeout message or a non-zero exit code). Shown in the web console's task modal so you can see why a task failed without opening the logs. Cleared when the task leaves the `FAILED` state; not editable via `PATCH`. |
+| `retries_left` | integer / `null` | `null` | Per-task override of the automatic-retry budget (`failed_retry_max` in the config): how many times this task may be retried after a failure. `null` falls back to the config; `0` disables retries for this task. Editable via `PATCH`. |
+| `retry_count` | integer | `0` | Engine-managed: how many times this task has already been retried. Shown in `runs.jsonl` and the web console; reset when a human reopens a `FAILED` task. Not editable via `PATCH`. |
+| `failed_wait_cycles` | integer | `0` | Engine-managed: how many cycles this task has been `FAILED` awaiting a retry (backed off by `failed_retry_wait_cycles`). Reset when the task leaves `FAILED`. Not editable via `PATCH`. |
 
 Only `id`, `title`, `description`, and `status` (optionally) are required;
 every other field is optional.
@@ -78,6 +81,46 @@ cheap/fast model and hard ones to a frontier model:
 | `BLOCKED` | Waiting on a human decision; Forgeo pauses while any task is blocked. |
 | `COMPLETED` | The agent finished and the work was committed (and pushed). |
 | `FAILED` | The agent errored; changes were discarded and the reason is recorded in `failure_reason`. |
+
+## Retrying a failed task
+
+Some failures are transient — a network blip, a flaky test, a dependency
+version hiccup — and a retry would succeed without a human. When
+`failed_retry_max` is set in [forgeo.yaml](configuration.md), Forgeo retries
+a `FAILED` task automatically after `failed_retry_wait_cycles` cycles: it is
+moved back to `OPEN`, picked up on the next run, and its `retry_count` is
+incremented. A task that exhausts its budget stays `FAILED` with its original
+`failure_reason` preserved, exactly as before — a human reopens it manually.
+`BLOCKED` tasks are never auto-retried.
+
+To give a single task a different budget than the rest of the backlog, set
+its `retries_left` field: a number caps how many times it may be retried
+(`0` opts it out of retries entirely), and `null` (or an omitted field)
+falls back to the config's `failed_retry_max`:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Fork a chatty upstream test dependency",
+      "description": "Swap the network call for a stub.",
+      "retries_left": 0
+    },
+    {
+      "id": "TASK-002",
+      "title": "Migrate the caching layer",
+      "description": "Flaky under load; give it a few attempts.",
+      "retries_left": 3
+    }
+  ]
+}
+```
+
+The retry count is visible in `runs.jsonl` (the run record that eventually
+succeeds carries it) and in the web console: a failed task's card and modal
+show `retried Nx`, the task modal shows the retry budget and how many retries
+remain, and the **History** tab has a **retry** column.
 
 You add, remove, or reopen tasks by editing the file directly — or use the
 [web console](web-console-api.md): the **new-task form** (`POST

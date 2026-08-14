@@ -70,6 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   best-effort (short timeout, failures logged and skipped), never modifies
   the install, and can be disabled with `FORGEO_UPDATE_CHECK=0`.
 
+- Automatic retries for `FAILED` tasks: `failed_retry_max` config key (default
+  `0`, unchanged behavior) plus `failed_retry_wait_cycles` (default `1`) let a
+  transiently failed task move back to `OPEN` after a backoff and be run
+  again. A task that exhausts its budget stays `FAILED` with its original
+  `failure_reason`; a per-task `retries_left` field overrides the budget for
+  one task. `BLOCKED` tasks are never auto-retried. The retry count is
+  recorded in `runs.jsonl` (the run record that succeeds carries it), shown
+  in the web console (task cards/modal and a History-tab **retry** column),
+  and exposed by the tasks/runs API.
+
 ### Fixed
 
 - The Linux prebuilt binary is now built on Ubuntu 22.04 (glibc 2.35) instead

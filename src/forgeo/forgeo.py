@@ -129,6 +129,8 @@ class Forgeo:
             logger.info("No BLOCKED tasks remain; removing derived blocker file.")
             self.config.blocker_file.unlink(missing_ok=True)
 
+        await self._process_failed_retries(tasks)
+        tasks = await self.backlog.list_tasks()
         task = oldest_open_task(tasks)
         if task is not None:
             if not await self.git.a_is_clean():
@@ -147,6 +149,52 @@ class Forgeo:
 
         await self._refactor()
         return "refactor"
+
+    # ------------------------------------------------------------------ #
+    # Failed-task retries                                                 #
+    # ------------------------------------------------------------------ #
+
+    async def _process_failed_retries(self, tasks: list[Task]) -> None:
+        """Move retry-eligible ``FAILED`` tasks back to ``OPEN`` with backoff.
+
+        A task is retry-eligible when its retry budget is not exhausted: the
+        per-task ``retries_left`` override when set, else the config's
+        ``failed_retry_max``. Each cycle it stays ``FAILED`` and eligible its
+        ``failed_wait_cycles`` counter is bumped; once that reaches
+        ``failed_retry_wait_cycles`` the task is moved back to ``OPEN`` and
+        its ``retry_count`` is incremented. A task that exhausts its budget
+        stays ``FAILED`` with its original ``failure_reason`` preserved.
+
+        With ``failed_retry_max: 0`` (the default) and no per-task override
+        this is a no-op, so the historical behavior is unchanged. ``BLOCKED``
+        tasks are never touched — blocking always needs a human.
+        """
+        wait = self.config.failed_retry_wait_cycles
+        for task in tasks:
+            if task.status is not TaskStatus.FAILED:
+                continue
+            budget = task.retries_left
+            if budget is None:
+                budget = self.config.failed_retry_max
+            if budget <= 0 or task.retry_count >= budget:
+                continue
+            if task.failed_wait_cycles + 1 < wait:
+                await self.backlog.bump_failed_wait(task.id)
+                logger.info(
+                    "Task %s failed; retry %d/%d scheduled in %d more cycle(s).",
+                    task.id,
+                    task.retry_count + 1,
+                    budget,
+                    wait - task.failed_wait_cycles - 1,
+                )
+            else:
+                await self.backlog.retry_task(task.id)
+                logger.info(
+                    "Task %s moved back to OPEN for retry %d/%d.",
+                    task.id,
+                    task.retry_count + 1,
+                    budget,
+                )
 
     # ------------------------------------------------------------------ #
     # Run history                                                         #
@@ -168,9 +216,24 @@ class Forgeo:
                 commit_sha=self._last_commit_sha if outcome in ("task", "refactor") else None,
                 reason=self._last_run_reason if outcome in ("task", "refactor") else None,
                 output_logs=self._run_output_logs(outcome),
+                retry_count=self._run_retry_count(task, outcome),
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
             )
         )
+
+    def _run_retry_count(self, task: Task | None, outcome: str) -> int | None:
+        """The retry count to surface on a run record, if any.
+
+        Kept only for task runs whose task has actually been retried before
+        this run (``retry_count > 0``), so the History tab shows at a glance
+        that a run was a retry without cluttering never-retried runs. Refactor
+        runs and records for untouched tasks store ``None``.
+        """
+        if outcome not in ("task", "blocked"):
+            return None
+        if task is None or task.retry_count <= 0:
+            return None
+        return task.retry_count
 
     def _run_output_logs(self, outcome: str) -> list[str] | None:
         """The bounded agent-output tail to persist for a finished cycle.

@@ -98,7 +98,12 @@ open-by-default behavior.
   at the top with the agent's blocker reason (the persisted per-task
   `blocker_reason`) and how many times the task has blocked (`blocked_count`,
   e.g. "blocked 3x"); a `FAILED` task's modal shows an analogous red banner
-  with the failure reason (the persisted per-task `failure_reason`), so you
+  with the failure reason (the persisted per-task `failure_reason`) and the
+  task's retry state — how many times it was retried, how many retries
+  remain (from `retry_budget` / `retries_remaining`), or a "retries
+  exhausted" note when automatic retries are spent (see
+  [Backlog format](backlog.md#retrying-a-failed-task)). A failed task that
+  was retried also carries a small `retried Nx` badge on its card, so you
   never have to open the logs to see why something failed. You can **Edit** a
   `BLOCKED` task to correct it and then **Reopen** it, or **Reopen** it
   as-is — Forgeo retries it on its next scheduled run. `BLOCKED` tasks can
@@ -145,7 +150,7 @@ curl http://127.0.0.1:8790/api/instances
 ### `GET /api/instances/<name>/tasks`
 
 List every task in that instance's backlog, in creation order. Each task
-carries an extra `unsatisfied_dependencies` field (see below).
+carries extra `unsatisfied_dependencies` and retry fields (see below).
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/tasks
@@ -199,6 +204,18 @@ Forgeo only picks an `OPEN` task once every dependency is `COMPLETED` (see
 [Backlog format](backlog.md)); the field is how the web console explains why a
 task is waiting and is `[]` when the task has no (or only `COMPLETED`)
 dependencies.
+
+### `retry_budget` and `retries_remaining`
+
+Every task returned by `GET .../tasks` and `GET .../tasks/{id}` also carries
+its effective automatic-retry state (when the instance's config is
+available): `retry_budget` is the number of retries the task may have (the
+per-task `retries_left` override falling back to the config's
+`failed_retry_max`) and `retries_remaining` is `max(0, retry_budget -
+retry_count)`. The engine-managed `retry_count` and `failed_wait_cycles`
+fields are part of the task object itself. The web console uses these to
+show how many retries a failed task has left, or that its retries are
+exhausted (see [Backlog format](backlog.md#retrying-a-failed-task)).
 
 ### `POST /api/instances/<name>/tasks`
 
@@ -289,9 +306,11 @@ the next cycle automatically. Errors:
 
 Update an existing task's editable fields: `title`, `description`,
 `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`,
-and `agent_timeout_seconds`. The request body is a JSON object; omitted fields
-are left unchanged and `id`, `status`, `blocker_reason`, `blocked_count`,
-`failure_reason`, and `created_at` are always preserved (they are
+`agent_timeout_seconds`, and `retries_left` (the per-task automatic-retry
+budget override; a non-negative integer or `null`). The request body is a
+JSON object; omitted fields are left unchanged and `id`, `status`,
+`blocker_reason`, `blocked_count`, `failure_reason`, `retry_count`,
+`failed_wait_cycles`, and `created_at` are always preserved (they are
 engine-managed — `PATCH` rejects them like it rejects `status`).
 `agent_command` may be a string, an array, or `null` (clear the per-task
 override); `agent_timeout_seconds` may be a positive number or `null`.
@@ -509,9 +528,12 @@ seconds, an optional `reason` when the run completed without a commit (a
 no-change SUCCESS is surfaced here instead of silently showing a null commit
 SHA), and `output_logs`: the bounded tail of the agent's stdout/stderr for
 that run (at most `run_output_lines` lines) or `null` for runs that never
-reached the agent or that predate the field. The web console renders this
-tail in a read-only, collapsible view in the **History** tab. A missing or
-empty `runs.jsonl` yields `runs: []` with `total: 0`.
+reached the agent or that predate the field. When the run was a retry of a
+previously failed task, `retry_count` carries how many times the task had
+already been retried (task runs only; `null` otherwise), so the History tab
+can show which runs were retries. The web console renders the output tail in
+a read-only, collapsible view in the **History** tab. A missing or empty
+`runs.jsonl` yields `runs: []` with `total: 0`.
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/runs

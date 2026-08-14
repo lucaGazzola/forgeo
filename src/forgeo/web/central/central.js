@@ -287,6 +287,9 @@
     var top = el("div", "task__top");
     top.appendChild(el("span", "task__id", task.id));
     top.appendChild(el("span", "badge badge--" + status, status));
+    if (status === "FAILED" && task.retry_count) {
+      top.appendChild(el("span", "badge badge--retry", "retried " + task.retry_count + "x"));
+    }
     card.appendChild(top);
     card.appendChild(el("h3", "task__title", task.title));
     if (task.description) {
@@ -583,6 +586,24 @@
           ? failLines.join("\n")
           : "The agent errored; no reason was recorded.";
       }
+      var failCount = document.getElementById("task-modal-failed-count");
+      if (failCount) {
+        var bits = [];
+        if (task.retry_count) bits.push("retried " + task.retry_count + "x");
+        if (typeof task.retry_budget === "number" && task.retry_budget > 0) {
+          if (task.retries_remaining > 0) {
+            bits.push(
+              task.retries_remaining + " retr" + (task.retries_remaining === 1 ? "y" : "ies") + " left"
+            );
+          } else {
+            bits.push("retries exhausted — reopen manually to retry");
+          }
+        } else if (task.retries_left === 0) {
+          bits.push("retries disabled for this task");
+        }
+        failCount.textContent = bits.join(" · ");
+        failCount.hidden = bits.length === 0;
+      }
     }
 
     setText("task-modal-description", task.description || "");
@@ -622,6 +643,15 @@
         ? task.agent_command.join(" ")
         : task.agent_command || "";
     }
+    var retries = document.getElementById("task-modal-retries");
+    if (retries) {
+      var retryText = null;
+      if (task.retries_left !== null && task.retries_left !== undefined) {
+        var overrideBudget = typeof task.retry_budget === "number" ? task.retry_budget : task.retries_left;
+        retryText = "retries left: " + task.retries_left + " of " + overrideBudget + " (per-task override)";
+      }
+      retries.textContent = retryText || "";
+    }
     var created = document.getElementById("task-modal-created");
     if (created) created.textContent = formatTime(task.created_at);
     var updated = document.getElementById("task-modal-updated");
@@ -641,6 +671,10 @@
       task.files_to_modify && task.files_to_modify.length > 0
     );
     showModalSection("task-modal-command-section", Boolean(task.agent_command));
+    showModalSection(
+      "task-modal-retries-section",
+      Boolean(retries && retries.textContent)
+    );
   }
 
   function splitLines(value) {
@@ -675,6 +709,12 @@
         ? ""
         : String(modalTask.agent_timeout_seconds)
     );
+    setValue(
+      "task-edit-retries",
+      modalTask.retries_left === null || modalTask.retries_left === undefined
+        ? ""
+        : String(modalTask.retries_left)
+    );
 
     showModalSection("task-modal-view", false);
     showModalSection("task-modal-edit-form", true);
@@ -702,6 +742,7 @@
     };
     var command = value("task-edit-command").trim();
     var timeout = value("task-edit-timeout").trim();
+    var retries = value("task-edit-retries").trim();
     var updates = {
       title: value("task-edit-title").trim(),
       description: value("task-edit-description").trim(),
@@ -710,6 +751,7 @@
       files_to_modify: splitLines(value("task-edit-files")),
       agent_command: command ? command : null,
       agent_timeout_seconds: timeout === "" ? null : Number(timeout),
+      retries_left: retries === "" ? null : parseInt(retries, 10),
     };
     return updates;
   }
@@ -734,6 +776,17 @@
         error.hidden = false;
       }
       return;
+    }
+    var retries = document.getElementById("task-edit-retries");
+    if (retries && retries.value.trim() !== "") {
+      var retriesNum = parseInt(retries.value.trim(), 10);
+      if (isNaN(retriesNum) || retriesNum < 0 || String(retriesNum) !== retries.value.trim()) {
+        if (error) {
+          error.textContent = "retries left must be a non-negative integer";
+          error.hidden = false;
+        }
+        return;
+      }
     }
 
     apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
@@ -1008,7 +1061,7 @@
     var table = el("table", "run-table");
     var thead = el("thead");
     var headRow = el("tr");
-    ["time", "kind", "task", "outcome", "duration", "commit", "reason"].forEach(function (h) {
+    ["time", "kind", "task", "outcome", "duration", "commit", "retry", "reason"].forEach(function (h) {
       headRow.appendChild(el("th", null, h));
     });
     thead.appendChild(headRow);
@@ -1033,13 +1086,16 @@
       var commit = el("td", "mono", shortSha(run.commit_sha));
       if (run.commit_sha) commit.title = run.commit_sha;
       row.appendChild(commit);
+      var retry = el("td", "mono", run.retry_count ? "retry " + run.retry_count : "—");
+      if (run.retry_count) retry.title = "run was a retry (retry count at the time)";
+      row.appendChild(retry);
       row.appendChild(el("td", run.reason ? "run-reason" : null, run.reason || "—"));
       tbody.appendChild(row);
 
       if (run.output_logs && run.output_logs.length > 0) {
         var outputRow = el("tr", "run-output-row");
         var outputCell = el("td", null);
-        outputCell.colSpan = 7;
+        outputCell.colSpan = 8;
         var details = el("details", "run-output");
         var summary = el("summary", "run-output__summary");
         summary.appendChild(el("span", null, "agent output"));
@@ -1125,6 +1181,8 @@
     { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
     { key: "log_file", label: "Log file", type: "text" },
     { key: "run_output_lines", label: "Run output lines", type: "number", min: 0, step: 1, hint: "How many agent output lines each run record keeps in runs.jsonl (bounded tail, shown in the History tab). 0 = don't persist agent output." },
+    { key: "failed_retry_max", label: "Failed retry max", type: "number", min: 0, step: 1, hint: "How many times a FAILED task is retried automatically. 0 = disabled (a FAILED task stays FAILED until a human reopens it). A task can override this with its own retries_left." },
+    { key: "failed_retry_wait_cycles", label: "Failed retry wait (cycles)", type: "number", min: 1, step: 1, hint: "How many cycles a FAILED task waits (backoff) before it is retried." },
     { key: "agent_sandbox", label: "Agent sandbox", type: "select", options: ["none", "docker"], hint: "none = run directly on the host; docker = run inside a container." },
     { key: "agent_sandbox_image", label: "Sandbox image", type: "text", optional: true, hint: "Container image used when agent_sandbox is docker. Required in that mode." },
     { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },

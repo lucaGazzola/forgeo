@@ -23,6 +23,17 @@ blocker_file: BLOCKER.md        # Written with a detailed explanation when the a
                                 # stdout/stderr, shown in the web console History
                                 # tab). Set 0 to stop persisting agent output.
 
+# Optional automatic retries for FAILED tasks. Transient failures (a network
+# blip, a flaky test, a version hiccup) can succeed on a retry without a human.
+# failed_retry_max: 0           # How many times a FAILED task is retried
+                                # automatically. 0 (default) = a FAILED task
+                                # stays FAILED until a human reopens it.
+                                # A task can override this budget per-task with
+                                # `retries_left` in the backlog.
+# failed_retry_wait_cycles: 1   # How many cycles a retry-eligible FAILED task
+                                # waits (backoff) before it is moved back to
+                                # OPEN. Blocked tasks are never auto-retried.
+
 # The coding agent: any shell command. Read $FORGEO_TASK for the task, work in the
 # repo directory, and exit with:
 #   0 = success             (work is committed and pushed)

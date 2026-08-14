@@ -1346,6 +1346,100 @@ def test_history_script_renders_collapsible_agent_output(web_env):
     assert "agent output" in body
 
 
+def test_runs_endpoint_surfaces_retry_count(registry, central_server):
+    """A run record's retry_count is exposed, so the History tab can show it."""
+    record = run_record("TASK-001", RunOutcome.SUCCESS)
+    record.retry_count = 2
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.OPEN)],
+        runs=[record],
+    )
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    assert data["runs"][0]["retry_count"] == 2
+
+
+def test_tasks_endpoint_surfaces_retry_state(registry, central_server):
+    """The tasks API carries the effective retry budget and remaining retries
+    (from the per-task override falling back to the config)."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n"
+        "failed_retry_max: 2\n",
+        encoding="utf-8",
+    )
+    failed = task_json("TASK-001", "First", TaskStatus.FAILED)
+    failed["retry_count"] = 1
+    failed["failed_wait_cycles"] = 1
+    backlog.write_text(json.dumps({"tasks": [failed]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    task = data[0]
+    assert task["retry_count"] == 1
+    assert task["failed_wait_cycles"] == 1
+    assert task["retry_budget"] == 2
+    assert task["retries_remaining"] == 1
+
+
+def test_tasks_endpoint_retry_override_wins(registry, central_server):
+    """A per-task retries_left override replaces the config budget."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n"
+        "failed_retry_max: 0\n",
+        encoding="utf-8",
+    )
+    failed = task_json("TASK-001", "First", TaskStatus.FAILED)
+    failed["retries_left"] = 4
+    backlog.write_text(json.dumps({"tasks": [failed]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    assert data[0]["retry_budget"] == 4
+    assert data[0]["retries_remaining"] == 4
+
+
+def test_history_script_renders_retry_column(web_env):
+    """The History-tab script renders the retry count and the retried badge."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert '"retry"' in body
+    assert "retry_count" in body
+    assert "badge--retry" in body
+
+
+def test_retry_config_fields_editable_in_config_tab(web_env):
+    """The Config-tab script exposes the retry policy keys."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "failed_retry_max" in body
+    assert "failed_retry_wait_cycles" in body
+
+
 def test_blocker_endpoint(web_env):
     server, _ = web_env
     status, data = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/blocker")

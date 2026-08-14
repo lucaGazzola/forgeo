@@ -600,3 +600,119 @@ async def test_malformed_shape_restores_from_snapshot(tmp_path):
 
     tasks = await backlog.list_tasks()
     assert [task.id for task in tasks] == ["TASK-001"]
+
+
+# --------------------------------------------------------------------------- #
+# Failed-task retry state                                                      #
+# --------------------------------------------------------------------------- #
+
+
+async def test_set_failed_resets_failed_wait_cycles(tmp_path):
+    """A fresh FAILED transition restarts the retry backoff."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["boom"])
+    await backlog.bump_failed_wait(task.id)
+    assert (await backlog.get_task(task.id)).failed_wait_cycles == 1
+
+    refailed = await backlog.set_failed(task.id, ["boom again"])
+    assert refailed.failed_wait_cycles == 0
+    assert refailed.failure_reason == ["boom again"]
+    stored = await backlog.get_task(task.id)
+    assert stored.failed_wait_cycles == 0
+    assert stored.failure_reason == ["boom again"]
+
+
+async def test_bump_failed_wait_increments(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["boom"])
+    bumped = await backlog.bump_failed_wait(task.id)
+    assert bumped.status is TaskStatus.FAILED
+    assert bumped.failed_wait_cycles == 1
+    await backlog.bump_failed_wait(task.id)
+    stored = await backlog.get_task(task.id)
+    assert stored.failed_wait_cycles == 2
+
+
+async def test_retry_task_reopens_and_increments_retry_count(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["boom"])
+    retried = await backlog.retry_task(task.id)
+    assert retried.status is TaskStatus.OPEN
+    assert retried.retry_count == 1
+    assert retried.failed_wait_cycles == 0
+    assert retried.failure_reason == []
+
+    stored = await backlog.get_task(task.id)
+    assert stored.status is TaskStatus.OPEN
+    assert stored.retry_count == 1
+    assert stored.updated_at >= task.updated_at
+
+    disk = json.loads((tmp_path / "backlog.json").read_text(encoding="utf-8"))
+    entry = disk["tasks"][0]
+    assert entry["status"] == "OPEN"
+    assert entry["retry_count"] == 1
+
+
+async def test_retry_task_unknown_id_returns_none(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    assert await backlog.retry_task("MISSING") is None
+    assert await backlog.bump_failed_wait("MISSING") is None
+
+
+async def test_update_status_leaving_failed_resets_retry_state(tmp_path):
+    """A manual reopen (status away from FAILED) resets the retry budget so
+    the human's retry gets a fresh failed_retry_max."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["boom"])
+    await backlog.retry_task(task.id)
+    await backlog.set_failed(task.id, ["boom again"])
+    await backlog.bump_failed_wait(task.id)
+    stored = await backlog.get_task(task.id)
+    assert stored.retry_count == 1
+    assert stored.failed_wait_cycles == 1
+
+    reopened = await backlog.update_status(task.id, TaskStatus.OPEN)
+    assert reopened.status is TaskStatus.OPEN
+    assert reopened.retry_count == 0
+    assert reopened.failed_wait_cycles == 0
+    assert reopened.failure_reason == []
+
+
+async def test_update_task_accepts_retries_left(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    updated = await backlog.update_task(task.id, {"retries_left": 3})
+    assert updated.retries_left == 3
+    cleared = await backlog.update_task(task.id, {"retries_left": None})
+    assert cleared.retries_left is None
+    stored = await backlog.get_task(task.id)
+    assert stored.retries_left is None
+
+
+async def test_update_task_invalid_retries_left_raise(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    for bad in (
+        {"retries_left": -1},
+        {"retries_left": "nope"},
+        {"retries_left": 2.5},
+        {"retries_left": True},
+    ):
+        with pytest.raises(ValueError):
+            await backlog.update_task(task.id, bad)
+    stored = await backlog.get_task(task.id)
+    assert stored.retries_left is None
+
+
+async def test_update_task_retry_state_fields_not_editable(tmp_path):
+    """retry_count and failed_wait_cycles are engine-managed: PATCH rejects
+    them exactly like blocker_reason/blocked_count."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    for field in ("retry_count", "failed_wait_cycles"):
+        with pytest.raises(ValueError, match="unknown task field"):
+            await backlog.update_task(task.id, {field: 5})

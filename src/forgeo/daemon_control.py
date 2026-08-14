@@ -26,6 +26,7 @@ from pathlib import Path
 
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.models import ForgeoConfig
+from forgeo.paths import lock_path as daemon_lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,6 @@ _POLL_SECONDS = 0.5
 
 class DaemonError(Exception):
     """A daemon lifecycle action failed; the message is user-facing."""
-
-
-def _lock_path(config: ForgeoConfig) -> Path:
-    """The daemon lock file for ``config`` (next to the backlog)."""
-    return Path(config.backlog).with_suffix(".lock")
 
 
 def wait_for_lock_release(
@@ -74,7 +70,7 @@ def stop_daemon(
     lost. Raises :class:`DaemonError` when the daemon cannot be stopped
     (missing PID, a dead recorded PID, no permission, or a timeout).
     """
-    lock_path = _lock_path(config)
+    lock_path = daemon_lock_path(config)
     pid = read_lock_pid(lock_path)
     if pid is None:
         raise DaemonError(
@@ -117,7 +113,7 @@ def start_daemon(
     :class:`DaemonError` when the daemon fails to start within
     :data:`START_TIMEOUT_SECONDS`.
     """
-    lock_path = _lock_path(config)
+    lock_path = daemon_lock_path(config)
     command = [
         sys.executable,
         "-m",
@@ -160,6 +156,6 @@ def restart_daemon(
     Returns the new daemon's recorded pid. Raises :class:`DaemonError` when
     the stop or the start fails.
     """
-    if is_lock_held(_lock_path(config)):
+    if is_lock_held(daemon_lock_path(config)):
         stop_daemon(config, timeout)
     return start_daemon(config_path, config)

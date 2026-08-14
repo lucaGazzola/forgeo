@@ -49,6 +49,7 @@ from forgeo.config import load_config
 from forgeo.forgeo import Forgeo
 from forgeo.io import atomic_write_text
 from forgeo.models import ForgeoConfig
+from forgeo.paths import daemon_state_path, run_lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +215,8 @@ class ForgeoDaemon:
         self._forgeo_factory = forgeo_factory
         self._interval_override = interval_override
         self.interval_seconds: float = config.interval_minutes * 60.0
-        self.run_lock = RunLock(config.backlog.with_suffix(".run"))
-        self._state_file = config.backlog.with_suffix(".state.json")
+        self.run_lock = RunLock(run_lock_path(config))
+        self._state_file = daemon_state_path(config)
         self._stop_event = asyncio.Event()
         self._reload_event = asyncio.Event()
         self._config_mtime_ns = _config_mtime_ns(self.config_path)
@@ -226,7 +227,13 @@ class ForgeoDaemon:
 
     @property
     def state_file(self) -> Path:
-        """The ``daemon.state.json`` path, pinned to the startup backlog."""
+        """The daemon state path, pinned to the startup config.
+
+        Derived once in ``__init__`` rather than from ``self.config``, which a
+        SIGHUP reload replaces: readers (the CLI, the web console) resolve the
+        path from the config *on disk*, so a reload that moved the backlog
+        must not strand the state file the running daemon still writes.
+        """
         return self._state_file
 
     def stop(self) -> None:

@@ -24,7 +24,7 @@ from forgeo.daemon_control import DaemonError
 from forgeo.instances import add_instance
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.runs import RunRecorder
-from tests.conftest import make_task
+from tests.conftest import BacklogServer, make_task
 
 FINISHED = datetime(2026, 8, 1, 1, 0, 10, tzinfo=UTC)
 
@@ -2167,3 +2167,110 @@ def test_post_daemon_action_failure_500(web_env, monkeypatch):
     assert status == 500
     assert data["status"] == "start_failed"
     assert data["error"] == "boom"
+
+
+# --------------------------------------------------------------------------- #
+# Instances whose backlog lives behind an HTTP endpoint                        #
+# --------------------------------------------------------------------------- #
+
+
+def write_remote_instance(tmp_path: Path, name: str, url: str) -> Path:
+    """Register an instance whose backlog is an HTTP endpoint."""
+    config_dir = tmp_path / name
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "forgeo.yaml"
+    config_path.write_text(
+        f"name: {name}\n"
+        f"repo: {tmp_path / 'repos' / name}\n"
+        f"backlog: {url}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        f"agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n",
+        encoding="utf-8",
+    )
+    add_instance(name, config_path)
+    return config_path
+
+
+def test_remote_backlog_tasks_are_served_from_the_endpoint(registry, central_server):
+    with BacklogServer({"tasks": [task_json("R-1", "Remote", TaskStatus.OPEN)]}) as ep:
+        write_remote_instance(registry, "remote", ep.url)
+        status, data = _get(
+            f"http://127.0.0.1:{central_server.port}/api/instances/remote/tasks"
+        )
+    assert status == 200
+    assert [t["id"] for t in data] == ["R-1"]
+
+
+def test_adding_a_task_posts_it_to_the_endpoint(registry, central_server):
+    with BacklogServer() as ep:
+        write_remote_instance(registry, "remote", ep.url)
+        status, created = _post(
+            f"http://127.0.0.1:{central_server.port}/api/instances/remote/tasks",
+            json.dumps({"title": "From the console", "description": "Do it."}),
+        )
+        assert status == 201
+        assert created["id"] == "WEB-001"
+        assert [t["id"] for t in ep.tasks()] == ["WEB-001"]
+
+
+def test_unreachable_backlog_reports_502_not_an_empty_list(registry, central_server):
+    with BacklogServer() as ep:
+        url = ep.url
+    write_remote_instance(registry, "remote", url)
+
+    status, data = _get(
+        f"http://127.0.0.1:{central_server.port}/api/instances/remote/tasks"
+    )
+    assert status == 502
+    assert "error" in data
+
+
+def test_unreachable_backlog_does_not_break_the_instance_list(registry, central_server):
+    """One dead endpoint must not take the whole home page down with it."""
+    with BacklogServer() as ep:
+        url = ep.url
+    write_remote_instance(registry, "remote", url)
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.OPEN)],
+    )
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances")
+    assert status == 200
+    rows = {row["name"]: row for row in data}
+    assert rows["alpha"]["backlog_counts"]["OPEN"] == 1
+    assert rows["alpha"]["backlog_error"] is None
+    assert rows["remote"]["backlog_counts"]["OPEN"] == 0
+    assert rows["remote"]["backlog_error"]
+
+
+def test_saving_the_config_preserves_credentials_it_never_showed(
+    registry, central_server
+):
+    """The flat config form does not render backlog_auth; a save must keep it."""
+    with BacklogServer() as ep:
+        config_path = write_remote_instance(registry, "remote", ep.url)
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "backlog_auth:\n"
+            + "  token_url: https://keycloak.test/realms/dev/protocol/openid-connect/token\n"
+            + "  client_id: forgeo\n"
+            + "  client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET\n",
+            encoding="utf-8",
+        )
+        payload = load_config(config_path).model_dump(mode="json")
+        payload.pop("backlog_auth")
+        payload["interval_minutes"] = 45
+
+        status, _ = _put(
+            f"http://127.0.0.1:{central_server.port}/api/instances/remote/config",
+            json.dumps(payload),
+        )
+    assert status == 200
+    saved = load_config(config_path)
+    assert saved.interval_minutes == 45
+    assert saved.backlog_auth is not None
+    assert saved.backlog_auth.client_id == "forgeo"

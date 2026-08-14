@@ -268,7 +268,7 @@ async def test_fetch_oldest_open_task(tmp_path):
     await backlog.create_task(newer)
     await backlog.create_task(older)
 
-    fetched = await backlog.fetch_next_task()
+    fetched = oldest_open_task(await backlog.list_tasks())
     assert fetched.id == "A"
 
 
@@ -276,7 +276,7 @@ async def test_fetch_skips_non_open_tasks(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     for status in (TaskStatus.BLOCKED, TaskStatus.COMPLETED, TaskStatus.FAILED):
         await backlog.create_task(Task(id=status.value, title="t", description="d", status=status))
-    assert await backlog.fetch_next_task() is None
+    assert oldest_open_task(await backlog.list_tasks()) is None
 
 
 async def test_fetch_prefers_open_over_blocked(tmp_path):
@@ -285,7 +285,7 @@ async def test_fetch_prefers_open_over_blocked(tmp_path):
         Task(id="BLOCKED-1", title="b", description="d", status=TaskStatus.BLOCKED)
     )
     await backlog.create_task(make_task(id="OPEN-1"))
-    fetched = await backlog.fetch_next_task()
+    fetched = oldest_open_task(await backlog.list_tasks())
     assert fetched.id == "OPEN-1"
 
 
@@ -633,7 +633,7 @@ async def test_update_task_non_dict_updates_raise(tmp_path):
 async def test_missing_file_yields_empty_backlog(tmp_path):
     backlog = JSONBacklog(tmp_path / "nope.json")
     assert await backlog.list_tasks() == []
-    assert await backlog.fetch_next_task() is None
+    assert oldest_open_task(await backlog.list_tasks()) is None
 
 
 async def test_corrupt_file_is_preserved_and_yields_empty_backlog(tmp_path, caplog):

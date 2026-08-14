@@ -4,7 +4,10 @@ A standalone server that aggregates every forgeo registered in the instance
 registry (:mod:`forgeo.instances`). It reads each instance's data straight
 from its files (``backlog.json``, ``runs.jsonl``, ``forgeo.log``,
 ``BLOCKER.md``, ``daemon.state.json``), so it works whether or not that
-instance's daemon is running — the daemon binds no ports at all.
+instance's daemon is running — the daemon binds no ports at all. An instance
+whose backlog is an HTTP endpoint is the one exception: its tasks are fetched
+from there, and an endpoint that cannot be reached is reported as such rather
+than shown as an empty backlog.
 
 Routes:
 
@@ -74,7 +77,11 @@ from rich.console import Console
 from rich.panel import Panel
 
 from forgeo import daemon_control
-from forgeo.backlog import JSONBacklog, backlog_status_counts, unsatisfied_dependencies
+from forgeo.backlog import (
+    backlog_status_counts,
+    open_backlog,
+    unsatisfied_dependencies,
+)
 from forgeo.config import save_config
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.instances import (
@@ -84,7 +91,8 @@ from forgeo.instances import (
     registry_path,
 )
 from forgeo.models import ForgeoConfig, Task, TaskStatus
-from forgeo.runs import RunRecorder, runs_path_for
+from forgeo.paths import daemon_state_path, lock_path, runs_path
+from forgeo.runs import RunRecorder
 from forgeo.web_common import (
     DEFAULT_LOG_LINES,
     DEFAULT_RUN_LIMIT,
@@ -350,17 +358,23 @@ def _daemon_state(config: ForgeoConfig | None) -> dict[str, Any] | None:
     """
     if config is None:
         return None
-    return _read_json_dict(Path(config.backlog).with_suffix(".state.json"))
+    return _read_json_dict(daemon_state_path(config))
 
 
-def _read_tasks(config: ForgeoConfig | None) -> list[Task]:
-    """All tasks for ``config``, tolerating a missing or corrupt backlog.
+def read_tasks(config: ForgeoConfig | None) -> list[Task]:
+    """All tasks for ``config``; raises when a remote backlog is unreachable.
 
-    Reads the file directly so the dashboard never writes to an instance's
-    files (``JSONBacklog`` renames a corrupt backlog; here it is skipped).
+    A backlog file is read directly, so the dashboard never writes to an
+    instance's files (``JSONBacklog`` renames a corrupt backlog; here it is
+    skipped) and a missing or corrupt file simply reads as empty. A backlog
+    URL has to be fetched, and that request can fail — callers decide what to
+    show when it does, because "unreachable" and "empty" must never look the
+    same.
     """
     if config is None:
         return []
+    if config.backlog_is_url:
+        return asyncio.run(open_backlog(config).list_tasks())
     data = _read_json_dict(Path(config.backlog))
     if data is None:
         return []
@@ -376,6 +390,19 @@ def _read_tasks(config: ForgeoConfig | None) -> list[Task]:
         except ValidationError:
             continue
     return parsed
+
+
+def _read_tasks_or_error(config: ForgeoConfig | None) -> tuple[list[Task], str | None]:
+    """Tasks for ``config`` plus the reason they could not be read, if any.
+
+    The home page aggregates every registered instance, so one unreachable
+    backlog endpoint must not take the whole page down with it.
+    """
+    try:
+        return read_tasks(config), None
+    except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
+        logger.warning("Could not read the backlog: %s", exc)
+        return [], str(exc)
 
 
 def _task_payload(
@@ -428,7 +455,7 @@ def _last_outcome(config: ForgeoConfig | None) -> str | None:
     outcome = state.get("last_outcome") if state is not None else None
     if isinstance(outcome, str):
         return outcome
-    last_run = RunRecorder(runs_path_for(config.backlog)).read_last()
+    last_run = RunRecorder(runs_path(config)).read_last()
     return last_run.outcome.value if last_run is not None else None
 
 
@@ -445,7 +472,7 @@ def _next_run(info: InstanceInfo, config: ForgeoConfig | None) -> str | None:
     next_run_at = state.get("next_run_at") if state is not None else None
     if isinstance(next_run_at, str):
         return next_run_at
-    last_run = RunRecorder(runs_path_for(config.backlog)).read_last()
+    last_run = RunRecorder(runs_path(config)).read_last()
     if last_run is None:
         return None
     estimate = last_run.finished_at + timedelta(minutes=config.interval_minutes)
@@ -466,7 +493,7 @@ def _status_payload(info: InstanceInfo) -> dict[str, Any]:
             "next_run_at": None,
         }
     state = _daemon_state(config)
-    pid: int | None = read_lock_pid(config.backlog.with_suffix(".lock"))
+    pid: int | None = read_lock_pid(lock_path(config))
     if state is not None:
         state_pid = state.get("pid")
         if isinstance(state_pid, int):
@@ -494,8 +521,9 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
             "last_outcome": None,
             "next_run_at": None,
             "backlog_counts": {status.value: 0 for status in TaskStatus},
+            "backlog_error": None,
         }
-    counts = backlog_status_counts(_read_tasks(config))
+    tasks, backlog_error = _read_tasks_or_error(config)
     return {
         "name": info.name,
         "config_path": str(info.config_path),
@@ -503,7 +531,8 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
         "daemon_running": info.daemon_running,
         "last_outcome": _last_outcome(config),
         "next_run_at": _next_run(info, config),
-        "backlog_counts": counts,
+        "backlog_counts": backlog_status_counts(tasks),
+        "backlog_error": backlog_error,
     }
 
 
@@ -681,6 +710,20 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return None
             return info.config
 
+        def _instance_tasks(self, info: InstanceInfo) -> list[Task] | None:
+            """The instance's tasks, or ``None`` after sending a 502.
+
+            A remote backlog can be unreachable; saying so is the only honest
+            answer, since an empty list would read as "this forgeo has no
+            work left".
+            """
+            try:
+                return read_tasks(info.config)
+            except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
+                logger.warning("Backlog of instance %r is unavailable: %s", info.name, exc)
+                self._send_json(502, {"error": str(exc)})
+                return None
+
         def _read_json_body(self) -> dict[str, Any] | None:
             """Read and parse the request body as a JSON object.
 
@@ -772,10 +815,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             config = self._instance_config(info)
             if config is None:
                 return
-            lock_path = Path(config.backlog).with_suffix(".lock")
+            lock = lock_path(config)
 
             if action == "start":
-                if is_lock_held(lock_path):
+                if is_lock_held(lock):
                     self._send_json(
                         409,
                         {
@@ -783,7 +826,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                             "error": "daemon already running",
                             "message": f"Forgeo {config.name!r} is already running.",
                             "daemon_running": True,
-                            "pid": read_lock_pid(lock_path),
+                            "pid": read_lock_pid(lock),
                         },
                     )
                     return
@@ -795,7 +838,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                         {
                             "status": "start_failed",
                             "error": str(exc),
-                            "daemon_running": is_lock_held(lock_path),
+                            "daemon_running": is_lock_held(lock),
                         },
                     )
                     return
@@ -814,7 +857,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return
 
             if action == "stop":
-                if not is_lock_held(lock_path):
+                if not is_lock_held(lock):
                     self._send_json(
                         200,
                         {
@@ -832,7 +875,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                         {
                             "status": "stop_failed",
                             "error": str(exc),
-                            "daemon_running": is_lock_held(lock_path),
+                            "daemon_running": is_lock_held(lock),
                         },
                     )
                     return
@@ -854,7 +897,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     {
                         "status": "restart_failed",
                         "error": str(exc),
-                        "daemon_running": is_lock_held(lock_path),
+                        "daemon_running": is_lock_held(lock),
                     },
                 )
                 return
@@ -923,7 +966,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     )
                     return
 
-            backlog = JSONBacklog(config.backlog)
+            backlog = open_backlog(config)
             existing = asyncio.run(backlog.list_tasks())
             try:
                 task = Task(
@@ -960,7 +1003,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_json(400, {"error": "request body must not be empty"})
                 return
 
-            backlog = JSONBacklog(config.backlog)
+            backlog = open_backlog(config)
             try:
                 updated = asyncio.run(backlog.update_task(task_id, payload))
             except ValueError as exc:
@@ -990,7 +1033,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return
             task_id = unquote(parts[2])
 
-            backlog = JSONBacklog(config.backlog)
+            backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
                 self._send_json(404, {"error": "not found"})
@@ -1013,7 +1056,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             config, task_id = target
             assert task_id is not None  # with_task_id=True resolves a task id
 
-            backlog = JSONBacklog(config.backlog)
+            backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
                 self._send_json(404, {"error": "not found"})
@@ -1050,7 +1093,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             instance name (a different value is rejected); ``telegram_bot_token``
             is not editable through the web console — an explicit change is
             rejected and the current value is preserved when the field is
-            omitted.
+            omitted. ``backlog_auth`` and ``state_dir`` are nested settings the
+            flat config form does not render, so an omitted value keeps what
+            the config already holds instead of clearing it.
             """
             parts = path[len("/api/instances/") :].split("/")
             name = unquote(parts[0])
@@ -1085,6 +1130,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     return
             else:
                 payload["telegram_bot_token"] = config.telegram_bot_token
+            # The config form is flat, so it carries neither of these nested
+            # settings; a save must not drop what it never showed.
+            for preserved in ("backlog_auth", "state_dir"):
+                if preserved not in payload:
+                    payload[preserved] = getattr(config, preserved)
 
             try:
                 config = ForgeoConfig.model_validate(payload)
@@ -1124,22 +1174,23 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             endpoint = parts[1]
 
             if endpoint == "tasks":
+                if len(parts) not in (2, 3):
+                    self._send_json(404, {"error": "not found"})
+                    return
+                tasks = self._instance_tasks(info)
+                if tasks is None:
+                    return
                 if len(parts) == 2:
-                    tasks = _read_tasks(info.config)
                     self._send_json(
                         200,
                         [_task_payload(t, tasks, info.config) for t in tasks],
                     )
                     return
-                if len(parts) == 3:
-                    task_id = unquote(parts[2])
-                    tasks = _read_tasks(info.config)
-                    for task in tasks:
-                        if task.id == task_id:
-                            self._send_json(200, _task_payload(task, tasks, info.config))
-                            return
-                    self._send_json(404, {"error": "not found"})
-                    return
+                task_id = unquote(parts[2])
+                for task in tasks:
+                    if task.id == task_id:
+                        self._send_json(200, _task_payload(task, tasks, info.config))
+                        return
                 self._send_json(404, {"error": "not found"})
                 return
             if len(parts) > 2:
@@ -1166,7 +1217,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                         {"runs": [], "total": 0, "offset": offset, "limit": limit},
                     )
                     return
-                recorder = RunRecorder(runs_path_for(info.config.backlog))
+                recorder = RunRecorder(runs_path(info.config))
                 records = recorder.read(limit=limit, offset=offset)
                 self._send_json(
                     200,

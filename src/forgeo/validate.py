@@ -6,10 +6,15 @@ branch and remote resolve, the backlog parses, the agent command is
 non-blank — and reports the run lock state. It never invokes the agent and
 makes no writes (no lock is taken, no backlog or snapshot is touched), so it
 is safe to run at any time, even while a daemon is active.
+
+A URL backlog is fetched once (a plain GET, with credentials when
+``backlog_auth`` is configured) rather than read from disk, so an unreachable
+endpoint or a rejected token is reported here instead of at the first cycle.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from dataclasses import dataclass, field
@@ -17,9 +22,11 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from forgeo.backlog import open_backlog
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.git import GitError, GitManager
 from forgeo.models import ForgeoConfig, Task
+from forgeo.paths import lock_path
 
 
 @dataclass
@@ -63,8 +70,8 @@ def validate_config(config: ForgeoConfig) -> ValidationReport:
     if git is not None:
         _check_branch(config, git, report)
     _check_remote(config, git, report)
-    _check_backlog(config.backlog, report)
-    _check_lock(config.backlog.with_suffix(".lock"), report)
+    _check_backlog(config, report)
+    _check_lock(lock_path(config), report)
     return report
 
 
@@ -147,13 +154,17 @@ def _check_remote(
         report.notes.append(f"remote {config.remote!r} resolves to {url}")
 
 
-def _check_backlog(path: Path, report: ValidationReport) -> None:
-    """Verify the backlog parses and its tasks are valid.
+def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Verify the backlog is readable and its tasks are valid.
 
-    A missing backlog is fine (the daemon treats it as empty and creates it
-    on first use); a corrupt one is a problem. Reads only — never restores or
-    writes anything, unlike the backlog's own corrupt-file recovery.
+    A missing backlog file is fine (the daemon treats it as empty and creates
+    it on first use); a corrupt one is a problem. Reads only — never restores
+    or writes anything, unlike the backlog's own corrupt-file recovery.
     """
+    if config.backlog_is_url:
+        _check_backlog_url(config, report)
+        return
+    path = Path(config.backlog)
     if not path.exists():
         report.notes.append(
             f"backlog not found: {path} (treated as empty on the first cycle)"
@@ -178,9 +189,26 @@ def _check_backlog(path: Path, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
-def _check_lock(lock_path: Path, report: ValidationReport) -> None:
-    report.lock_held = is_lock_held(lock_path)
-    report.lock_pid = read_lock_pid(lock_path) if report.lock_held else None
+def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Fetch a URL backlog once to prove it answers before a cycle needs it.
+
+    This is the one check that leaves the machine, and it is worth it: an
+    unreachable endpoint or a rejected client-credentials grant is exactly
+    the failure a dry run should surface, and it would otherwise only show up
+    as a failed cycle. Still read-only — a single GET, nothing is written
+    back.
+    """
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
+        report.problems.append(f"backlog endpoint could not be read: {exc}")
+        return
+    report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
+
+
+def _check_lock(path: Path, report: ValidationReport) -> None:
+    report.lock_held = is_lock_held(path)
+    report.lock_pid = read_lock_pid(path) if report.lock_held else None
     if report.lock_held:
         detail = f" (pid {report.lock_pid})" if report.lock_pid is not None else ""
         report.warnings.append(

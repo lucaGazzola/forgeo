@@ -82,9 +82,10 @@ from rich.table import Table
 from forgeo import __version__
 from forgeo.agent import DockerSandboxAgent, SandboxUnavailableError, ShellAgent
 from forgeo.backlog import (
-    JSONBacklog,
+    BacklogUnavailableError,
     backlog_status_counts,
     oldest_open_task,
+    open_backlog,
     unsatisfied_dependencies,
 )
 from forgeo.central import (
@@ -114,9 +115,10 @@ from forgeo.instances import (
     resolve_instance,
 )
 from forgeo.models import ForgeoConfig, SandboxMode, Task, TaskStatus
-from forgeo.runs import RunRecorder, runs_path_for
+from forgeo.paths import lock_path, runs_path, update_state_path
+from forgeo.runs import RunRecorder
 from forgeo.setup import run_setup
-from forgeo.update import check_for_update, update_state_path
+from forgeo.update import check_for_update
 from forgeo.validate import render_report, validate_config
 
 DEFAULT_CONFIG = Path("forgeo.yaml")
@@ -413,7 +415,7 @@ def _resolve_config(
 
 def _acquire_run_lock(config: ForgeoConfig) -> Any | None:
     """Take the per-forgeo lock; prints an error and returns None when busy."""
-    lock = acquire_run_lock(config.backlog.with_suffix(".lock"))
+    lock = acquire_run_lock(lock_path(config))
     if lock is None:
         console.print(
             f"[red]Another forgeo process (daemon or `once`) is already "
@@ -452,7 +454,7 @@ def _make_forgeo(config: ForgeoConfig) -> Forgeo:
             unavailable (e.g. no docker binary) — callers turn that into a
             clear startup error.
     """
-    backlog = JSONBacklog(config.backlog)
+    backlog = open_backlog(config)
     agent = _build_agent(config)
     return Forgeo(
         config,
@@ -540,9 +542,9 @@ def _cmd_start_detached(args: argparse.Namespace) -> int:
     if config is None:
         return 1
     _register_if_missing(args, config_path, config)
-    lock_path = config.backlog.with_suffix(".lock")
-    if is_lock_held(lock_path):
-        pid = read_lock_pid(lock_path)
+    daemon_lock = lock_path(config)
+    if is_lock_held(daemon_lock):
+        pid = read_lock_pid(daemon_lock)
         suffix = f" (pid {pid})" if pid is not None else ""
         console.print(
             f"[red]Forgeo {config.name!r} is already running{suffix}; "
@@ -608,7 +610,7 @@ def _cmd_start_foreground(args: argparse.Namespace) -> int:
                 border_style="green",
             )
         )
-        check_for_update(update_state_path(config.backlog), print_fn=console.print)
+        check_for_update(update_state_path(config), print_fn=console.print)
         await daemon.run_forever()
 
     try:
@@ -628,7 +630,7 @@ def cmd_once(args: argparse.Namespace) -> int:
     _config_path, _config, forgeo, lock = prepared
 
     async def _run_once() -> None:
-        check_for_update(update_state_path(_config.backlog), print_fn=console.print)
+        check_for_update(update_state_path(_config), print_fn=console.print)
         outcome = await forgeo.run_cycle()
         console.print(f"[green]Cycle finished: {outcome}[/green]")
 
@@ -636,6 +638,12 @@ def cmd_once(args: argparse.Namespace) -> int:
         asyncio.run(_run_once())
     except KeyboardInterrupt:
         pass
+    except BacklogUnavailableError as exc:
+        # A backlog served over HTTP can simply be down; that is an
+        # operational failure to report, not a crash to trace back.
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
+        return 1
     finally:
         lock.close()
     return 0
@@ -658,7 +666,7 @@ def last_outcome_from_runs(config: ForgeoConfig) -> str | None:
     Never raises on a missing or corrupt file; corrupt lines are skipped
     with a warning.
     """
-    last_run = RunRecorder(runs_path_for(config.backlog)).read_last()
+    last_run = RunRecorder(runs_path(config)).read_last()
     if last_run is None:
         return None
     return last_run.outcome.value
@@ -742,8 +750,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
-    tasks = asyncio.run(JSONBacklog(config.backlog).list_tasks())
-    daemon_running = is_lock_held(config.backlog.with_suffix(".lock"))
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    daemon_running = is_lock_held(lock_path(config))
     last_outcome = last_outcome_from_runs(config)
     console.print(
         render_status(
@@ -811,7 +823,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
         return 1
     config_path, config = resolved
     _register_if_missing(args, config_path, config)
-    if not is_lock_held(config.backlog.with_suffix(".lock")):
+    if not is_lock_held(lock_path(config)):
         console.print(f"[yellow]Forgeo {config.name!r} is not running.[/yellow]")
         return 1
     return 0 if _stop_daemon(config, args.timeout) else 1

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from forgeo.agent import BaseAgent
-from forgeo.backlog import JSONBacklog, oldest_open_task
+from forgeo.backlog import BacklogStore, oldest_open_task
 from forgeo.git import GitError, GitManager
 from forgeo.models import (
     NO_BLOCKER_REASON,
@@ -43,7 +43,8 @@ from forgeo.models import (
     TaskStatus,
 )
 from forgeo.notify import BlockedNotice, send_blocked_notice, send_webhook_notice
-from forgeo.runs import RunRecorder, runs_path_for
+from forgeo.paths import runs_path
+from forgeo.runs import RunRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class Forgeo:
     def __init__(
         self,
         config: ForgeoConfig,
-        backlog: JSONBacklog,
+        backlog: BacklogStore,
         agent: BaseAgent,
         git: GitManager,
     ) -> None:
@@ -90,9 +91,7 @@ class Forgeo:
         self.backlog = backlog
         self.agent = agent
         self.git = git
-        self.recorder = RunRecorder(
-            runs_path_for(config.backlog), keep=config.run_history_keep
-        )
+        self.recorder = RunRecorder(runs_path(config), keep=config.run_history_keep)
         self._last_task: Task | None = None
         self._last_agent_result: ExecutionResult | None = None
         self._last_commit_sha: str | None = None
@@ -611,11 +610,24 @@ class Forgeo:
             "",
             "1. Decide what the agent needs (edit the repository directly if required).",
             "2. Reopen the task from the web console so Forgeo retries it on the next",
-            f"   scheduled run, or set the status of `{task.id}` back to `OPEN` directly",
-            f"   in `{self.config.backlog}`.",
+            f"   scheduled run{self._reopen_by_hand(task)}",
             "3. Or delete the task from the web console if it should not be done.",
         ]
         return "\n".join(sections)
+
+    def _reopen_by_hand(self, task: Task) -> str:
+        """How to reopen a blocked task without the web console.
+
+        Only a backlog file can be edited in place; a backlog served over HTTP
+        belongs to another application, so the human is pointed at it instead
+        of at a file that does not exist on this machine.
+        """
+        if self.config.backlog_is_url:
+            return f", or wherever the backlog at `{self.config.backlog}` is edited."
+        return (
+            f", or set the status of `{task.id}` back to `OPEN` directly in "
+            f"`{self.config.backlog}`."
+        )
 
     def _blocker_header(self, *, include_marker: bool) -> list[str]:
         """The shared ``BLOCKER.md`` preamble (intro, optional derived marker)."""

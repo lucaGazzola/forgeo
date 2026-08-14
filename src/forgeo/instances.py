@@ -25,6 +25,7 @@ from forgeo.config import load_config
 from forgeo.daemon import is_lock_held
 from forgeo.io import atomic_write_text
 from forgeo.models import ForgeoConfig
+from forgeo.paths import lock_path
 
 INSTANCE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
@@ -154,7 +155,7 @@ def _load_info(name: str, config_path: Path) -> InstanceInfo:
         name=name,
         config_path=config_path,
         repo=config.repo,
-        daemon_running=is_lock_held(config.backlog.with_suffix(".lock")),
+        daemon_running=is_lock_held(lock_path(config)),
         config=config,
     )
 

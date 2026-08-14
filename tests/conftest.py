@@ -1,11 +1,16 @@
-"""Shared fixtures: a real git repository, a scriptable fake agent, and
-factories for configs, tasks, and the Forgeo wiring used across suites."""
+"""Shared fixtures: a real git repository, a scriptable fake agent, a local
+backlog endpoint, and factories for configs, tasks, and the Forgeo wiring
+used across suites."""
 
 from __future__ import annotations
 
+import json
 import subprocess
+import threading
 from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Self
 
 import pytest
 
@@ -101,6 +106,71 @@ class FakeForgeo:
             raise RuntimeError("boom")
         self.cycles += 1
         return "task"
+
+
+class BacklogServer:
+    """A minimal backlog endpoint: GET returns the document, POST replaces it.
+
+    Used as a context manager; leaving the block shuts the server down, which
+    is also how tests produce an unreachable endpoint.
+    """
+
+    def __init__(self, document: dict | None = None) -> None:
+        self.document: dict = document if document is not None else {"tasks": []}
+        self.requests: list[str] = []
+        self.authorizations: list[str | None] = []
+        server_self = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:
+                pass
+
+            def _record(self) -> None:
+                server_self.requests.append(self.command)
+                server_self.authorizations.append(self.headers.get("Authorization"))
+
+            def do_GET(self) -> None:
+                self._record()
+                body = json.dumps(server_self.document).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self) -> None:
+                self._record()
+                length = int(self.headers.get("Content-Length", 0))
+                server_self.document = json.loads(self.rfile.read(length))
+                self.send_response(204)
+                self.end_headers()
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}/backlog"
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+    def tasks(self) -> list[dict]:
+        return list(self.document["tasks"])
+
+
+@pytest.fixture
+def backlog_server():
+    """A running local backlog endpoint, shut down at the end of the test."""
+    with BacklogServer() as server:
+        yield server
 
 
 def make_config(git_repo: Path, tmp_path: Path, **overrides) -> ForgeoConfig:

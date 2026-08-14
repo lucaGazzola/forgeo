@@ -1,8 +1,8 @@
 """Durable run history: one JSON line per finished cycle in ``runs.jsonl``.
 
-The file lives next to the backlog (``runs.jsonl`` beside ``backlog.json``)
-so Forgeo, the CLI, and the web API all read the same records. Reading
-tolerates a missing file and skips corrupt lines with a warning, so a broken
+Forgeo, the CLI, and the web API all read the same records; where the file
+lives is decided by :func:`forgeo.paths.runs_path`. Reading tolerates a
+missing file and skips corrupt lines with a warning, so a broken
 ``runs.jsonl`` never breaks a cycle or the API.
 
 The file is trimmed to ``run_history_keep`` records (default 2000) when
@@ -27,11 +27,6 @@ logger = logging.getLogger(__name__)
 #: Default number of finished runs kept in ``runs.jsonl``; overridden by the
 #: ``run_history_keep`` config key. ``0`` disables retention.
 DEFAULT_RUN_HISTORY_KEEP = 2000
-
-
-def runs_path_for(backlog_path: str | Path) -> Path:
-    """The ``runs.jsonl`` path that sits next to the backlog file."""
-    return Path(backlog_path).with_name("runs.jsonl")
 
 
 class RunRecorder:

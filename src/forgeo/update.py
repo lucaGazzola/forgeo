@@ -44,11 +44,6 @@ TIMEOUT_SECONDS = 3.0
 DISABLE_ENV = "FORGEO_UPDATE_CHECK"
 
 
-def update_state_path(backlog: str | Path) -> Path:
-    """The state file remembering the last update check, next to the backlog."""
-    return Path(backlog).with_suffix(".update.json")
-
-
 def update_check_enabled() -> bool:
     """True unless the check was disabled via ``FORGEO_UPDATE_CHECK``."""
     value = os.environ.get(DISABLE_ENV, "1").strip().lower()

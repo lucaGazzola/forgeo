@@ -19,6 +19,28 @@ remote: origin                  # Git remote to push to; omit to only commit loc
 
 backlog: backlog.json           # The task backlog (created on first use). Keep it
                                 # outside the repository so it is never committed.
+#
+# The backlog can also live in another application instead of a file: set it to
+# an http(s) URL and Forgeo reads the whole document with GET and writes it back
+# with POST on every change (same JSON shape as backlog.json). The endpoint must
+# replace its task list with the body it receives, never append.
+#   backlog: https://api.example.com/api/forgeo/backlog
+#   state_dir: .forgeo        # Where Forgeo's own runtime files go (locks, run
+#                             # history, daemon state). Only needed with a URL
+#                             # backlog, where there is no backlog file to sit
+#                             # beside; defaults to this config's directory.
+#
+# Credentials for a backlog URL behind an identity provider (Keycloak, ...).
+# Forgeo requests an access token with the OAuth2 client-credentials grant and
+# sends it as a bearer on every backlog request, so it authenticates as a
+# service account rather than as a person. The secret itself never goes in this
+# file: client_secret_env names the environment variable holding it.
+#   backlog_auth:
+#     token_url: https://keycloak.example.com/realms/dev/protocol/openid-connect/token
+#     client_id: forgeo
+#     client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET
+#     scope: forgeo-backlog   # Optional.
+#     timeout_seconds: 10     # Optional, default 10.
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.
 # run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest

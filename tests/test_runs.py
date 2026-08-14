@@ -18,7 +18,8 @@ from forgeo.models import (
     RunRecord,
     TaskStatus,
 )
-from forgeo.runs import RunRecorder, runs_path_for
+from forgeo.paths import runs_path
+from forgeo.runs import RunRecorder
 from tests.conftest import git, make_forgeo, make_task
 
 
@@ -36,7 +37,7 @@ async def test_task_success_appends_run_record(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    lines = read_lines(runs_path_for(forgeo.config.backlog))
+    lines = read_lines(runs_path(forgeo.config))
     assert len(lines) == 1
     record = lines[0]
     assert record["kind"] == "task"
@@ -60,7 +61,7 @@ async def test_task_success_without_changes_has_reason(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["outcome"] == "SUCCESS"
     assert record["commit_sha"] is None
     assert record["reason"] == NO_CHANGES_REASON
@@ -78,7 +79,7 @@ async def test_explicit_no_changes_record_has_reason(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["outcome"] == "SUCCESS"
     assert record["agent_exit_code"] == 3
     assert record["commit_sha"] is None
@@ -94,7 +95,7 @@ async def test_task_blocked_record(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["kind"] == "task"
     assert record["outcome"] == "BLOCKED"
     assert record["agent_exit_code"] == 2
@@ -109,7 +110,7 @@ async def test_task_error_record(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["kind"] == "task"
     assert record["task_id"] == "TASK-001"
     assert record["outcome"] == "ERROR"
@@ -130,7 +131,7 @@ async def test_run_record_persists_bounded_output_tail(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["output_logs"] == ["line 7", "line 8", "line 9"]
 
 
@@ -146,7 +147,7 @@ async def test_run_record_default_output_cap_is_200(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert len(record["output_logs"]) == DEFAULT_RUN_OUTPUT_LINES
     assert record["output_logs"][0] == "line 300"
     assert record["output_logs"][-1] == "line 499"
@@ -160,7 +161,7 @@ async def test_run_record_without_output_logs_is_null(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["output_logs"] is None
 
 
@@ -177,7 +178,7 @@ async def test_run_output_lines_zero_disables_persistence(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "task"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["output_logs"] is None
 
 
@@ -201,7 +202,7 @@ async def test_refactor_record(git_repo, tmp_path):
 
     assert await forgeo.run_cycle() == "refactor"
 
-    record = read_lines(runs_path_for(forgeo.config.backlog))[0]
+    record = read_lines(runs_path(forgeo.config))[0]
     assert record["kind"] == "refactor"
     assert record["task_id"] == "REFACTOR"
     assert record["task_title"] == "Refactoring pass"
@@ -214,7 +215,7 @@ async def test_refactor_record(git_repo, tmp_path):
 async def test_every_cycle_appends_exactly_one_line(git_repo, tmp_path):
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
-    runs = runs_path_for(forgeo.config.backlog)
+    runs = runs_path(forgeo.config)
 
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
     assert await forgeo.run_cycle() == "task"
@@ -375,7 +376,7 @@ def test_read_skips_corrupt_lines_with_warning(tmp_path, caplog):
 
 async def test_corrupt_runs_never_break_a_cycle(git_repo, tmp_path, caplog):
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
-    runs = runs_path_for(forgeo.config.backlog)
+    runs = runs_path(forgeo.config)
     runs.write_text("{not json\n", encoding="utf-8")
     await backlog.create_task(make_task())
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
@@ -466,7 +467,7 @@ def test_trim_failure_is_logged_not_raised(tmp_path, caplog, monkeypatch):
 async def test_cycle_applies_configured_retention(git_repo, tmp_path):
     """The daemon's recorder trims per ``run_history_keep`` from the config."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_history_keep=2)
-    runs = runs_path_for(forgeo.config.backlog)
+    runs = runs_path(forgeo.config)
     await backlog.create_task(make_task())
 
     for _ in range(4):
@@ -494,7 +495,7 @@ async def test_retried_run_record_carries_retry_count(git_repo, tmp_path):
     )
     assert await forgeo.run_cycle() == "task"
 
-    records = RunRecorder(runs_path_for(forgeo.config.backlog)).read()
+    records = RunRecorder(runs_path(forgeo.config)).read()
     assert [record.retry_count for record in records] == [1, None]
     assert records[0].outcome is RunOutcome.SUCCESS
     assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
@@ -511,5 +512,5 @@ async def test_never_retried_run_records_have_null_retry_count(git_repo, tmp_pat
 
     assert await forgeo.run_cycle() == "task"
 
-    record = RunRecorder(runs_path_for(forgeo.config.backlog)).read_last()
+    record = RunRecorder(runs_path(forgeo.config)).read_last()
     assert record.retry_count is None

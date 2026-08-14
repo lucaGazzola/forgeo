@@ -4,6 +4,11 @@ Relative paths in the file are resolved against the file's own directory,
 so a config file can live anywhere and still point at sibling directories.
 :func:`save_config` writes them back relative to that same directory, so a
 config round-trips without hard-coding absolute paths into the file.
+
+A ``backlog`` that is an ``http(s)`` URL is not a path and is left exactly as
+written. It is also the one case where Forgeo's runtime files have no backlog
+file to sit beside, so loading fills in ``state_dir`` with the config file's
+own directory (see :mod:`forgeo.paths`).
 """
 
 from __future__ import annotations
@@ -31,8 +36,15 @@ def load_config(path: str | Path) -> ForgeoConfig:
     updates: dict[str, Path | str] = {}
     if not config.repo.is_absolute():
         updates["repo"] = base / config.repo
-    if not config.backlog.is_absolute():
+    if not config.backlog_is_url and not Path(config.backlog).is_absolute():
         updates["backlog"] = base / config.backlog
+    if config.state_dir is None:
+        if config.backlog_is_url:
+            # A URL backlog has no file for the locks and the run history to
+            # sit beside, so they go next to the config that describes it.
+            updates["state_dir"] = base
+    elif not config.state_dir.is_absolute():
+        updates["state_dir"] = base / config.state_dir
     if not config.blocker_file.is_absolute():
         updates["blocker_file"] = base / config.blocker_file
     if not Path(config.log_file).is_absolute():
@@ -40,7 +52,7 @@ def load_config(path: str | Path) -> ForgeoConfig:
     return config if not updates else config.model_copy(update=updates)
 
 
-_PATH_FIELDS = ("repo", "backlog", "blocker_file", "log_file")
+_PATH_FIELDS = ("repo", "backlog", "blocker_file", "log_file", "state_dir")
 
 
 def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:
@@ -50,7 +62,8 @@ def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:
     is absolute, so the file stays portable and ``load_config`` resolves them
     back to the same absolute paths on the daemon's next load. An absolute path
     that cannot be expressed relative to the file's directory (a different
-    drive on Windows) is kept absolute.
+    drive on Windows) is kept absolute. A URL backlog is not a path and is
+    written back untouched.
 
     Returns the config as freshly loaded from the file (paths resolved), so
     callers get the exact state a subsequent ``load_config`` produces.
@@ -59,6 +72,8 @@ def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:
     base = config_path.parent.resolve()
     payload = config.model_dump(mode="json")
     for field in _PATH_FIELDS:
+        if payload[field] is None or (field == "backlog" and config.backlog_is_url):
+            continue
         value = Path(payload[field])
         if value.is_absolute():
             try:

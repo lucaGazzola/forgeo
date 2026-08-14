@@ -86,10 +86,13 @@ central dashboard, `forgeo web`.
 | Web dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
 
 Everything is stored in plain files: the backlog, `forgeo.log`, and
-`BLOCKER.md` whenever a decision is pending. The backlog is snapshotted
-(rotating `backlog.json.bak` files) before every agent run and on daemon
-startup, and restored automatically if it is ever found corrupt — a bad write
-never loses your tasks.
+`BLOCKER.md` whenever a decision is pending. The backlog can also live in
+another application behind an `http(s)` URL — Forgeo reads the whole task
+document with `GET` and writes it back with `POST`, with optional OAuth2
+client-credentials auth (see [Backlog format](docs/backlog.md)). A *file*
+backlog is snapshotted (rotating `backlog.json.bak` files) before every
+agent run and on daemon startup, and restored automatically if it is ever
+found corrupt — a bad write never loses your tasks.
 
 ## Develop
 

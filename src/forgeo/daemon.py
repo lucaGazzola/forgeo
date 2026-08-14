@@ -7,6 +7,12 @@ repository at the same time: when a run is still in progress at the next
 wake-up, that iteration is skipped instead of killing the running agent.
 Everything else is logged to the configured log file.
 
+One-shot task schedules shorten the sleep: after a cycle the daemon reads the
+backlog for the earliest ``run_at`` among runnable ``OPEN`` tasks and wakes at
+(or just after) that moment instead of waiting out the full interval, so a
+"run this after deploy" task fires promptly instead of waiting for the next
+scheduled pick.
+
 Live state (pid, started at, last outcome, next run) is written to a small
 ``daemon.state.json`` next to the backlog after every cycle, so external
 observers (the central dashboard, the CLI) can read it without the daemon
@@ -38,6 +44,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from forgeo.backlog import next_due_run_at
 from forgeo.config import load_config
 from forgeo.forgeo import Forgeo
 from forgeo.io import atomic_write_text
@@ -49,6 +56,12 @@ logger = logging.getLogger(__name__)
 #: from the config they guard. These are pinned to the running daemon's values
 #: on a reload; changing them needs a ``forgeo restart``.
 _RELOAD_PATH_FIELDS = ("repo", "backlog", "blocker_file", "log_file")
+
+#: The shortest sleep the daemon allows after a cycle. A ``run_at``-driven
+#: wake target is clamped to this floor so a task that stays due — because the
+#: run lock is held, the tree is dirty, or the forgeo is paused on a blocker —
+#: cannot hot-loop the daemon into an immediate wake cycle.
+MIN_WAKE_SLEEP_SECONDS = 1.0
 
 
 def _config_mtime_ns(config_path: Path | None) -> int | None:
@@ -349,20 +362,53 @@ class ForgeoDaemon:
             except Exception:
                 self.last_outcome = "error"
                 logger.exception("Run crashed; continuing on the next interval.")
-            self.next_run_at = datetime.now(UTC) + timedelta(seconds=self.interval_seconds)
+            self.next_run_at = await self._compute_next_run_at()
             self.write_state()
             await self._sleep_until_next_cycle()
         self.write_state()
         logger.info("Forgeo stopped.")
 
-    async def _sleep_until_next_cycle(self) -> None:
-        """Sleep until the next interval, an earlier stop, or a config reload.
+    async def _compute_next_run_at(self) -> datetime:
+        """The moment the daemon should wake after a finished cycle.
 
-        A ``SIGHUP`` (``request_reload``) wakes the daemon so a changed config
-        is re-read and the new interval takes effect promptly instead of
-        waiting out the old one.
+        Normally the next interval, but an ``OPEN`` task scheduled with a
+        ``run_at`` that is sooner (or already due) shortens the sleep so a
+        one-shot task fires promptly instead of waiting for the next scheduled
+        pick. The wake target is clamped to a small floor so a task that stays
+        due across skipped iterations cannot hot-loop the daemon.
         """
-        sleep = asyncio.create_task(asyncio.sleep(self.interval_seconds))
+        now = datetime.now(UTC)
+        fallback = now + timedelta(seconds=self.interval_seconds)
+        backlog = getattr(self.forgeo, "backlog", None)
+        if backlog is None:
+            return fallback
+        try:
+            tasks = await backlog.list_tasks()
+        except Exception:
+            logger.exception("Could not read backlog for the next wake time; using the interval.")
+            return fallback
+        run_at = next_due_run_at(tasks, now=now)
+        if run_at is None:
+            return fallback
+        delay = (run_at - now).total_seconds()
+        if delay >= self.interval_seconds:
+            return fallback
+        return now + timedelta(seconds=max(MIN_WAKE_SLEEP_SECONDS, delay))
+
+    async def _sleep_until_next_cycle(self) -> None:
+        """Sleep until the next run, an earlier stop, or a config reload.
+
+        ``next_run_at`` holds the next wake moment (the interval, or a sooner
+        ``run_at`` one-shot schedule); a ``SIGHUP`` (``request_reload``) wakes
+        the daemon so a changed config is re-read and the new interval takes
+        effect promptly instead of waiting out the old one.
+        """
+        now = datetime.now(UTC)
+        target = self.next_run_at
+        if target is None:
+            target = now + timedelta(seconds=self.interval_seconds)
+        delay = max(0.0, (target - now).total_seconds())
+        sleep = asyncio.create_task(asyncio.sleep(delay))
         stop = asyncio.create_task(self._stop_event.wait())
         reload_task = asyncio.create_task(self._reload_event.wait())
         try:

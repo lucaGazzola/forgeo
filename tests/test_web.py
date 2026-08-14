@@ -670,6 +670,53 @@ def test_post_task_includes_optional_fields(web_env):
     assert data["updated_at"]
 
 
+def test_post_task_accepts_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    run_at = "2026-08-20T12:30:00Z"
+    status, data = _post(
+        base,
+        json.dumps({"title": "After deploy", "description": "Run it.", "run_at": run_at}),
+    )
+    assert status == 201
+    assert data["run_at"] == run_at
+
+    status, tasks = _get(base)
+    assert status == 200
+    created = next(t for t in tasks if t["id"] == "WEB-001")
+    assert created["run_at"] == run_at
+
+    disk = json.loads(
+        (web_env[1] / "alpha" / "backlog.json").read_text(encoding="utf-8")
+    )
+    entry = next(t for t in disk["tasks"] if t["id"] == "WEB-001")
+    assert entry["run_at"] == run_at
+
+
+def test_post_task_accepts_null_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    status, data = _post(
+        base,
+        json.dumps({"title": "Plain", "description": "No schedule.", "run_at": None}),
+    )
+    assert status == 201
+    assert data["run_at"] is None
+
+
+def test_post_task_rejects_invalid_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    for payload in (
+        {"title": "x", "description": "y", "run_at": 42},
+        {"title": "x", "description": "y", "run_at": ["2026-08-20T12:30:00Z"]},
+        {"title": "x", "description": "y", "run_at": "not-a-datetime"},
+    ):
+        status, data = _post(base, json.dumps(payload))
+        assert status == 400, payload
+        assert data["error"]
+
+
 def test_post_task_validation_errors(web_env):
     server, _ = web_env
     base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
@@ -842,6 +889,45 @@ def test_patch_task_clears_optional_fields(web_env):
     assert status == 200
     assert data["agent_command"] is None
     assert data["agent_timeout_seconds"] is None
+
+
+def test_patch_task_sets_and_clears_run_at(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+    run_at = "2026-08-20T12:30:00Z"
+    status, data = _patch(url, json.dumps({"run_at": run_at}))
+    assert status == 200
+    assert data["run_at"] == run_at
+
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    updated = next(t for t in tasks if t["id"] == "TASK-001")
+    assert updated["run_at"] == run_at
+
+    status, data = _patch(url, json.dumps({"run_at": None}))
+    assert status == 200
+    assert data["run_at"] is None
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    updated = next(t for t in tasks if t["id"] == "TASK-001")
+    assert updated["run_at"] is None
+
+
+def test_patch_task_rejects_invalid_run_at(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+    for payload in (
+        {"run_at": 42},
+        {"run_at": ["2026-08-20T12:30:00Z"]},
+        {"run_at": "not-a-datetime"},
+    ):
+        status, data = _patch(url, json.dumps(payload))
+        assert status == 400, payload
+        assert data["error"]
+
+    status, task = _get(url)
+    assert status == 200
+    assert task["run_at"] is None
 
 
 def test_patch_task_unknown_id_404(web_env):
@@ -1438,6 +1524,49 @@ def test_retry_config_fields_editable_in_config_tab(web_env):
     assert status == 200
     assert "failed_retry_max" in body
     assert "failed_retry_wait_cycles" in body
+
+
+def test_tasks_endpoint_surfaces_run_at(registry, central_server):
+    """The tasks API returns a task's run_at one-shot schedule."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n",
+        encoding="utf-8",
+    )
+    task = task_json("TASK-001", "First", TaskStatus.OPEN)
+    task["run_at"] = "2026-08-20T12:30:00Z"
+    backlog.write_text(json.dumps({"tasks": [task]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(
+        f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks"
+    )
+    assert status == 200
+    assert data[0]["run_at"] == "2026-08-20T12:30:00Z"
+
+
+def test_run_at_form_inputs_in_instance_page(web_env):
+    """The instance page and script expose the run_at datetime-local input."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/instances/alpha/")
+    assert status == 200
+    assert 'id="task-run-at"' in body
+    assert 'type="datetime-local"' in body
+    assert 'id="task-edit-run-at"' in body
+
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "run_at" in body
+    assert "toLocalInputValue" in body
+    assert "task-modal-run-at" in body
 
 
 def test_blocker_endpoint(web_env):

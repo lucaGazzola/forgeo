@@ -52,6 +52,11 @@ is refused while the per-forgeo lock is held. Before detaching, `start` runs
 the same read-only checks as `forgeo validate` and refuses to start when it
 finds problems, so a broken config never leaves a silently dead daemon.
 
+After each cycle the daemon reads the backlog for the earliest `run_at`
+one-shot schedule among runnable `OPEN` tasks and wakes at (or just after)
+that moment instead of waiting out the full interval, so a scheduled task
+fires promptly (see [Backlog format](backlog.md#one-shot-scheduling)).
+
 When given `--config` and that config is not in the instance registry yet,
 `forgeo start` registers it automatically under the config's `name` field —
 no `forgeo instance add` needed. (With `--name` the instance must already be
@@ -119,7 +124,10 @@ last outcome: task
 
 - `backlog` — per-status task counts.
 - `next` — the oldest `OPEN` task whose dependencies are all `COMPLETED` (the
-  one Forgeo will pick next), or `(none)` when nothing is runnable.
+  one Forgeo will pick next), or `(none)` when nothing is runnable. A task
+  whose `run_at` one-shot schedule is due is shown ahead of older tasks; one
+  with a future `run_at` is skipped until it fires (see
+  [Backlog format](backlog.md#one-shot-scheduling)).
 - `waiting on` — when present, names the oldest `OPEN` task that is *not* yet
   runnable and the dependency ids keeping it waiting (with their current
   status, or `missing`) — e.g. `waiting on: TASK-002 (needs COMPLETED:

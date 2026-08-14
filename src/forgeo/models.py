@@ -166,6 +166,14 @@ class Task(BaseModel):
     status: TaskStatus = TaskStatus.OPEN
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
+    run_at: datetime | None = Field(
+        default=None,
+        description="Optional one-shot schedule: the earliest moment this task "
+        "may be picked. A past value makes the task fire immediately on the "
+        "next cycle (and the daemon wakes early for it); a future value keeps "
+        "the task unpicked until then. ``None`` (the default) picks the task "
+        "by oldest ``created_at`` as before.",
+    )
     agent_command: str | list[str] | None = Field(default=None)
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
     blocker_reason: list[str] = Field(default_factory=list)
@@ -213,6 +221,35 @@ class Task(BaseModel):
     @classmethod
     def _command_not_blank(cls, value: str | list[str] | None) -> str | list[str] | None:
         return _validate_agent_command(value)
+
+    @field_validator("run_at", mode="before")
+    @classmethod
+    def _run_at_type(cls, value: object) -> object:
+        """Reject non-string/non-datetime ``run_at`` values.
+
+        Without this, pydantic would silently coerce a bare number into an
+        epoch timestamp (e.g. ``42`` becomes 1970-01-01) — never useful for a
+        one-shot schedule, so it is refused with a clear message instead.
+        """
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError("run_at must be an ISO-8601 datetime string or null")
+        return value
+
+    @field_validator("run_at")
+    @classmethod
+    def _run_at_utc(cls, value: datetime | None) -> datetime | None:
+        """Normalize ``run_at`` to an aware UTC datetime for comparison.
+
+        The backlog is edited by hand and by the web console, so ``run_at``
+        may arrive naive (assumed UTC, like the daemon's other timestamps)
+        or in another offset; the pick and the daemon both compare against
+        aware ``datetime.now(UTC)``, so it is normalized once here.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class ExecutionResult(BaseModel):

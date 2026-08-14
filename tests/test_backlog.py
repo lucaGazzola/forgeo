@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from forgeo.backlog import JSONBacklog, oldest_open_task, unsatisfied_dependencies
+from forgeo.backlog import (
+    JSONBacklog,
+    next_due_run_at,
+    oldest_open_task,
+    unsatisfied_dependencies,
+)
 from forgeo.models import Task, TaskStatus
 from tests.conftest import make_task
 
@@ -111,6 +116,128 @@ def test_oldest_open_task_self_dependency_never_runnable():
     assert oldest_open_task([task]) is None
 
 
+def test_oldest_open_task_picks_past_run_at_over_older_open():
+    now = datetime.now(UTC)
+    scheduled = make_task(
+        id="SCHED",
+        title="After deploy",
+        created_at=now - timedelta(hours=1),
+        run_at=now - timedelta(minutes=5),
+    )
+    older = make_task(
+        id="OLD", title="Older normal", created_at=now - timedelta(hours=3)
+    )
+    assert oldest_open_task([older, scheduled], now=now) is scheduled
+
+
+def test_oldest_open_task_skips_future_run_at_until_it_fires():
+    now = datetime.now(UTC)
+    scheduled = make_task(
+        id="SCHED",
+        title="Weekly report",
+        created_at=now - timedelta(hours=2),
+        run_at=now + timedelta(hours=1),
+    )
+    normal = make_task(
+        id="GO", title="Normal", created_at=now - timedelta(minutes=30)
+    )
+    assert oldest_open_task([scheduled, normal], now=now) is normal
+    assert oldest_open_task([scheduled], now=now) is None
+
+
+def test_oldest_open_task_fires_run_at_exactly_at_now():
+    now = datetime.now(UTC)
+    scheduled = make_task(
+        id="SCHED",
+        title="Now due",
+        run_at=now,
+        created_at=now - timedelta(hours=2),
+    )
+    normal = make_task(id="GO", title="Normal", created_at=now - timedelta(hours=3))
+    assert oldest_open_task([normal, scheduled], now=now) is scheduled
+
+
+def test_oldest_open_task_due_group_picks_earliest_run_at():
+    now = datetime.now(UTC)
+    most_overdue = make_task(
+        id="A",
+        title="Most overdue",
+        created_at=now - timedelta(hours=1),
+        run_at=now - timedelta(hours=2),
+    )
+    less_overdue = make_task(
+        id="B",
+        title="Less overdue",
+        created_at=now - timedelta(hours=3),
+        run_at=now - timedelta(minutes=30),
+    )
+    assert oldest_open_task([less_overdue, most_overdue], now=now) is most_overdue
+
+
+def test_oldest_open_task_run_at_past_but_blocked_dependency_not_picked():
+    now = datetime.now(UTC)
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.BLOCKED,
+        created_at=now - timedelta(hours=3),
+    )
+    scheduled = make_task(
+        id="SCHED",
+        title="After deploy",
+        dependencies=["DEP-1"],
+        run_at=now - timedelta(minutes=5),
+    )
+    assert oldest_open_task([scheduled, dep], now=now) is None
+
+
+def test_oldest_open_task_non_open_run_at_ignored():
+    now = datetime.now(UTC)
+    done = make_task(
+        id="DONE",
+        title="Done",
+        status=TaskStatus.COMPLETED,
+        run_at=now - timedelta(hours=1),
+    )
+    normal = make_task(id="GO", title="Normal", created_at=now - timedelta(hours=2))
+    assert oldest_open_task([done, normal], now=now) is normal
+
+
+def test_next_due_run_at_returns_earliest_future_or_past():
+    now = datetime.now(UTC)
+    soon = make_task(id="SOON", title="Soon", run_at=now + timedelta(minutes=10))
+    later = make_task(id="LATER", title="Later", run_at=now + timedelta(hours=2))
+    assert next_due_run_at([later, soon], now=now) == soon.run_at
+
+
+def test_next_due_run_at_includes_past_and_normalizes_to_none():
+    now = datetime.now(UTC)
+    past = make_task(id="PAST", title="Past", run_at=now - timedelta(minutes=5))
+    assert next_due_run_at([past], now=now) == past.run_at
+
+
+def test_next_due_run_at_none_without_run_at_tasks():
+    now = datetime.now(UTC)
+    normal = make_task(id="GO", title="Normal", created_at=now - timedelta(hours=1))
+    assert next_due_run_at([normal], now=now) is None
+    assert next_due_run_at([], now=now) is None
+
+
+def test_next_due_run_at_skips_not_runnable_and_completed():
+    now = datetime.now(UTC)
+    waiting = make_task(
+        id="WAIT",
+        title="Waits",
+        dependencies=["GHOST"],
+        run_at=now + timedelta(minutes=5),
+    )
+    done = make_task(
+        id="DONE",
+        title="Done",
+        status=TaskStatus.COMPLETED,
+        run_at=now + timedelta(minutes=5),
+    )
+    assert next_due_run_at([waiting, done], now=now) is None
+
+
 def test_unsatisfied_dependencies_reports_status_and_missing():
     done = make_task(id="DONE", status=TaskStatus.COMPLETED)
     blocked = make_task(id="BLK", status=TaskStatus.BLOCKED)
@@ -190,6 +317,30 @@ async def test_fetch_next_task_none_on_cycle(tmp_path):
     await backlog.create_task(Task(id="A", title="a", description="d", dependencies=["B"]))
     await backlog.create_task(Task(id="B", title="b", description="d", dependencies=["A"]))
     assert await backlog.fetch_next_task() is None
+
+
+async def test_fetch_next_task_picks_past_run_at_over_older(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    now = datetime.now(UTC)
+    await backlog.create_task(
+        make_task(id="OLD", created_at=now - timedelta(hours=3))
+    )
+    await backlog.create_task(
+        make_task(id="SCHED", run_at=now - timedelta(minutes=5))
+    )
+    fetched = await backlog.fetch_next_task()
+    assert fetched.id == "SCHED"
+
+
+async def test_fetch_next_task_skips_future_run_at(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    now = datetime.now(UTC)
+    await backlog.create_task(make_task(id="SCHED", run_at=now + timedelta(hours=1)))
+    assert await backlog.fetch_next_task() is None
+
+    await backlog.create_task(make_task(id="GO"))
+    fetched = await backlog.fetch_next_task()
+    assert fetched.id == "GO"
 
 
 async def test_update_status_persists_and_bumps_timestamp(tmp_path):
@@ -691,6 +842,36 @@ async def test_update_task_accepts_retries_left(tmp_path):
     assert cleared.retries_left is None
     stored = await backlog.get_task(task.id)
     assert stored.retries_left is None
+
+
+async def test_update_task_accepts_and_clears_run_at(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    run_at = datetime(2026, 8, 20, 12, 30, tzinfo=UTC)
+    updated = await backlog.update_task(task.id, {"run_at": run_at.isoformat()})
+    assert updated.run_at == run_at
+    stored = await backlog.get_task(task.id)
+    assert stored.run_at == run_at
+
+    cleared = await backlog.update_task(task.id, {"run_at": None})
+    assert cleared.run_at is None
+    stored = await backlog.get_task(task.id)
+    assert stored.run_at is None
+
+
+async def test_update_task_invalid_run_at_raise(tmp_path):
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    for bad in (
+        {"run_at": "not-a-datetime"},
+        {"run_at": 42},
+        {"run_at": []},
+        {"run_at": {}},
+    ):
+        with pytest.raises(ValueError):
+            await backlog.update_task(task.id, bad)
+    stored = await backlog.get_task(task.id)
+    assert stored.run_at is None
 
 
 async def test_update_task_invalid_retries_left_raise(tmp_path):

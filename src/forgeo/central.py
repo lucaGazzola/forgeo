@@ -63,7 +63,7 @@ import threading
 import time
 import tomllib
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -905,16 +905,38 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     400, {"error": "agent_command must be a non-blank string or null"}
                 )
                 return
+            run_at = payload.get("run_at")
+            run_at_dt: datetime | None = None
+            if run_at is not None:
+                if not isinstance(run_at, str):
+                    self._send_json(
+                        400,
+                        {"error": "run_at must be an ISO-8601 datetime string or null"},
+                    )
+                    return
+                try:
+                    run_at_dt = datetime.fromisoformat(run_at)
+                except ValueError:
+                    self._send_json(
+                        400,
+                        {"error": "run_at must be an ISO-8601 datetime string or null"},
+                    )
+                    return
 
             backlog = JSONBacklog(config.backlog)
             existing = asyncio.run(backlog.list_tasks())
-            task = Task(
-                id=web_task_id_for(existing),
-                title=title.strip(),
-                description=description.strip(),
-                acceptance_criteria=acceptance_criteria,
-                agent_command=agent_command.strip() if agent_command else None,
-            )
+            try:
+                task = Task(
+                    id=web_task_id_for(existing),
+                    title=title.strip(),
+                    description=description.strip(),
+                    acceptance_criteria=acceptance_criteria,
+                    agent_command=agent_command.strip() if agent_command else None,
+                    run_at=run_at_dt,
+                )
+            except ValidationError as exc:
+                self._send_json(400, {"error": f"invalid task field(s): {exc}"})
+                return
             try:
                 created = asyncio.run(backlog.create_task(task))
             except ValueError:

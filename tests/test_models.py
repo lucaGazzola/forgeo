@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,52 @@ def test_task_accepts_retries_left_override():
 def test_task_rejects_negative_retries_left():
     with pytest.raises(ValidationError):
         Task(id="TASK-001", title="t", description="Do it.", retries_left=-1)
+
+
+def test_task_run_at_defaults_to_none():
+    task = Task(id="TASK-001", title="t", description="Do it.")
+    assert task.run_at is None
+
+
+def test_task_accepts_run_at():
+    run_at = datetime(2026, 8, 20, 12, 30, tzinfo=UTC)
+    task = Task(id="TASK-001", title="t", description="Do it.", run_at=run_at)
+    assert task.run_at == run_at
+
+
+def test_task_run_at_accepts_iso_string_and_normalizes_to_utc():
+    task = Task(
+        id="TASK-001",
+        title="t",
+        description="Do it.",
+        run_at="2026-08-14T12:00:00+02:00",
+    )
+    assert task.run_at == datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+    assert task.run_at.tzinfo is UTC
+
+
+def test_task_run_at_naive_assumed_utc():
+    task = Task(
+        id="TASK-001",
+        title="t",
+        description="Do it.",
+        run_at="2026-08-14T12:00:00",
+    )
+    assert task.run_at == datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+
+
+def test_task_run_at_round_trips_through_json():
+    run_at = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+    task = Task(id="TASK-001", title="t", description="Do it.", run_at=run_at)
+    payload = task.model_dump(mode="json")
+    assert payload["run_at"] == "2026-08-14T10:00:00Z"
+    assert Task.model_validate(payload).run_at == run_at
+
+
+def test_task_run_at_rejects_invalid_value():
+    for bad in ("not-a-datetime", 42, [], {}):
+        with pytest.raises(ValidationError):
+            Task(id="TASK-001", title="t", description="Do it.", run_at=bad)
 
 
 def test_config_requires_agent_command():

@@ -85,6 +85,21 @@
     return minutes + " mins";
   }
 
+  /* Render a UTC ISO timestamp into a <input type="datetime-local"> value
+     (the browser's local time, no seconds). Empty string for null/invalid. */
+  function toLocalInputValue(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var pad = function (n) {
+      return (n < 10 ? "0" : "") + n;
+    };
+    return (
+      d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      "T" + pad(d.getHours()) + ":" + pad(d.getMinutes())
+    );
+  }
+
   function timeEl(label, iso, short) {
     var span = el("span", null, label + " ");
     var time = el("time", null, formatTime(iso, short));
@@ -297,6 +312,9 @@
       card.appendChild(el("p", "task__desc", task.description));
     }
     var times = el("div", "task__times");
+    if (task.run_at) {
+      times.appendChild(timeEl("scheduled", task.run_at, true));
+    }
     times.appendChild(timeEl("created", task.created_at, true));
     times.appendChild(timeEl("updated", task.updated_at, true));
     card.appendChild(times);
@@ -653,6 +671,12 @@
       }
       retries.textContent = retryText || "";
     }
+    var runAt = document.getElementById("task-modal-run-at");
+    if (runAt) {
+      runAt.textContent = task.run_at
+        ? "scheduled for " + formatTime(task.run_at)
+        : "";
+    }
     var created = document.getElementById("task-modal-created");
     if (created) created.textContent = formatTime(task.created_at);
     var updated = document.getElementById("task-modal-updated");
@@ -676,6 +700,7 @@
       "task-modal-retries-section",
       Boolean(retries && retries.textContent)
     );
+    showModalSection("task-modal-run-at-section", Boolean(task.run_at));
   }
 
   function splitLines(value) {
@@ -716,6 +741,7 @@
         ? ""
         : String(modalTask.retries_left)
     );
+    setValue("task-edit-run-at", toLocalInputValue(modalTask.run_at));
 
     showModalSection("task-modal-view", false);
     showModalSection("task-modal-edit-form", true);
@@ -744,6 +770,7 @@
     var command = value("task-edit-command").trim();
     var timeout = value("task-edit-timeout").trim();
     var retries = value("task-edit-retries").trim();
+    var runAt = value("task-edit-run-at").trim();
     var updates = {
       title: value("task-edit-title").trim(),
       description: value("task-edit-description").trim(),
@@ -753,6 +780,7 @@
       agent_command: command ? command : null,
       agent_timeout_seconds: timeout === "" ? null : Number(timeout),
       retries_left: retries === "" ? null : parseInt(retries, 10),
+      run_at: runAt ? new Date(runAt).toISOString() : null,
     };
     return updates;
   }
@@ -1608,6 +1636,8 @@
       }
       var commandInput = document.getElementById("task-command");
       var command = commandInput ? commandInput.value.trim() : "";
+      var runAtInput = document.getElementById("task-run-at");
+      var runAt = runAtInput ? runAtInput.value.trim() : "";
 
       apiFetch(API + "tasks", {
         method: "POST",
@@ -1617,6 +1647,7 @@
           description: description,
           acceptance_criteria: criteria.slice(),
           agent_command: command ? command : null,
+          run_at: runAt ? new Date(runAt).toISOString() : null,
         }),
       })
         .then(function (resp) {

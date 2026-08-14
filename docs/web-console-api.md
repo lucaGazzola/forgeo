@@ -66,7 +66,8 @@ open-by-default behavior.
   daemon state (lock held), last outcome, next run, and per-status backlog
   counts, each linking to its instance page.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
-  **Create** tab with a form to add tasks, plus tabs for **logs**, **history**,
+  **Create** tab with a form to add tasks (including an optional *Run at*
+  date/time input for a one-shot schedule), plus tabs for **logs**, **history**,
   **blocker** and **config**. The header carries a **DAEMON** section with the
   daemon status tag (`running`/`stopped`) and **Start**/**Stop**/**Restart**
   buttons that call `POST /api/instances/<name>/start|stop|restart`; the
@@ -86,9 +87,11 @@ open-by-default behavior.
   a notice that the running daemon applies the change only on its next
   restart. Clicking a task card opens a modal with the full
   task details (description, acceptance criteria, dependencies, files to
-  modify, agent command, timestamps); it closes via the close button, the
+  modify, agent command, timestamps, and the optional `run_at` one-shot
+  schedule); it closes via the close button, the
   backdrop, or Escape. An **Edit** button switches the modal to an editable
-  form for those fields; **Save** persists the change via `PATCH` and
+  form for those fields (a *Run at* date/time input sets or clears the
+  schedule); **Save** persists the change via `PATCH` and
   **Cancel** discards it. A task whose dependencies are not all `COMPLETED`
   shows a *Waiting on dependencies* banner listing each uncompleted
   dependency with its current status (or `missing` when the id does not
@@ -168,6 +171,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
     "failure_reason": [],
     "created_at": "2026-07-31T10:00:00Z",
     "updated_at": "2026-07-31T10:00:00Z",
+    "run_at": null,
     "dependencies": [],
     "acceptance_criteria": [],
     "files_to_modify": [],
@@ -221,15 +225,17 @@ exhausted (see [Backlog format](backlog.md#retrying-a-failed-task)).
 
 Create a new task in that instance's backlog. The request body must be a JSON
 object with a non-blank `title` and a non-blank `description`;
-`acceptance_criteria` (array of strings) and `agent_command` (string or
-`null`, overriding the configured agent for this task) are optional. The
-server generates the id as the next free `WEB-###` id and stamps
-`created_at`/`updated_at`.
+`acceptance_criteria` (array of strings), `agent_command` (string or
+`null`, overriding the configured agent for this task) and `run_at` (an
+ISO-8601 datetime string or `null` — the optional one-shot schedule: a past
+value fires the task immediately, a future value keeps it unpicked until
+then) are optional. The server generates the id as the next free `WEB-###` id
+and stamps `created_at`/`updated_at`.
 
 ```bash
 curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"title": "Implement fibonacci module", "description": "With tests.", "acceptance_criteria": ["passes pytest"], "agent_command": "claude -p \"$FORGEO_TASK\" --model claude-3-haiku"}'
+  -d '{"title": "Implement fibonacci module", "description": "With tests.", "acceptance_criteria": ["passes pytest"], "agent_command": "claude -p \"$FORGEO_TASK\" --model claude-3-haiku", "run_at": "2026-08-20T12:30:00Z"}'
 ```
 
 ```json
@@ -243,6 +249,7 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   "failure_reason": [],
   "created_at": "2026-08-01T12:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
+  "run_at": "2026-08-20T12:30:00Z",
   "dependencies": [],
   "acceptance_criteria": ["passes pytest"],
   "files_to_modify": []
@@ -306,12 +313,13 @@ the next cycle automatically. Errors:
 
 Update an existing task's editable fields: `title`, `description`,
 `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`,
-`agent_timeout_seconds`, and `retries_left` (the per-task automatic-retry
-budget override; a non-negative integer or `null`). The request body is a
-JSON object; omitted fields are left unchanged and `id`, `status`,
-`blocker_reason`, `blocked_count`, `failure_reason`, `retry_count`,
-`failed_wait_cycles`, and `created_at` are always preserved (they are
-engine-managed — `PATCH` rejects them like it rejects `status`).
+`agent_timeout_seconds`, `retries_left` (the per-task automatic-retry
+budget override; a non-negative integer or `null`), and `run_at` (the
+optional one-shot schedule; an ISO-8601 datetime string or `null` to clear
+it). The request body is a JSON object; omitted fields are left unchanged
+and `id`, `status`, `blocker_reason`, `blocked_count`, `failure_reason`,
+`retry_count`, `failed_wait_cycles`, and `created_at` are always preserved
+(they are engine-managed — `PATCH` rejects them like it rejects `status`).
 `agent_command` may be a string, an array, or `null` (clear the per-task
 override); `agent_timeout_seconds` may be a positive number or `null`.
 `updated_at` is bumped to the current time.
@@ -319,7 +327,7 @@ override); `agent_timeout_seconds` may be a positive number or `null`.
 ```bash
 curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
   -H 'Content-Type: application/json' \
-  -d '{"description": "Write a fibonacci module with tests.", "agent_timeout_seconds": 120}'
+  -d '{"description": "Write a fibonacci module with tests.", "agent_timeout_seconds": 120, "run_at": "2026-08-20T12:30:00Z"}'
 ```
 
 ```json

@@ -5,9 +5,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import UTC, datetime, timedelta
 
 from forgeo.config import load_config
-from forgeo.daemon import ForgeoDaemon, RunLock, acquire_run_lock, is_lock_held, read_lock_pid
+from forgeo.daemon import (
+    MIN_WAKE_SLEEP_SECONDS,
+    ForgeoDaemon,
+    RunLock,
+    acquire_run_lock,
+    is_lock_held,
+    read_lock_pid,
+)
+from forgeo.models import ExecutionResult, ExecutionStatus, TaskStatus
 from tests.conftest import FakeForgeo, make_config, make_forgeo, make_task
 
 
@@ -126,6 +135,83 @@ async def test_daemon_runs_after_run_lock_released(git_repo, tmp_path):
     daemon.stop()
     await asyncio.wait_for(task, timeout=5)
     assert daemon.forgeo.cycles >= 1
+
+
+async def test_compute_next_run_at_shortened_by_future_run_at(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    run_at = datetime.now(UTC) + timedelta(seconds=30)
+    await backlog.create_task(make_task(run_at=run_at))
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 3600
+    target = await daemon._compute_next_run_at()
+    assert abs((target - run_at).total_seconds()) < 1
+
+
+async def test_compute_next_run_at_wakes_immediately_for_past_run_at(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(run_at=datetime.now(UTC) - timedelta(minutes=5)))
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 3600
+    target = await daemon._compute_next_run_at()
+    delay = (target - datetime.now(UTC)).total_seconds()
+    assert 0 <= delay <= MIN_WAKE_SLEEP_SECONDS + 0.5
+
+
+async def test_compute_next_run_at_ignores_run_at_beyond_interval(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    run_at = datetime.now(UTC) + timedelta(hours=3)
+    await backlog.create_task(make_task(run_at=run_at))
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 60
+    target = await daemon._compute_next_run_at()
+    assert abs((target - (datetime.now(UTC) + timedelta(seconds=60))).total_seconds()) < 1
+
+
+async def test_compute_next_run_at_falls_back_to_interval_without_run_at(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 3600
+    target = await daemon._compute_next_run_at()
+    assert abs((target - (datetime.now(UTC) + timedelta(seconds=3600))).total_seconds()) < 1
+
+
+async def test_daemon_picks_due_run_at_task_promptly(git_repo, tmp_path):
+    """A past run_at is fired on the very next cycle: the task leaves OPEN
+    without waiting for the (long) interval."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, no_changes=True)
+    await backlog.create_task(make_task(id="DUE", run_at=datetime.now(UTC) - timedelta(minutes=5)))
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 3600
+    task = asyncio.create_task(daemon.run_forever())
+    for _ in range(300):
+        current = await backlog.get_task("DUE")
+        if current is not None and current.status is not TaskStatus.OPEN:
+            break
+        await asyncio.sleep(0.02)
+    daemon.stop()
+    await asyncio.wait_for(task, timeout=5)
+    current = await backlog.get_task("DUE")
+    assert current.status is not TaskStatus.OPEN
+
+
+async def test_daemon_next_run_at_reflects_future_run_at(git_repo, tmp_path):
+    """After a cycle the daemon's next_run_at is shortened to the scheduled
+    run_at instead of the full interval."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, no_changes=True)
+    run_at = datetime.now(UTC) + timedelta(seconds=10)
+    await backlog.create_task(make_task(id="SOON", run_at=run_at))
+    daemon = ForgeoDaemon(forgeo.config, forgeo)
+    daemon.interval_seconds = 3600
+    task = asyncio.create_task(daemon.run_forever())
+    while daemon.next_run_at is None:
+        await asyncio.sleep(0.02)
+    daemon.stop()
+    await asyncio.wait_for(task, timeout=5)
+    delay = (daemon.next_run_at - datetime.now(UTC)).total_seconds()
+    assert 0 <= delay <= 12
 
 
 def test_state_file_written_on_start(git_repo, tmp_path):

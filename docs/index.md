@@ -4,7 +4,9 @@ A **scheduled, agent-driven software forgeo** for one repository. Every
 `interval_minutes` Forgeo wakes up and runs exactly one of three things:
 
 1. picks the oldest `OPEN` task whose dependencies are all `COMPLETED` from the
-   [backlog](backlog.md), runs it through a coding [agent](agent-contract.md),
+   [backlog](backlog.md) (an optional `run_at` one-shot schedule overrides the
+   oldest-first order — see [One-shot scheduling](backlog.md#one-shot-scheduling)),
+   runs it through a coding [agent](agent-contract.md),
    and commits + pushes the result directly on the single configured branch —
    no branches, no PRs;
 2. if the backlog is empty, runs the agent in **refactoring mode** and commits
@@ -84,7 +86,8 @@ forgeo.yaml ──► forgeo start (daemon)
    cycle.
 4. Otherwise it takes the oldest `OPEN` task whose dependencies are all
    `COMPLETED` — a task still waiting on an uncompleted dependency is skipped
-   (see [Backlog format](backlog.md) for how dependencies are enforced). If
+   (see [Backlog format](backlog.md) for how dependencies are enforced), and a
+   task with a due `run_at` one-shot schedule fires ahead of older tasks. If
    the working tree is dirty the cycle aborts (`dirty`) rather than running
    over manual changes.
 5. The agent runs with the repository as its working directory and the task in
@@ -92,8 +95,9 @@ forgeo.yaml ──► forgeo start (daemon)
    [Agent contract](agent-contract.md) for the exact mapping.
 6. With no `OPEN` task and no blocker file, the agent runs in refactoring mode
    and its changes are committed the same way.
-7. The daemon sleeps until the next interval. A wake-up that finds a run still
-   in progress is skipped, never killed.
+7. The daemon sleeps until the next interval — or, when a runnable `OPEN` task
+   carries a `run_at` sooner (or already due), until that moment instead. A
+   wake-up that finds a run still in progress is skipped, never killed.
 
 ## Where state lives
 

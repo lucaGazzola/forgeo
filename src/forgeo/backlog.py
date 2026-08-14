@@ -1,7 +1,8 @@
 """The backlog: a single human-readable JSON file of tasks.
 
 Forgeo pulls the oldest ``OPEN`` task whose dependencies are all ``COMPLETED``
-from here. Edit this file directly to add, remove, or reopen tasks (e.g. set a
+from here (an optional ``run_at`` one-shot schedule overrides the oldest-first
+order). Edit this file directly to add, remove, or reopen tasks (e.g. set a
 ``BLOCKED`` task back to ``OPEN`` once the human input has been provided).
 Writes are atomic and serialized through an asyncio lock.
 
@@ -45,6 +46,7 @@ EDITABLE_TASK_FIELDS = frozenset(
         "agent_command",
         "agent_timeout_seconds",
         "retries_left",
+        "run_at",
     }
 )
 
@@ -72,17 +74,15 @@ def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, st
     return unmet
 
 
-def oldest_open_task(tasks: list[Task]) -> Task | None:
-    """Return the oldest OPEN task whose dependencies are all COMPLETED.
+def _runnable_open_tasks(tasks: list[Task]) -> list[Task]:
+    """The OPEN tasks whose dependencies are all COMPLETED.
 
     A task is only runnable when every id in its ``dependencies`` exists and
     is ``COMPLETED``; tasks referencing missing or still-pending tasks are
-    skipped. Tasks without dependencies behave exactly as before. Returns
-    ``None`` when no runnable OPEN task exists (e.g. an empty backlog, or a
-    cycle of tasks all waiting on each other).
+    skipped. Tasks without dependencies are always runnable when OPEN.
     """
     status_by_id = {t.id: t.status for t in tasks}
-    open_tasks = [
+    return [
         task
         for task in tasks
         if task.status is TaskStatus.OPEN
@@ -91,9 +91,56 @@ def oldest_open_task(tasks: list[Task]) -> Task | None:
             for dep_id in task.dependencies
         )
     ]
-    if not open_tasks:
+
+
+def oldest_open_task(tasks: list[Task], *, now: datetime | None = None) -> Task | None:
+    """Return the runnable OPEN task Forgeo should pick next.
+
+    The default is the oldest ``created_at`` task whose dependencies are all
+    ``COMPLETED``, exactly as before. An optional one-shot ``run_at`` changes
+    the order:
+
+    * A runnable OPEN task whose ``run_at`` is in the past (or equal to
+      ``now``) is picked *before* every task without ``run_at`` — the
+      "run this after deploy" case. Among due tasks the one with the earliest
+      ``run_at`` (most overdue) is picked first, ties broken by ``created_at``.
+    * A runnable OPEN task whose ``run_at`` is in the future is skipped until
+      that moment arrives, so it never displaces an already-eligible task.
+
+    Returns ``None`` when no runnable OPEN task exists (e.g. an empty backlog,
+    a cycle of tasks all waiting on each other, or only future-``run_at``
+    tasks).
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    runnable = _runnable_open_tasks(tasks)
+    due = [task for task in runnable if task.run_at is not None and task.run_at <= now]
+    if due:
+        return min(due, key=lambda task: (task.run_at, task.created_at))
+    normal = [task for task in runnable if task.run_at is None]
+    if not normal:
         return None
-    return min(open_tasks, key=lambda task: task.created_at)
+    return min(normal, key=lambda task: task.created_at)
+
+
+def next_due_run_at(tasks: list[Task], *, now: datetime | None = None) -> datetime | None:
+    """The earliest ``run_at`` among runnable OPEN tasks, or ``None``.
+
+    The daemon uses this to wake early: when a scheduled task's ``run_at`` is
+    sooner than the next interval (or already in the past), it sleeps only
+    until that moment instead of the full interval, so a one-shot task fires
+    promptly rather than waiting for the next scheduled pick. Tasks that are
+    not runnable (not ``OPEN``, or blocked on an uncompleted dependency) and
+    tasks without ``run_at`` are ignored.
+    """
+    run_at_times = [
+        task.run_at
+        for task in _runnable_open_tasks(tasks)
+        if task.run_at is not None
+    ]
+    if not run_at_times:
+        return None
+    return min(run_at_times)
 
 
 def backlog_status_counts(tasks: list[Task]) -> dict[str, int]:
@@ -144,10 +191,10 @@ class JSONBacklog:
         store = await self._read()
         return [self._to_task(entry) for entry in store["tasks"]]
 
-    async def fetch_next_task(self) -> Task | None:
-        """Return the oldest OPEN task whose dependencies are all COMPLETED,
-        or ``None`` when nothing is runnable."""
-        return oldest_open_task(await self.list_tasks())
+    async def fetch_next_task(self, *, now: datetime | None = None) -> Task | None:
+        """Return the task Forgeo should run next (honoring ``run_at``
+        one-shot schedules), or ``None`` when nothing is runnable."""
+        return oldest_open_task(await self.list_tasks(), now=now)
 
     async def snapshot(self) -> None:
         """Copy the current store to a rotating snapshot (``backlog.json.bak``).
@@ -346,6 +393,10 @@ class JSONBacklog:
             or updates["retries_left"] < 0
         ):
             raise ValueError("retries_left must be a non-negative integer or null")
+        if "run_at" in updates and updates["run_at"] is not None and not isinstance(
+            updates["run_at"], str
+        ):
+            raise ValueError("run_at must be an ISO-8601 datetime string or null")
 
         async with self._lock:
             store = await self._read()

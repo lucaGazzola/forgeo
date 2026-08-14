@@ -32,6 +32,7 @@ Each entry in `tasks` is a task object:
 | <span style="white-space: nowrap">`status`</span> | string | `OPEN` | One of `OPEN`, `BLOCKED`, `COMPLETED`, `FAILED`. |
 | <span style="white-space: nowrap">`created_at`</span> | ISO-8601 datetime | now (UTC) | When the task was created; used for oldest-first ordering. |
 | <span style="white-space: nowrap">`updated_at`</span> | ISO-8601 datetime | now (UTC) | Bumped whenever the status changes. |
+| <span style="white-space: nowrap">`run_at`</span> | ISO-8601 datetime / `null` | `null` | Optional one-shot schedule: the earliest moment this task may be picked. A past value makes the task fire immediately on the next cycle (and the daemon wakes early for it); a future value keeps the task unpicked until then. `null` (the default) picks the task by oldest `created_at` as before. Editable via `PATCH`. |
 | <span style="white-space: nowrap">`dependencies`</span> | list[string] | `[]` | Task ids this task depends on. Forgeo only picks the task once every dependency is `COMPLETED` (missing ids and ids in any other state keep it waiting). |
 | <span style="white-space: nowrap">`acceptance_criteria`</span> | list[string] | `[]` | Rendered into the `FORGEO_TASK` instruction under an "Acceptance criteria:" heading. |
 | <span style="white-space: nowrap">`files_to_modify`</span> | list[string] | `[]` | Informational; hints for the agent. |
@@ -152,7 +153,15 @@ the web console's Reopen when the task was blocked by the agent.
 
 Forgeo picks the **oldest `OPEN` task whose dependencies are all `COMPLETED`**,
 i.e. the `OPEN` task with the smallest `created_at` that is not waiting on
-anything. Tasks in other states are ignored for picking:
+anything. An optional `run_at` one-shot schedule overrides the order:
+
+- a runnable `OPEN` task whose `run_at` is in the past is picked **before**
+  every task without `run_at` — the "run this after deploy" case. Among due
+  tasks the one with the earliest `run_at` (most overdue) fires first;
+- a runnable `OPEN` task whose `run_at` is in the future is skipped until that
+  moment arrives, so it never displaces an already-eligible task.
+
+Tasks in other states are ignored for picking:
 
 - `BLOCKED` tasks do not get picked, but their presence pauses Forgeo.
 - `COMPLETED` and `FAILED` tasks are skipped.
@@ -163,6 +172,50 @@ anything. Tasks in other states are ignored for picking:
 
 Set `created_at` deliberately (e.g. back-date a task) if you want to control
 the order in which tasks are processed.
+
+## One-shot scheduling
+
+A task with a `run_at` is a **one-shot schedule**: it runs at the earliest
+moment that satisfies both it and the usual picking rules (the task is `OPEN`
+and its dependencies are all `COMPLETED`). This is for time-sensitive work
+that should not wait for the next scheduled pick — "run this after deploy",
+"generate the weekly report":
+
+```json
+{
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Regenerate the docs site",
+      "description": "Rebuild docs/ from the current source.",
+      "run_at": "2026-08-21T09:00:00Z"
+    },
+    {
+      "id": "TASK-002",
+      "title": "Rotate the staging credentials",
+      "description": "Run right after the deploy finishes.",
+      "run_at": "2026-08-20T18:00:00Z"
+    }
+  ]
+}
+```
+
+Semantics:
+
+- a `run_at` in the **past** (or equal to now) fires immediately: the task is
+  picked ahead of older `OPEN` tasks, and the daemon wakes for it instead of
+  waiting out the interval;
+- a `run_at` in the **future** keeps the task unpicked until then; the daemon
+  sleeps only until that moment (when it is sooner than the interval) so the
+  task fires at `run_at` instead of at the next scheduled pick;
+- set it to `null` (or omit the field) to go back to plain oldest-first
+  ordering;
+- a `run_at` never runs a task whose dependencies are not all `COMPLETED`, and
+  it is ignored for tasks in any state other than `OPEN`.
+
+The web console's **Create** form and the task modal's **Edit** form both have
+a *Run at* date/time input to set or clear the schedule (the task card and
+modal also show it when set).
 
 ## Dependencies
 

@@ -80,7 +80,9 @@ forgeo init --force    # overwrite an existing forgeo.yaml
 The backlog is a plain JSON file (see [Backlog format](backlog.md)). Create
 the file configured as `backlog:` in your `forgeo.yaml` — by default
 `.forgeo/backlog.json`. Once Forgeo is running you can also add tasks
-from the [web console](web-console-api.md) — no file editing needed:
+from the [web console](web-console-api.md) — no file editing needed. (If your
+tasks already live in another application, `backlog:` also accepts an
+[HTTP endpoint](backlog.md#a-backlog-over-http) instead of a file.)
 
 ```json
 {

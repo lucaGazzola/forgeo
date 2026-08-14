@@ -1,9 +1,15 @@
-"""The backlog: a single human-readable JSON file of tasks.
+"""The backlog: the list of tasks Forgeo works through.
 
-Forgeo pulls the oldest ``OPEN`` task from here. Edit this file
-directly to add, remove, or reopen tasks (e.g. set a ``BLOCKED`` task back
-to ``OPEN`` once the human input has been provided). Writes are atomic and
-serialized through an asyncio lock.
+Forgeo pulls the oldest ``OPEN`` task from here. The tasks live in a single
+JSON document — ``{"tasks": [...]}`` — which is either a local file you can
+edit by hand (add, remove, or set a ``BLOCKED`` task back to ``OPEN`` once
+you have provided the input it needed) or an HTTP endpoint owned by another
+application, see :mod:`forgeo.backlog_http`.
+
+Everything above the storage layer is shared: :class:`BacklogStore` holds all
+the task manipulation and the asyncio lock that serializes writes, and leaves
+exactly two operations to its subclasses — load the document, store the
+document.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -20,7 +27,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from forgeo.io import atomic_write_text
-from forgeo.models import Task, TaskStatus
+from forgeo.models import ForgeoConfig, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -53,21 +60,57 @@ def backlog_status_counts(tasks: list[Task]) -> dict[str, int]:
     return counts
 
 
-class JSONBacklog:
-    """A backlog stored in a single JSON document on disk."""
+class BacklogUnavailableError(RuntimeError):
+    """The backlog document could not be retrieved or stored.
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    Raised by a storage backend that cannot reach the backlog at all, which
+    is categorically different from a backlog that holds no tasks: callers
+    must never let the two look the same.
+    """
+
+
+def normalize_store(data: Any) -> dict[str, Any]:
+    """Coerce a decoded backlog document into the internal store shape.
+
+    Deliberately forgiving about *shape* (anything that is not an object with
+    a list of tasks reads as an empty backlog) and silent about it, because
+    the document is hand-editable. It says nothing about whether the document
+    could be *retrieved*: a storage backend must raise for that, so an
+    unreachable backlog is never mistaken for an empty one.
+    """
+    if not isinstance(data, dict):
+        return {"tasks": []}
+    tasks = data.get("tasks")
+    return {"tasks": tasks if isinstance(tasks, list) else []}
+
+
+class BacklogStore(ABC):
+    """A backlog of tasks, independent of where the document is kept.
+
+    Subclasses implement :meth:`_read` and :meth:`_write`; everything else —
+    the task transitions, their validation, and the lock that serializes
+    concurrent mutations within one process — lives here.
+    """
+
+    def __init__(self) -> None:
         self._lock = asyncio.Lock()
+
+    @abstractmethod
+    async def _read(self) -> dict[str, Any]:
+        """Load the whole document as ``{"tasks": [...]}``.
+
+        Must raise when the document cannot be retrieved, and return an empty
+        store only when the backlog genuinely holds no tasks.
+        """
+
+    @abstractmethod
+    async def _write(self, store: dict[str, Any]) -> None:
+        """Persist the whole document; must raise when it cannot be stored."""
 
     async def list_tasks(self) -> list[Task]:
         """Return all tasks, in the order they were created."""
         store = await self._read()
         return [self._to_task(entry) for entry in store["tasks"]]
-
-    async def fetch_next_task(self) -> Task | None:
-        """Return the oldest OPEN task, or ``None`` when there is none."""
-        return oldest_open_task(await self.list_tasks())
 
     async def get_task(self, task_id: str) -> Task | None:
         """Return a task by id, or ``None`` if it does not exist."""
@@ -217,7 +260,7 @@ class JSONBacklog:
             return task
 
     # ------------------------------------------------------------------ #
-    # Internal persistence helpers                                        #
+    # Internal task helpers                                               #
     # ------------------------------------------------------------------ #
 
     async def _update_entry(
@@ -248,6 +291,27 @@ class JSONBacklog:
                 return entry
         return None
 
+    @staticmethod
+    def _to_task(entry: dict[str, Any]) -> Task:
+        """Validate a stored dictionary back into a Task, skipping corrupt rows."""
+        try:
+            return Task.model_validate(entry)
+        except ValidationError:
+            return Task(
+                id=str(entry.get("id", "<unknown>")),
+                title="<unparsable task>",
+                description="<unparsable task>",
+                status=TaskStatus.FAILED,
+            )
+
+
+class JSONBacklog(BacklogStore):
+    """A backlog stored in a single JSON document on disk."""
+
+    def __init__(self, path: str | Path) -> None:
+        super().__init__()
+        self.path = Path(path)
+
     async def _read(self) -> dict[str, Any]:
         """Load the store from disk, tolerating a missing or corrupt file."""
         if not self.path.exists():
@@ -270,10 +334,7 @@ class JSONBacklog:
                     self.path,
                 )
             return {"tasks": []}
-        if not isinstance(data, dict):
-            return {"tasks": []}
-        tasks = data.get("tasks")
-        return {"tasks": tasks if isinstance(tasks, list) else []}
+        return normalize_store(data)
 
     async def _write(self, store: dict[str, Any]) -> None:
         """Atomically persist the store (temp file + rename)."""
@@ -282,15 +343,13 @@ class JSONBacklog:
             json.dumps(store, indent=2, ensure_ascii=False) + "\n",
         )
 
-    @staticmethod
-    def _to_task(entry: dict[str, Any]) -> Task:
-        """Validate a stored dictionary back into a Task, skipping corrupt rows."""
-        try:
-            return Task.model_validate(entry)
-        except ValidationError:
-            return Task(
-                id=str(entry.get("id", "<unknown>")),
-                title="<unparsable task>",
-                description="<unparsable task>",
-                status=TaskStatus.FAILED,
-            )
+
+def open_backlog(config: ForgeoConfig) -> BacklogStore:
+    """The backlog store ``config`` points at: a JSON file or an HTTP endpoint."""
+    if config.backlog_is_url:
+        # Imported here: the HTTP backend builds on BacklogStore, so importing
+        # it at module level would close an import cycle.
+        from forgeo.backlog_http import HttpBacklog
+
+        return HttpBacklog(str(config.backlog), auth=config.backlog_auth)
+    return JSONBacklog(Path(config.backlog))

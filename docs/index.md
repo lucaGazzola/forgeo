@@ -93,8 +93,8 @@ forgeo.yaml ──► forgeo start (daemon)
 ## Where state lives
 
 - `forgeo.yaml` — the config (see [Configuration](configuration.md)).
-- `backlog.json` (configurable) — the task backlog (see
-  [Backlog format](backlog.md)).
+- `backlog.json` (configurable) — the task backlog, a file or an HTTP
+  endpoint (see [Backlog format](backlog.md)).
 - `BLOCKER.md` (configurable) — written when a human decision is needed; keep
   it outside the repo so it is never committed.
 - `forgeo.log` — rotating daemon log (5 MB × 3), also served over HTTP.
@@ -103,6 +103,10 @@ forgeo.yaml ──► forgeo start (daemon)
 - `backlog.run` — per-iteration lock that prevents two agents running at once.
 - `backlog.update.json` — remembers when the once-a-day PyPI update check last
   ran, so it never phones home every cycle.
+
+The three runtime files above (and `runs.jsonl`) sit next to the backlog file;
+with a backlog URL they go in `state_dir`, which defaults to the directory
+holding `forgeo.yaml`.
 
 ## Next steps
 

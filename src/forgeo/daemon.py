@@ -29,6 +29,7 @@ from typing import Any
 from forgeo.forgeo import Forgeo
 from forgeo.io import atomic_write_text
 from forgeo.models import ForgeoConfig
+from forgeo.paths import daemon_state_path, run_lock_path
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class ForgeoDaemon:
         self.config = config
         self.forgeo = forgeo
         self.interval_seconds: float = config.interval_minutes * 60.0
-        self.run_lock = RunLock(config.backlog.with_suffix(".run"))
+        self.run_lock = RunLock(run_lock_path(config))
         self._stop_event = asyncio.Event()
         self.pid: int = os.getpid()
         self.started_at: datetime = datetime.now(UTC)
@@ -157,7 +158,7 @@ class ForgeoDaemon:
     @property
     def state_file(self) -> Path:
         """The ``daemon.state.json`` path, next to the backlog's lock files."""
-        return self.config.backlog.with_suffix(".state.json")
+        return daemon_state_path(self.config)
 
     def stop(self) -> None:
         """Request a graceful shutdown after the current cycle."""

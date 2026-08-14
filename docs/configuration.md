@@ -18,7 +18,9 @@ use `forgeo restart` so it re-reads the file.
 | `interval_minutes` | `60` | How often Forgeo runs (≥ 1). |
 | `branch` | `main` | The single branch everything is committed to. |
 | `remote` | — | Remote to push to (e.g. `origin`); omit to only commit locally. |
-| `backlog` | `backlog.json` | The task backlog JSON. Keep it outside the repo if you can. |
+| `backlog` | `backlog.json` | The task backlog: the path of a JSON file (keep it outside the repo if you can), or an `http(s)` URL serving the same document — see [a backlog over HTTP](backlog.md#a-backlog-over-http). |
+| `state_dir` | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Only meaningful with a backlog URL, where it defaults to the directory of `forgeo.yaml`. |
+| `backlog_auth` | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). |
 | `blocker_file` | `BLOCKER.md` | Where `BLOCKER.md` is written. Keep it outside the repo so it is never committed. |
 | `agent_command` | — | The coding agent: any shell command (string) or argv list. **Required.** |
 | `agent_timeout_seconds` | — | Optional: kill the agent after this many seconds (`null` = never). |
@@ -53,6 +55,49 @@ refactor_prompt: >
 ```
 
 ## Key details
+
+### `backlog_auth`
+
+Credentials for a backlog URL behind an identity provider. Forgeo requests an
+access token with the OAuth2 **client-credentials grant** and sends it as a
+bearer on every backlog request, so it authenticates as a service rather than
+as a person:
+
+```yaml
+backlog: https://api.example.com/api/forgeo/backlog
+backlog_auth:
+  token_url: https://keycloak.example.com/realms/dev/protocol/openid-connect/token
+  client_id: forgeo
+  client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET
+  scope: forgeo-backlog       # optional
+  timeout_seconds: 10         # optional
+```
+
+| Key | Meaning |
+| --- | --- |
+| `token_url` | The provider's token endpoint. |
+| `client_id` | The confidential client requesting the token. |
+| `client_secret_env` | **Name of the environment variable** holding that client's secret. |
+| `scope` | Optional scope requested with the token. |
+| `timeout_seconds` | Timeout for the token request (default `10`). |
+
+The secret itself is never a config value: `client_secret_env` names the
+environment variable the daemon reads it from, so the secret stays out of
+`forgeo.yaml` (which the web console serves to your browser) and out of any
+copy or backup of it. A missing variable fails the cycle with a message naming
+the variable.
+
+Tokens are cached in memory and renewed shortly before they expire; nothing is
+written to disk. If the endpoint rejects a token Forgeo believed to be valid
+(HTTP 401/403), it requests a fresh one and retries the request once, so a key
+rotation does not cost a cycle.
+
+With Keycloak, this means a client with *Client authentication* on and
+*Service accounts roles* enabled: the resulting `service-account-<client-id>`
+user is what your backend authorizes.
+
+`backlog_auth` is rejected when `backlog` is a file — that combination is
+almost always a typo in the backlog value.
 
 ### `agent_command`
 
@@ -184,11 +229,13 @@ Manage instances with `forgeo instance add|rm|list` and `forgeo list` — see
 ## Per-instance isolation
 
 Each registered instance is fully independent: every instance owns its own
-**backlog** file, **logs** (`log_file`), **run history** (`runs.jsonl` next
-to the backlog), **locks** (`backlog.lock` and the per-iteration run lock),
-and a **`daemon.state.json`** with its live state. Because relative paths
-resolve against each config file's own directory, two configs in different
-directories can never share state.
+**backlog**, **logs** (`log_file`), **run history** (`runs.jsonl`), **locks**
+(`backlog.lock` and the per-iteration `backlog.run`), and a
+**`backlog.state.json`** with its live state. Those runtime files sit next to
+the backlog file, or — when the backlog is a URL — in `state_dir`, which
+defaults to the directory of that instance's `forgeo.yaml`. Because relative
+paths resolve against each config file's own directory, two configs in
+different directories can never share state.
 
 The daemons bind no ports. The central dashboard (`forgeo web`, default port
 `8790`) reads every instance's data straight from its files, so it works

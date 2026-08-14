@@ -6,7 +6,9 @@ just schedules cycles and writes its live state to `daemon.state.json`. The
 dashboard reads every registered instance's data straight from its files
 (`backlog.json`, `runs.jsonl`, `forgeo.log`, `BLOCKER.md`,
 `daemon.state.json`), so it works whether or not each instance's daemon is
-running.
+running. An instance whose `backlog` is an HTTP endpoint is the exception: its
+tasks are fetched from there, and an endpoint that cannot be reached answers
+`502` rather than showing an empty board.
 
 ```bash
 forgeo web               # default 0.0.0.0:8790, foreground
@@ -91,6 +93,12 @@ outcome, next run, and backlog counts.
 curl http://127.0.0.1:8790/api/instances
 ```
 
+Each row also carries `backlog_error`: `null` normally, and the reason when
+that instance's backlog could not be read (only possible for a backlog served
+over HTTP). Its counts are zero in that case — the row reports a backlog it
+could not reach, not an empty one. One unreachable endpoint never fails the
+whole listing.
+
 ### `GET /api/instances/<name>/tasks`
 
 List every task in that instance's backlog, in creation order.
@@ -117,6 +125,9 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
   }
 ]
 ```
+
+A backlog served over HTTP is fetched on each request; when the endpoint is
+unreachable the response is `502` with the reason in `error`.
 
 ### `GET /api/instances/<name>/tasks/{id}`
 
@@ -363,9 +374,11 @@ successful save so the caller cannot miss it. Errors:
 `forgeo.yaml`) and is forced to the registered name — sending a different value
 is rejected. `telegram_bot_token` is not editable through the web console: an
 explicit change is rejected with `400`, and the current value is preserved when
-the field is omitted, so a partial payload never wipes it. Everything else
-`GET .../config` returns (including `agent_env`, which can carry credentials
-the agent needs) is editable.
+the field is omitted, so a partial payload never wipes it. `backlog_auth` and
+`state_dir` are likewise preserved when the payload omits them — the config
+form does not render them, and a save must not drop what it never showed.
+Everything else `GET .../config` returns (including `agent_env`, which can
+carry credentials the agent needs) is editable.
 
 ### `POST /api/instances/<name>/start`, `/stop`, `/restart`
 

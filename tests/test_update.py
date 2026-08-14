@@ -15,7 +15,6 @@ from forgeo.update import (
     check_for_update,
     fetch_latest_version,
     installed_version,
-    update_state_path,
     upgrade_notice,
     version_is_newer,
 )
@@ -77,7 +76,7 @@ def test_check_notifies_when_outdated(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: calls.append(a) or _pypi_response("999.0.0"),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     notice = check_for_update(state)
 
@@ -94,7 +93,7 @@ def test_check_prints_notice_when_outdated(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: _pypi_response("999.0.0"),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     check_for_update(state, print_fn=print)
 
@@ -111,7 +110,7 @@ def test_check_silent_when_current(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: calls.append(a) or _pypi_response(__version__),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     assert check_for_update(state) is None
     assert len(calls) == 1
@@ -124,7 +123,7 @@ def test_check_network_failure_is_nonfatal(
         raise OSError("no network")
 
     monkeypatch.setattr("forgeo.update.urllib.request.urlopen", boom)
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     assert check_for_update(state) is None
 
@@ -136,7 +135,7 @@ def test_check_malformed_response_is_nonfatal(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: FakeResponse({"unexpected": True}),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     assert check_for_update(state) is None
 
@@ -159,7 +158,7 @@ def test_check_network_at_most_once_per_day(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: calls.append(a) or _pypi_response("999.0.0"),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     assert check_for_update(state) is not None
     assert check_for_update(state) is None
@@ -182,10 +181,6 @@ def test_state_survives_corrupt_file(tmp_path: Path) -> None:
     assert state.due()
 
 
-def test_state_path_next_to_backlog(tmp_path: Path) -> None:
-    assert update_state_path(tmp_path / "backlog.json") == tmp_path / "backlog.update.json"
-
-
 def test_installed_version_available() -> None:
     assert installed_version() == __version__
 
@@ -199,7 +194,7 @@ def test_check_disabled_via_env(
         "forgeo.update.urllib.request.urlopen",
         lambda *a, **k: calls.append(a) or _pypi_response("999.0.0"),
     )
-    state = update_state_path(tmp_path / "backlog.json")
+    state = tmp_path / "backlog.update.json"
 
     assert check_for_update(state) is None
     assert calls == []

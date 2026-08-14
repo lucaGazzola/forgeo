@@ -33,7 +33,8 @@ from forgeo.cli import (
 from forgeo.daemon import acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.instances import list_instances, load_registry
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
-from forgeo.runs import RunRecorder, runs_path_for
+from forgeo.paths import lock_path, runs_path
+from forgeo.runs import RunRecorder
 from tests.conftest import FakeForgeo, git, make_config, make_task
 
 
@@ -166,7 +167,7 @@ def test_once_refuses_while_daemon_lock_held(git_repo, tmp_path, monkeypatch):
     fake = FakeForgeo()
     monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
     config = make_config(git_repo, tmp_path)
-    lock = acquire_run_lock(config.backlog.with_suffix(".lock"))
+    lock = acquire_run_lock(lock_path(config))
     assert lock is not None
 
     assert cmd_once(once_args(config_path)) == 1
@@ -269,7 +270,7 @@ def test_status_prints_summary_and_exits_zero(git_repo, tmp_path, capsys):
         ),
         encoding="utf-8",
     )
-    RunRecorder(runs_path_for(backlog)).append(
+    RunRecorder(backlog.with_name("runs.jsonl")).append(
         RunRecord(
             started_at=datetime(2026, 8, 1, 1, 0, tzinfo=UTC),
             finished_at=datetime(2026, 8, 1, 1, 0, 5, tzinfo=UTC),
@@ -295,7 +296,7 @@ def test_status_prints_summary_and_exits_zero(git_repo, tmp_path, capsys):
 
 def test_status_renders_last_run_from_runs(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
-    recorder = RunRecorder(runs_path_for(tmp_path / "backlog.json"))
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
     recorder.append(
         RunRecord(
             started_at=datetime(2026, 8, 1, 1, 0, tzinfo=UTC),
@@ -340,7 +341,7 @@ def test_last_outcome_from_runs_skips_corrupt(tmp_path, caplog):
     import logging
 
     config = make_config(tmp_path, tmp_path)
-    recorder = RunRecorder(runs_path_for(config.backlog))
+    recorder = RunRecorder(runs_path(config))
     recorder.append(
         RunRecord(
             started_at=datetime(2026, 8, 1, 1, 0, tzinfo=UTC),
@@ -659,7 +660,7 @@ def test_instance_list_table_shows_state(tmp_path, git_repo, monkeypatch, capsys
         ),
         encoding="utf-8",
     )
-    RunRecorder(runs_path_for(backlog)).append(
+    RunRecorder(backlog.with_name("runs.jsonl")).append(
         RunRecord(
             started_at=datetime(2026, 8, 1, 1, 0, tzinfo=UTC),
             finished_at=datetime(2026, 8, 1, 1, 0, 5, tzinfo=UTC),

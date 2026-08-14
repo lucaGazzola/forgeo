@@ -10,6 +10,7 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -38,6 +39,16 @@ NO_CHANGES_REPORTED_REASON = "Agent reported no changes needed"
 #: Failure reason when an agent reports no changes but leaves the working tree
 #: dirty — a contradiction that must not be silently accepted.
 NO_CHANGES_DIRTY_REASON = "Agent reported no changes but left uncommitted changes"
+
+
+#: URL schemes a ``backlog`` value may use to point at a remote endpoint.
+#: Anything else is treated as a filesystem path.
+_URL_SCHEMES = ("http://", "https://")
+
+
+def is_url(value: object) -> bool:
+    """True when ``value`` is a string pointing at an ``http(s)`` endpoint."""
+    return isinstance(value, str) and value.startswith(_URL_SCHEMES)
 
 
 def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | None:
@@ -199,6 +210,51 @@ class RepoContext(BaseModel):
     branch: str = "main"
 
 
+class BacklogAuth(BaseModel):
+    """OAuth2 *client credentials* access to an HTTP backlog endpoint.
+
+    Forgeo authenticates as a service account, not as a human: an identity
+    provider (Keycloak and anything else speaking OAuth2) issues an access
+    token for a confidential client, and that token is sent as a bearer on
+    every backlog request.
+
+    The client secret is deliberately **not** a config value: only the name of
+    the environment variable holding it is stored, so the secret never lands in
+    ``forgeo.yaml`` (which the web console serves to the browser) nor in a
+    backup of it.
+
+    Attributes:
+        token_url: The provider's token endpoint, e.g.
+            ``https://keycloak.example.com/realms/<realm>/protocol/openid-connect/token``.
+        client_id: The confidential client requesting the token.
+        client_secret_env: Name of the environment variable holding that
+            client's secret. Read from the process environment at request
+            time; a missing variable is a hard error.
+        scope: Optional scope requested alongside the token.
+        timeout_seconds: Kill a token request after this many seconds.
+    """
+
+    token_url: str
+    client_id: str
+    client_secret_env: str
+    scope: str | None = None
+    timeout_seconds: float = Field(default=10, gt=0)
+
+    @field_validator("token_url")
+    @classmethod
+    def _token_url_is_http(cls, value: str) -> str:
+        if not is_url(value):
+            raise ValueError("token_url must be an http:// or https:// URL")
+        return value
+
+    @field_validator("client_id", "client_secret_env")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 class ForgeoConfig(BaseModel):
     """Everything needed to run one forgeo on one repository.
 
@@ -206,7 +262,18 @@ class ForgeoConfig(BaseModel):
         name: Display name of this forgeo (used in logs and commit messages).
         repo: Path of the git repository Forgeo works on.
         interval_minutes: How often a scheduled run happens.
-        backlog: Path of the JSON backlog file (created on first use).
+        backlog: Where the backlog lives: the path of a JSON file (created on
+            first use), or an ``http(s)`` URL. A URL is read with ``GET`` and
+            written with ``POST``, in both directions carrying the same
+            document a backlog file holds (``{"tasks": [...]}``); see
+            :mod:`forgeo.backlog_http`.
+        state_dir: Directory holding Forgeo's own runtime files (the locks,
+            the daemon state, the run history, the update-check stamp). Only
+            meaningful when ``backlog`` is a URL, where there is no backlog
+            file to put them next to; it then defaults to the directory of
+            ``forgeo.yaml``. With a backlog file they always sit beside it.
+        backlog_auth: Credentials for an ``http(s)`` backlog that requires
+            them. Omit for a file backlog or an unauthenticated endpoint.
         blocker_file: Where ``BLOCKER.md`` is written when the agent needs
             human input. Keep it outside the repository so it is never
             committed.
@@ -253,7 +320,9 @@ class ForgeoConfig(BaseModel):
     name: str = "forgeo"
     repo: Path = Field(default=Path("."))
     interval_minutes: int = Field(default=60, ge=1)
-    backlog: Path = Field(default=Path("backlog.json"))
+    backlog: str | Path = Field(default=Path("backlog.json"))
+    state_dir: Path | None = None
+    backlog_auth: BacklogAuth | None = None
     blocker_file: Path = Field(default=Path("BLOCKER.md"))
     agent_command: str | list[str]
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -277,6 +346,25 @@ class ForgeoConfig(BaseModel):
     def _command_not_blank(cls, value: str | list[str]) -> str | list[str] | None:
         return _validate_agent_command(value)
 
+    @field_validator("backlog", mode="before")
+    @classmethod
+    def _normalize_backlog(cls, value: Any) -> Any:
+        """Keep a URL backlog a ``str``; coerce anything else to a ``Path``.
+
+        Deciding the branch here (instead of leaving it to the union) is what
+        makes the field predictable: ``Path("https://host/x")`` would silently
+        collapse the double slash into ``https:/host/x``, so a URL must never
+        reach the ``Path`` branch.
+        """
+        if isinstance(value, str):
+            if not value.strip():
+                raise ValueError("backlog must not be blank")
+            if is_url(value):
+                return value
+        if isinstance(value, str | Path):
+            return Path(value)
+        return value
+
     @field_validator("agent_sandbox_network")
     @classmethod
     def _network_not_blank(cls, value: str) -> str:
@@ -299,6 +387,11 @@ class ForgeoConfig(BaseModel):
                 raise ValueError("agent_sandbox_mounts must not contain blank paths")
         return value
 
+    @property
+    def backlog_is_url(self) -> bool:
+        """True when the backlog lives behind an HTTP endpoint, not on disk."""
+        return is_url(self.backlog)
+
     @model_validator(mode="after")
     def _docker_requires_image(self) -> ForgeoConfig:
         if self.agent_sandbox is SandboxMode.DOCKER and not (self.agent_sandbox_image or "").strip():
@@ -306,5 +399,11 @@ class ForgeoConfig(BaseModel):
         if self.no_changes_exit_code == self.blocked_exit_code:
             raise ValueError(
                 "no_changes_exit_code must differ from blocked_exit_code"
+            )
+        if self.backlog_auth is not None and not self.backlog_is_url:
+            # Silently ignoring the credentials would hide a typo in the
+            # backlog value behind a working (but local) forgeo.
+            raise ValueError(
+                "backlog_auth is only valid when backlog is an http:// or https:// URL"
             )
         return self

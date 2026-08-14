@@ -211,3 +211,89 @@ def test_save_config_keeps_explicit_relative_paths(tmp_path):
     assert disk["repo"] == "."
     assert disk["backlog"] == "backlog.json"
     assert disk["log_file"] == "forgeo.log"
+
+
+# --------------------------------------------------------------------------- #
+# A backlog that is a URL rather than a path                                   #
+# --------------------------------------------------------------------------- #
+
+BACKLOG_URL = "https://api.example.com/api/forgeo/backlog"
+
+
+def auth_payload(**overrides) -> dict:
+    payload = {
+        "token_url": "https://keycloak.test/realms/dev/protocol/openid-connect/token",
+        "client_id": "forgeo",
+        "client_secret_env": "FORGEO_BACKLOG_CLIENT_SECRET",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_url_backlog_stays_a_string(tmp_path):
+    config = ForgeoConfig(agent_command="x", backlog=BACKLOG_URL)
+    assert config.backlog == BACKLOG_URL
+    assert config.backlog_is_url is True
+
+
+def test_path_backlog_stays_a_path():
+    config = ForgeoConfig(agent_command="x", backlog="tasks.json")
+    assert config.backlog == Path("tasks.json")
+    assert config.backlog_is_url is False
+
+
+def test_load_config_leaves_a_url_backlog_untouched(tmp_path):
+    """Resolving it as a path would collapse ``https://`` into ``https:/``."""
+    (tmp_path / "forgeo.yaml").write_text(
+        f"name: demo\nrepo: .\nbacklog: {BACKLOG_URL}\nagent_command: echo\n",
+        encoding="utf-8",
+    )
+    config = load_config(tmp_path / "forgeo.yaml")
+    assert config.backlog == BACKLOG_URL
+    assert config.state_dir == tmp_path.resolve()
+
+
+def test_blank_backlog_is_rejected():
+    with pytest.raises(ValidationError, match="must not be blank"):
+        ForgeoConfig(agent_command="x", backlog="")
+
+
+def test_backlog_auth_requires_a_url_backlog():
+    with pytest.raises(ValidationError, match="only valid when backlog is"):
+        ForgeoConfig(
+            agent_command="x", backlog="tasks.json", backlog_auth=auth_payload()
+        )
+
+
+def test_backlog_auth_accepts_a_url_backlog():
+    config = ForgeoConfig(
+        agent_command="x", backlog=BACKLOG_URL, backlog_auth=auth_payload()
+    )
+    assert config.backlog_auth is not None
+    assert config.backlog_auth.timeout_seconds == 10
+
+
+def test_token_url_must_be_http():
+    with pytest.raises(ValidationError, match="token_url must be"):
+        ForgeoConfig(
+            agent_command="x",
+            backlog=BACKLOG_URL,
+            backlog_auth=auth_payload(token_url="keycloak.test/token"),
+        )
+
+
+def test_backlog_auth_rejects_a_blank_client_id():
+    with pytest.raises(ValidationError, match="must not be blank"):
+        ForgeoConfig(
+            agent_command="x",
+            backlog=BACKLOG_URL,
+            backlog_auth=auth_payload(client_id="  "),
+        )
+
+
+def test_the_secret_itself_is_never_a_config_field():
+    """Only the name of the environment variable holding it is stored."""
+    config = ForgeoConfig(
+        agent_command="x", backlog=BACKLOG_URL, backlog_auth=auth_payload()
+    )
+    assert "client_secret" not in config.model_dump(mode="json")["backlog_auth"]

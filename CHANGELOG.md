@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The backlog can now live in another application instead of a file: set
+  `backlog:` to an `http(s)` URL and Forgeo reads the whole document with
+  `GET` on every read and writes it back with `POST` on every change, using
+  the same JSON shape as `backlog.json`. The endpoint replaces its task list
+  with the body it receives. A request that fails (network error, 5xx,
+  malformed body) fails the cycle and is retried on the next interval — it is
+  never read as an empty backlog, which would start a refactoring pass and let
+  the next `POST` overwrite the remote task list with nothing.
+
+- `backlog_auth`: OAuth2 client-credentials access for a backlog URL behind an
+  identity provider such as Keycloak. Forgeo obtains an access token for a
+  confidential client (a service account, not a human login) and sends it as a
+  bearer on every backlog request; tokens are cached in memory, renewed before
+  they expire, and refreshed once with a retry when the endpoint answers 401 or
+  403. The client secret is never a config value: `client_secret_env` names the
+  environment variable holding it, so it stays out of `forgeo.yaml`.
+
+- `state_dir`: where Forgeo's own runtime files go (`backlog.lock`,
+  `backlog.run`, `backlog.state.json`, `backlog.update.json`, `runs.jsonl`).
+  It only matters with a backlog URL, where there is no backlog file for them
+  to sit beside; it then defaults to the directory holding `forgeo.yaml`. With
+  a backlog file those paths are unchanged.
+
 - Homebrew install support: `brew install lucaGazzola/forgeo/forgeo`
   installs the prebuilt binary on macOS (arm64/Intel) and Linux (Intel). The
   `publish-homebrew` CI job re-renders the tap formula (sha256 + version)

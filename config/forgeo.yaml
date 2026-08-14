@@ -2,6 +2,12 @@
 # Everything is one flat file; relative paths resolve against this file's directory.
 # Copy to your forgeo directory, run `forgeo validate --config forgeo.yaml` to
 # check it is ready, then `forgeo start --config forgeo.yaml`.
+#
+# A running daemon watches this file and re-reads it on the next cycle when it
+# changes (or on SIGHUP); an invalid change is logged and the last valid config
+# stays in use. Changing the `repo`, `backlog`, `blocker_file` or `log_file`
+# paths still needs `forgeo restart` (the daemon pins its lock files to the
+# paths it started with).
 
 name: my-forgeo                # Display name used in logs and commit messages.
 repo: /path/to/repository       # The git repository the forgeo works on.

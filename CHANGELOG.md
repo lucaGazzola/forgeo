@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The daemon reloads `forgeo.yaml` on the next cycle boundary when the file
+  changes (or on `SIGHUP`): a valid change is revalidated, logged, and used
+  from the next cycle; an invalid change is logged and the last valid config
+  stays in use. The web console's config save reflects this
+  (`restart_required: false`). Path changes (`repo`, `backlog`,
+  `blocker_file`, `log_file`) stay pinned to the daemon's startup values and
+  still need `forgeo restart`, so the daemon's lock files are never detached
+  from the config.
+
 - Optional bearer-token auth for the central web dashboard (`forgeo web`):
   `forgeo web --token` (or a `token` key in `~/.config/forgeo/web.toml`)
   requires `Authorization: Bearer <token>` on every `/api/*` route and

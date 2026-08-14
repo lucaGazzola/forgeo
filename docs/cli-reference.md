@@ -184,6 +184,12 @@ Like `start`, a `--config` invocation registers Forgeo under its config's
 Stop the daemon when running, then start it again **in the background**
 (detached), re-reading `forgeo.yaml`.
 
+A running daemon already re-reads `forgeo.yaml` on the next cycle when the
+file changes (or on `SIGHUP`), so a plain config edit needs no restart.
+`restart` is still the way to apply changes to the `repo`, `backlog`,
+`blocker_file` or `log_file` paths: the daemon pins those to its startup
+values while running so its lock files are never detached from the config.
+
 | Flag | Description |
 | --- | --- |
 | `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |

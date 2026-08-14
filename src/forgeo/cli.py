@@ -12,7 +12,10 @@ Commands:
   is committed and pushed on the main branch. When the agent needs human
   input, a detailed ``BLOCKER.md`` file is written with what you must do.
   The daemon binds no ports; live state is written to ``daemon.state.json``
-  and is served to you by ``forgeo web``.
+  and is served to you by ``forgeo web``. The daemon watches
+  ``forgeo.yaml`` and re-reads it on the next cycle boundary when it changes
+  (or on ``SIGHUP``); path changes (``repo``, ``backlog``, ``blocker_file``,
+  ``log_file``) still need a ``forgeo restart``.
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
@@ -490,11 +493,22 @@ def cmd_start(args: argparse.Namespace) -> int:
     _config_path, config, forgeo, lock = prepared
 
     async def _serve() -> None:
-        daemon = ForgeoDaemon(config, forgeo)
+        daemon = ForgeoDaemon(
+            config,
+            forgeo,
+            config_path=_config_path,
+            forgeo_factory=_make_forgeo,
+            interval_override=args.interval_minutes,
+        )
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, daemon.stop)
+            except NotImplementedError:
+                pass
+        if hasattr(signal, "SIGHUP"):
+            try:
+                loop.add_signal_handler(signal.SIGHUP, daemon.request_reload)
             except NotImplementedError:
                 pass
         console.print(

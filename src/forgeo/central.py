@@ -18,8 +18,8 @@ Routes:
   ``/logs?lines=N``, ``/runs?limit=N&offset=M``, ``/blocker``, ``/config`` —
   the per-instance API.
 * ``PUT /api/instances/<name>/config`` — validate and persist an instance's
-  ``forgeo.yaml`` from a config payload (applies on the daemon's next
-  restart; ``name`` and ``telegram_bot_token`` are not editable).
+  ``forgeo.yaml`` from a config payload (applies on the daemon's next cycle;
+  ``name`` and ``telegram_bot_token`` are not editable).
 * ``POST /api/instances/<name>/tasks`` — add a new task to that instance's
   backlog.
 * ``POST /api/instances/<name>/tasks/<id>/reopen`` — reopen a ``BLOCKED``
@@ -1021,8 +1021,8 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             returns. The config is validated against :class:`ForgeoConfig`
             and written to the instance's ``forgeo.yaml`` atomically; the
             response carries the reloaded config and an explicit note that
-            the daemon picks the changes up only on its next restart (a save
-            never restarts the daemon).
+            the daemon picks the change up on its next cycle without a
+            restart.
 
             ``name`` is owned by the registry and forced to the registered
             instance name (a different value is rejected); ``telegram_bot_token``
@@ -1075,9 +1075,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 200,
                 {
                     "saved": True,
-                    "restart_required": True,
+                    "restart_required": False,
                     "message": (
-                        "Config saved. The daemon picks up changes on its next restart."
+                        "Config saved. The daemon picks up changes on its next cycle."
                     ),
                     "config": saved.model_dump(mode="json"),
                 },

@@ -6,8 +6,12 @@ and validated on every invocation; relative paths resolve against the config
 file's own directory, so a config can live anywhere and still point at sibling
 directories.
 
-The daemon reads `forgeo.yaml` **only at startup** — after editing the config
-use `forgeo restart` so it re-reads the file.
+The daemon watches `forgeo.yaml` and re-reads it on the next cycle boundary
+when the file changes (or on `SIGHUP`): a valid change is applied from the
+next cycle, an invalid one is logged and the last valid config stays in use.
+Relocating the `repo`, `backlog`, `blocker_file` or `log_file` paths is
+deferred to a restart (the daemon's lock files stay pinned to its startup
+paths), so `forgeo restart` is still used for those.
 
 ## Keys
 

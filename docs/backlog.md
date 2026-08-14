@@ -216,8 +216,8 @@ The backlog is the single source of truth, so it is guarded on both ends:
 ### Snapshots
 
 Forgeo writes a snapshot of the current backlog to `backlog.json.bak` before
-every agent run and whenever the daemon starts (a config change takes effect
-only on the next `forgeo restart`, so the snapshot is taken then too).
+every agent run and whenever the daemon starts (a config change that reloads
+the backlog is snapped on that cycle too).
 Snapshots are rotated so only the last few are kept — by default 2:
 `backlog.json.bak` (newest) and `backlog.json.bak.1` (older). The newest
 snapshot is always `backlog.json.bak`; older snapshots gain an index.

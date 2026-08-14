@@ -1,4 +1,4 @@
-"""Daemon tests: scheduled cycles, stop handling, run lock."""
+"""Daemon tests: scheduled cycles, stop handling, run lock, config reload."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 
+from forgeo.config import load_config
 from forgeo.daemon import ForgeoDaemon, RunLock, acquire_run_lock, is_lock_held, read_lock_pid
 from tests.conftest import FakeForgeo, make_config, make_forgeo, make_task
 
@@ -179,3 +180,118 @@ async def test_daemon_snapshots_backlog_on_startup(git_repo, tmp_path):
     assert bak.is_file()
     store = json.loads(bak.read_text(encoding="utf-8"))
     assert [entry["id"] for entry in store["tasks"]] == ["TASK-001"]
+
+
+def _write_config(path, repo, interval_minutes=60, backlog="backlog.json") -> None:
+    """Write a minimal forgeo.yaml for the reload tests."""
+    path.write_text(
+        f"name: reload\nrepo: {repo}\ninterval_minutes: {interval_minutes}\n"
+        f"backlog: {backlog}\nblocker_file: BLOCKER.md\n"
+        "agent_command: echo hi\n",
+        encoding="utf-8",
+    )
+
+
+class ReloadRecorder:
+    """A config-carrying stand-in for :class:`Forgeo` used by the reload tests."""
+
+    def __init__(self, config) -> None:
+        self.config = config
+        self.cycles = 0
+
+    async def run_cycle(self) -> str:
+        self.cycles += 1
+        return "task"
+
+
+def _reload_daemon(tmp_path, git_repo):
+    config_path = tmp_path / "forgeo.yaml"
+    _write_config(config_path, git_repo, interval_minutes=60)
+    config = load_config(config_path)
+    daemon = ForgeoDaemon(
+        config,
+        ReloadRecorder(config),
+        config_path=config_path,
+        forgeo_factory=lambda c: ReloadRecorder(c),
+    )
+    return config_path, config, daemon
+
+
+async def test_daemon_reloads_config_on_change(git_repo, tmp_path, caplog):
+    config_path, config, daemon = _reload_daemon(tmp_path, git_repo)
+    assert config.interval_minutes == 60
+    daemon.interval_seconds = 0.02
+    with caplog.at_level(logging.INFO, logger="forgeo"):
+        task = asyncio.create_task(daemon.run_forever())
+        while daemon.forgeo.cycles == 0:
+            await asyncio.sleep(0.01)
+        _write_config(config_path, git_repo, interval_minutes=30)
+        for _ in range(200):
+            if daemon.config.interval_minutes == 30:
+                break
+            await asyncio.sleep(0.01)
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert daemon.config.interval_minutes == 30
+    assert daemon.forgeo.config.interval_minutes == 30
+    assert daemon.interval_seconds == 30 * 60
+    assert "Config reloaded" in caplog.text
+    assert "next cycle uses the new settings" in caplog.text
+
+
+async def test_daemon_keeps_last_valid_config_on_invalid_change(git_repo, tmp_path, caplog):
+    config_path, config, daemon = _reload_daemon(tmp_path, git_repo)
+    assert config.interval_minutes == 60
+    daemon.interval_seconds = 0.02
+    with caplog.at_level(logging.WARNING, logger="forgeo"):
+        task = asyncio.create_task(daemon.run_forever())
+        while daemon.forgeo.cycles == 0:
+            await asyncio.sleep(0.01)
+        config_path.write_text("not: [valid", encoding="utf-8")
+        await asyncio.sleep(0.2)
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert daemon.config.interval_minutes == 60
+    assert daemon.forgeo.config.interval_minutes == 60
+    assert "Config change rejected" in caplog.text
+    assert "keeping the previous config" in caplog.text
+
+
+async def test_daemon_does_not_reload_unchanged_config(git_repo, tmp_path, caplog):
+    _, _, daemon = _reload_daemon(tmp_path, git_repo)
+    daemon.interval_seconds = 0.02
+    with caplog.at_level(logging.INFO, logger="forgeo"):
+        task = asyncio.create_task(daemon.run_forever())
+        while daemon.forgeo.cycles < 2:
+            await asyncio.sleep(0.01)
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert daemon.config.interval_minutes == 60
+    assert "Config reloaded" not in caplog.text
+
+
+async def test_daemon_pins_paths_on_config_change(git_repo, tmp_path, caplog):
+    config_path, config, daemon = _reload_daemon(tmp_path, git_repo)
+    original_backlog = config.backlog
+    daemon.interval_seconds = 0.02
+    with caplog.at_level(logging.WARNING, logger="forgeo"):
+        task = asyncio.create_task(daemon.run_forever())
+        while daemon.forgeo.cycles == 0:
+            await asyncio.sleep(0.01)
+        _write_config(config_path, git_repo, interval_minutes=30, backlog="moved.json")
+        for _ in range(200):
+            if daemon.config.interval_minutes == 30:
+                break
+            await asyncio.sleep(0.01)
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=5)
+
+    assert daemon.config.interval_minutes == 30
+    assert daemon.config.backlog == original_backlog
+    assert daemon.forgeo.config.backlog == original_backlog
+    assert daemon.run_lock.lock_path == original_backlog.with_suffix(".run")
+    assert daemon.state_file == original_backlog.with_suffix(".state.json")
+    assert "cannot relocate path" in caplog.text

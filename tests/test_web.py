@@ -1472,7 +1472,7 @@ def test_put_config_persists_and_returns_reloaded(web_env):
     status, data = _put(url, json.dumps(payload))
     assert status == 200
     assert data["saved"] is True
-    assert data["restart_required"] is True
+    assert data["restart_required"] is False
     assert data["message"]
     assert data["config"]["name"] == "alpha"
     assert data["config"]["interval_minutes"] == 15

@@ -5,8 +5,9 @@
 the same per-instance lock file: SIGTERM the recorded PID and wait for the
 lock to drop (a cycle in progress always finishes first), then — for start
 and restart — launch a detached ``forgeo start`` process that re-reads
-``forgeo.yaml`` on boot, which is how a config saved from the web console
-takes effect.
+``forgeo.yaml`` on boot. A plain config edit is picked up by the running
+daemon on its next cycle; a restart is how path changes (which the daemon
+pins to its startup values) take effect.
 
 Everything here is lock-file driven and never touches the config-save flow.
 """

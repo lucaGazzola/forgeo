@@ -1276,7 +1276,7 @@
     setConfigLoading(false);
     var form = document.getElementById("config-form");
     if (form) form.hidden = true;
-    var hint = document.getElementById("config-restart-hint");
+    var hint = document.getElementById("config-reload-hint");
     if (hint) hint.hidden = true;
     var error = document.getElementById("config-error");
     if (error) {
@@ -1291,7 +1291,7 @@
     configDirty = false;
     var error = document.getElementById("config-error");
     if (error) error.hidden = true;
-    var hint = document.getElementById("config-restart-hint");
+    var hint = document.getElementById("config-reload-hint");
     if (hint) hint.hidden = true;
     var form = document.getElementById("config-form");
     var fields = document.getElementById("config-fields");
@@ -1379,23 +1379,25 @@
     return payload;
   }
 
-  function renderRestartHint(message, status) {
-    var hint = document.getElementById("config-restart-hint");
+  function renderReloadHint(message, status) {
+    var hint = document.getElementById("config-reload-hint");
     if (!hint) return;
     hint.textContent = "";
     hint.appendChild(el("strong", null, "Config saved"));
-    var notice = String(message || "The daemon picks up changes on its next restart.").replace(/^Config saved\.?\s*/i, "");
+    var notice = String(message || "The daemon picks up changes on its next cycle.").replace(/^Config saved\.?\s*/i, "");
     hint.appendChild(document.createTextNode(" — " + notice + " "));
     if (status) {
       var state = status.daemon_running ? "running" : "stopped";
       hint.appendChild(
         document.createTextNode(
-          "The daemon is currently " + state + " and still uses the previous config until it is restarted (forgeo restart)."
+          state === "running"
+            ? "The daemon is currently running and picks up the change on its next cycle."
+            : "The daemon is currently stopped; the change applies on its next start."
         )
       );
     } else {
       hint.appendChild(
-        document.createTextNode("The running daemon still uses the previous config until it is restarted (forgeo restart).")
+        document.createTextNode("A running daemon picks up the change on its next cycle.")
       );
     }
     hint.hidden = false;
@@ -1442,7 +1444,7 @@
             return null;
           })
           .then(function (statusData) {
-            renderRestartHint(data.message, statusData);
+            renderReloadHint(data.message, statusData);
           });
       })
       .catch(function (err) {

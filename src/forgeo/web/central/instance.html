@@ -121,13 +121,12 @@
     <div id="config-body">
       <p class="config-panel__loading" id="config-loading">(loading &hellip;)</p>
       <div class="config-banner config-banner--error" id="config-error" role="alert" hidden></div>
-      <div class="config-banner config-banner--notice" id="config-restart-hint" hidden></div>
+      <div class="config-banner config-banner--notice" id="config-reload-hint" hidden></div>
       <form class="config-form" id="config-form" hidden>
         <p class="config-form__hint">
           Edits are written to <code>forgeo.yaml</code>. The running daemon
-          re-reads the config only on restart, so a saved change applies on the
-          daemon&rsquo;s next start &mdash; use the <strong>Restart</strong>
-          button in the header (<code>forgeo restart</code>).
+          watches the file and picks up a saved change on its next cycle
+          &mdash; no restart needed.
         </p>
         <div class="config-form__grid" id="config-fields"></div>
         <div class="config-form__actions">

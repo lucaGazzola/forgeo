@@ -426,20 +426,22 @@ curl -X PUT http://127.0.0.1:8790/api/instances/my-repo/config \
 ```
 
 The write is atomic (temp file + rename), like the other write endpoints.
-Returns `200` with the reloaded config plus an explicit restart notice:
+Returns `200` with the reloaded config plus a note on when it takes effect:
 
 ```json
 {
   "saved": true,
-  "restart_required": true,
-  "message": "Config saved. The daemon picks up changes on its next restart.",
+  "restart_required": false,
+  "message": "Config saved. The daemon picks up changes on its next cycle.",
   "config": { "...": "the reloaded config, paths resolved" }
 }
 ```
 
-The daemon re-reads `forgeo.yaml` only on restart (`forgeo restart`); a config
-save never restarts it for you, and `restart_required` is `true` on every
-successful save so the caller cannot miss it. Errors:
+The daemon watches `forgeo.yaml` and picks the change up on its next cycle
+(`SIGHUP` wakes it sooner), so a config save needs no restart; `restart_required`
+is `false` on every successful save. Path changes (`repo`, `backlog`,
+`blocker_file`, `log_file`) are pinned to the daemon's startup paths and need
+a restart (via the **Restart** button or `POST .../restart`). Errors:
 
 - `400` with `{"error": "..."}` — an unparseable, non-object or empty body; a
   payload that fails `ForgeoConfig` validation (e.g. a blank `agent_command`,
@@ -462,9 +464,10 @@ the agent needs) is editable.
 
 Start, stop, or restart that instance's daemon — the same lifecycle as
 `forgeo start`/`forgeo stop`/`forgeo restart`, exposed to the web console as
-an explicit operator action. This is also how a config saved from the
-**Config** tab is applied: the daemon re-reads `forgeo.yaml` on every start,
-so a restart picks up the saved settings. No request body is required.
+an explicit operator action. This is how a config saved from the **Config**
+tab that moves paths is applied: the daemon re-reads `forgeo.yaml` on every
+start, so a restart picks up the saved settings (a plain config edit is
+picked up on the next cycle without one). No request body is required.
 
 - `start` — launch a detached `forgeo start` for the instance. Refused with
   `409` when the daemon is already running.
@@ -589,7 +592,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/blocker
   `PATCH /api/instances/<name>/tasks/<id>` (update a task's editable fields),
   `DELETE /api/instances/<name>/tasks/<id>` (delete an `OPEN` or `BLOCKED`
   task), and `PUT /api/instances/<name>/config` (validate and persist the
-  instance's `forgeo.yaml`; applies on the daemon's next restart).
+  instance's `forgeo.yaml`; applies on the daemon's next cycle).
 
 ## Errors
 
@@ -638,6 +641,7 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
   and restart that instance's daemon, and change an
   instance's configuration (interval, agent command, paths, ...). The config
   write cannot change an instance's registered `name` or its
-  `telegram_bot_token`, and it never restarts a daemon — the new config applies
-  only on the daemon's next restart (via the **Restart** button or
-  `POST .../restart`).
+  `telegram_bot_token`, and it never restarts a daemon — the new config
+  applies on the daemon's next cycle, except path changes (`repo`, `backlog`,
+  `blocker_file`, `log_file`) which need a restart (via the **Restart** button
+  or `POST .../restart`).

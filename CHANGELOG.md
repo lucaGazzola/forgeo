@@ -32,6 +32,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to sit beside; it then defaults to the directory holding `forgeo.yaml`. With
   a backlog file those paths are unchanged.
 
+- `forgeo validate` now checks a backlog URL by fetching it once (a plain
+  `GET`, with `backlog_auth` credentials when configured), so an unreachable
+  endpoint or a rejected token is reported by the dry run instead of by the
+  first cycle. A file backlog is still read from disk, and nothing is written
+  either way.
+
+## [0.5.0] - 2026-08-14
+
+### Added
+
+- `forgeo validate` (and the pre-flight check before a detached
+  `forgeo start`) distinguishes a repository with no commits yet: a clean
+  tree is now a warning — the first cycle creates the initial commit — while
+  a non-clean tree is a problem that names the fix
+  (`git add -A && git commit -m "Initial commit"`), since every file is
+  untracked and every cycle would otherwise refuse as dirty. Previously
+  "no commits" was always a hard problem with a misleading message.
+
+- `forgeo start` now starts the daemon **detached in the background and
+  exits**, like `forgeo restart` and the web console's start button already
+  did; the daemon is managed with `forgeo stop`/`forgeo restart`/`forgeo
+  status`. `forgeo start -f` (`--foreground`) keeps the historical
+  foreground behavior. A detached start refuses while the per-forgeo lock is
+  held and runs the same read-only checks as `forgeo validate` first, so a
+  broken config fails fast instead of leaving a silently dead daemon.
+  `--interval-minutes` is forwarded to the detached daemon.
+
+- The daemon reloads `forgeo.yaml` on the next cycle boundary when the file
+  changes (or on `SIGHUP`): a valid change is revalidated, logged, and used
+  from the next cycle; an invalid change is logged and the last valid config
+  stays in use. The web console's config save reflects this
+  (`restart_required: false`). Path changes (`repo`, `backlog`,
+  `blocker_file`, `log_file`) stay pinned to the daemon's startup values and
+  still need `forgeo restart`, so the daemon's lock files are never detached
+  from the config.
+
+- Optional bearer-token auth for the central web dashboard (`forgeo web`):
+  `forgeo web --token` (or a `token` key in `~/.config/forgeo/web.toml`)
+  requires `Authorization: Bearer <token>` on every `/api/*` route and
+  answers `401` otherwise. `forgeo web --token` with no value generates a
+  token, prints it once on startup, and saves it (mode `0600`); a generated
+  token is only ever printed once. Static assets and the new token prompt
+  page (`/central/login.html`) stay reachable without a token, and a
+  `?token=...` URL signs the browser in automatically. With no flag and no
+  token file the dashboard keeps its historical open-by-default behavior.
+
+- `forgeo validate` — a read-only dry run that checks whether a forgeo is
+  ready to run before starting it: the config schema, the repository (exists,
+  is a git repo, `git` on PATH), the branch and remote resolution, the
+  backlog parsing, a non-blank agent command, and the run lock state. It
+  reports every problem at once, never invokes the agent, and makes no writes
+  (no lock, no backlog changes). Exit code `0` when healthy, `1` with a
+  summary of problems otherwise. Supports `--config` and `--name`.
+
+- `run_history_keep` config key: `runs.jsonl` is trimmed to that many records
+  on append (default `2000`), so a busy Forgeo's run history never grows
+  forever. Trimming is atomic (temp file + rename) and a failed trim is
+  logged and skipped, never fatal to the cycle; `run_history_keep: 0`
+  disables retention entirely (the previous grow-forever behavior).
+
+- Persisted agent output per run: each `RunRecord` now stores a bounded tail
+  of the agent's stdout/stderr (last `run_output_lines` lines, default `200`),
+  so failed and blocked runs keep the full tail of what the agent said. The
+  web console's **History** tab shows it in a read-only, monospace,
+  collapsible view; `run_output_lines: 0` disables persistence, and records
+  written before the field existed render as empty.
+
+- Backlog snapshots: before every agent run (and on daemon startup) Forgeo
+  copies the backlog to a rotating snapshot (`backlog.json.bak`,
+  `backlog.json.bak.1`, ... keeping the last 2 by default), and a read that
+  finds the backlog corrupt restores the newest valid snapshot in place —
+  with the corrupt file still preserved — instead of falling back to an
+  empty store. A missing backlog is a no-op.
+
+- Task dependencies are now enforced when picking the next task: Forgeo picks
+  the oldest `OPEN` task whose `dependencies` are all `COMPLETED` instead of
+  the plain oldest `OPEN` task, so a task never runs before the work it
+  depends on. Unsatisfied dependencies (including ids that don't exist in the
+  backlog) are surfaced on `forgeo status` (`waiting on:` line) and in the web
+  console's task detail modal (*Waiting on dependencies* banner); the
+  `GET /api/instances/<name>/tasks*` responses annotate each task with an
+  `unsatisfied_dependencies` field.
+
 - Homebrew install support: `brew install lucaGazzola/forgeo/forgeo`
   installs the prebuilt binary on macOS (arm64/Intel) and Linux (Intel). The
   `publish-homebrew` CI job re-renders the tap formula (sha256 + version)
@@ -45,6 +128,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists, prints/logs a short notice with the upgrade command. The check is
   best-effort (short timeout, failures logged and skipped), never modifies
   the install, and can be disabled with `FORGEO_UPDATE_CHECK=0`.
+
+- Automatic retries for `FAILED` tasks: `failed_retry_max` config key (default
+  `0`, unchanged behavior) plus `failed_retry_wait_cycles` (default `1`) let a
+  transiently failed task move back to `OPEN` after a backoff and be run
+  again. A task that exhausts its budget stays `FAILED` with its original
+  `failure_reason`; a per-task `retries_left` field overrides the budget for
+  one task. `BLOCKED` tasks are never auto-retried. The retry count is
+  recorded in `runs.jsonl` (the run record that succeeds carries it), shown
+  in the web console (task cards/modal and a History-tab **retry** column),
+  and exposed by the tasks/runs API.
 
 ### Fixed
 
@@ -188,7 +281,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lucaGazzola/forgeo/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lucaGazzola/forgeo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lucaGazzola/forgeo/compare/v0.2.0...v0.3.0
 [0.2.1]: https://github.com/lucaGazzola/forgeo/compare/v0.2.0...v0.2.1

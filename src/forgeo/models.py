@@ -22,6 +22,9 @@ DEFAULT_REFACTOR_PROMPT = (
     "make no changes."
 )
 
+#: The run outcomes the generic webhook notification can report.
+WEBHOOK_EVENTS = ("blocked", "completed", "failed")
+
 #: Fallback shown to the human when a blocked agent gave no explanation.
 NO_BLOCKER_REASON = "The agent did not explain what it needs."
 
@@ -39,6 +42,11 @@ NO_CHANGES_REPORTED_REASON = "Agent reported no changes needed"
 #: Failure reason when an agent reports no changes but leaves the working tree
 #: dirty — a contradiction that must not be silently accepted.
 NO_CHANGES_DIRTY_REASON = "Agent reported no changes but left uncommitted changes"
+
+#: Default number of agent output lines kept per run record in ``runs.jsonl``;
+#: overridden by the ``run_output_lines`` config key. ``0`` disables
+#: persisting agent output entirely.
+DEFAULT_RUN_OUTPUT_LINES = 200
 
 
 #: URL schemes a ``backlog`` value may use to point at a remote endpoint.
@@ -132,6 +140,19 @@ class RunRecord(BaseModel):
         description="Human-readable note surfacing a no-change SUCCESS "
         "(no commit was produced), so it is never a silent null commit_sha.",
     )
+    output_logs: list[str] | None = Field(
+        default=None,
+        description="Bounded tail of the agent's stdout/stderr for this run "
+        "(at most ``run_output_lines`` lines). ``None`` for runs that never "
+        "reached the agent or that predate the field, so old records render "
+        "as empty instead of erroring.",
+    )
+    retry_count: int | None = Field(
+        default=None,
+        description="How many times the task had already been retried when "
+        "this run happened (task runs only; ``None`` for refactor runs and "
+        "records that predate the field).",
+    )
 
 
 class Task(BaseModel):
@@ -142,6 +163,9 @@ class Task(BaseModel):
     times that happened, respectively. ``failure_reason`` is likewise
     engine-managed: the agent's error when the task becomes ``FAILED``. None
     of them are editable through the web console's ``PATCH`` endpoint.
+    ``retries_left`` is a human-set per-task override of the retry budget
+    (``failed_retry_max`` in the config); ``retry_count`` and
+    ``failed_wait_cycles`` are engine-managed retry state.
     """
 
     id: str
@@ -153,11 +177,38 @@ class Task(BaseModel):
     status: TaskStatus = TaskStatus.OPEN
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
+    run_at: datetime | None = Field(
+        default=None,
+        description="Optional one-shot schedule: the earliest moment this task "
+        "may be picked. A past value makes the task fire immediately on the "
+        "next cycle (and the daemon wakes early for it); a future value keeps "
+        "the task unpicked until then. ``None`` (the default) picks the task "
+        "by oldest ``created_at`` as before.",
+    )
     agent_command: str | list[str] | None = Field(default=None)
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
     blocker_reason: list[str] = Field(default_factory=list)
     blocked_count: int = Field(default=0, ge=0)
     failure_reason: list[str] = Field(default_factory=list)
+    retries_left: int | None = Field(
+        default=None,
+        ge=0,
+        description="Per-task override of the retry budget: how many times a "
+        "FAILED task may be retried automatically. ``None`` falls back to the "
+        "config's ``failed_retry_max``; ``0`` disables retries for this task.",
+    )
+    retry_count: int = Field(
+        default=0,
+        ge=0,
+        description="Engine-managed: how many times this task has already "
+        "been retried (shown in run records and the web console).",
+    )
+    failed_wait_cycles: int = Field(
+        default=0,
+        ge=0,
+        description="Engine-managed: how many cycles this task has been FAILED "
+        "awaiting a retry (backed off by ``failed_retry_wait_cycles``).",
+    )
 
     @property
     def instruction(self) -> str:
@@ -181,6 +232,35 @@ class Task(BaseModel):
     @classmethod
     def _command_not_blank(cls, value: str | list[str] | None) -> str | list[str] | None:
         return _validate_agent_command(value)
+
+    @field_validator("run_at", mode="before")
+    @classmethod
+    def _run_at_type(cls, value: object) -> object:
+        """Reject non-string/non-datetime ``run_at`` values.
+
+        Without this, pydantic would silently coerce a bare number into an
+        epoch timestamp (e.g. ``42`` becomes 1970-01-01) — never useful for a
+        one-shot schedule, so it is refused with a clear message instead.
+        """
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError("run_at must be an ISO-8601 datetime string or null")
+        return value
+
+    @field_validator("run_at")
+    @classmethod
+    def _run_at_utc(cls, value: datetime | None) -> datetime | None:
+        """Normalize ``run_at`` to an aware UTC datetime for comparison.
+
+        The backlog is edited by hand and by the web console, so ``run_at``
+        may arrive naive (assumed UTC, like the daemon's other timestamps)
+        or in another offset; the pick and the daemon both compare against
+        aware ``datetime.now(UTC)``, so it is normalized once here.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
 
 class ExecutionResult(BaseModel):
@@ -311,10 +391,28 @@ class ForgeoConfig(BaseModel):
         refactor_prompt: Instruction used for the refactoring run that
             happens when the backlog has no runnable task.
         log_file: Where the scheduled forgeo writes its log.
+        run_history_keep: How many finished runs ``runs.jsonl`` keeps (oldest
+            lines are trimmed atomically on append). ``0`` disables retention
+            entirely so the file grows forever, exactly as before.
+        run_output_lines: How many agent output lines each run record keeps
+            in ``runs.jsonl`` (the bounded tail of the agent's stdout/stderr).
+            ``0`` disables persisting agent output entirely.
+        failed_retry_max: How many times a ``FAILED`` task is retried
+            automatically (``0`` = disabled: a task stays ``FAILED`` until a
+            human reopens it, exactly as before). A task may override this
+            budget per-task with ``retries_left``.
+        failed_retry_wait_cycles: How many cycles a retry-eligible ``FAILED``
+            task waits (backoff) before it is moved back to ``OPEN``.
         telegram_bot_token: Telegram bot token for blocked-run
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
             Disabled unless ``telegram_bot_token`` is also set.
+        notify_webhook_url: Vendor-neutral webhook URL that receives a JSON
+            POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when
+            unset.
+        notify_webhook_events: Which outcomes to report to
+            ``notify_webhook_url``; a subset of ``blocked``, ``completed``,
+            ``failed``. Defaults to ``blocked`` only.
     """
 
     name: str = "forgeo"
@@ -338,8 +436,16 @@ class ForgeoConfig(BaseModel):
     git_timeout_seconds: float = Field(default=120, gt=0)
     refactor_prompt: str = DEFAULT_REFACTOR_PROMPT
     log_file: str = "forgeo.log"
+    run_history_keep: int = Field(default=2000, ge=0)
+    run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
+    failed_retry_max: int = Field(default=0, ge=0)
+    failed_retry_wait_cycles: int = Field(default=1, ge=1)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    notify_webhook_url: str | None = None
+    notify_webhook_events: list[str] = Field(
+        default_factory=lambda: [WEBHOOK_EVENTS[0]]
+    )
 
     @field_validator("agent_command")
     @classmethod
@@ -364,6 +470,17 @@ class ForgeoConfig(BaseModel):
         if isinstance(value, str | Path):
             return Path(value)
         return value
+
+    @field_validator("notify_webhook_events")
+    @classmethod
+    def _webhook_events_valid(cls, value: list[str]) -> list[str]:
+        unknown = [event for event in value if event not in WEBHOOK_EVENTS]
+        if unknown:
+            raise ValueError(
+                "notify_webhook_events must be a subset of "
+                f"{list(WEBHOOK_EVENTS)}, got {unknown}"
+            )
+        return list(dict.fromkeys(value))
 
     @field_validator("agent_sandbox_network")
     @classmethod

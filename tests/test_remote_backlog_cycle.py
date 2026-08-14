@@ -41,7 +41,7 @@ async def test_cycle_reads_a_task_and_posts_it_back_completed(
     stored = backlog_server.tasks()
     assert [t["status"] for t in stored] == [TaskStatus.COMPLETED.value]
     assert "GET" in backlog_server.requests and "POST" in backlog_server.requests
-    assert "Do the thing (#TASK-001)" in git(git_repo, "log", "-1", "--pretty=%s")
+    assert git(git_repo, "log", "-1", "--pretty=%s").strip() == "Do the thing"
 
 
 async def test_blocked_task_is_persisted_remotely_with_its_reason(

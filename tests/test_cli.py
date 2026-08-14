@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,8 +24,10 @@ from forgeo.cli import (
     cmd_instance_rm,
     cmd_once,
     cmd_restart,
+    cmd_start,
     cmd_status,
     cmd_stop,
+    cmd_validate,
     last_outcome_from_runs,
     main,
     render_status,
@@ -82,12 +84,24 @@ def status_args(config_path: Path) -> argparse.Namespace:
     return argparse.Namespace(config=config_path)
 
 
+def validate_args(config_path: Path) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path)
+
+
 def stop_args(config_path: Path, timeout: float = 30.0) -> argparse.Namespace:
     return argparse.Namespace(config=config_path, timeout=timeout)
 
 
 def restart_args(config_path: Path, timeout: float = 30.0) -> argparse.Namespace:
     return argparse.Namespace(config=config_path, timeout=timeout)
+
+
+def start_args(config_path: Path) -> argparse.Namespace:
+    return argparse.Namespace(
+        config=config_path,
+        interval_minutes=None,
+        foreground=False,
+    )
 
 
 def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
@@ -101,9 +115,9 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
 
 
 def spawn_daemon(config_path: Path) -> subprocess.Popen[bytes]:
-    """Start a real ``forgeo start`` subprocess, detached like restart does."""
+    """Start a real ``forgeo start --foreground`` subprocess, like restart does."""
     return subprocess.Popen(
-        [sys.executable, "-m", "forgeo", "start", "--config", str(config_path)],
+        [sys.executable, "-m", "forgeo", "start", "--foreground", "--config", str(config_path)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -242,6 +256,29 @@ def test_render_status_empty_backlog_and_no_outcome(git_repo, tmp_path):
     assert "next: (none)" in text
     assert "daemon: not running" in text
     assert "last outcome: (none)" in text
+
+
+def test_render_status_reports_waiting_on_dependency(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    now = datetime.now(UTC)
+    dep = make_task(
+        id="DEP-1", title="Dep", status=TaskStatus.BLOCKED,
+        created_at=now - timedelta(hours=1),
+    )
+    waiting = make_task(
+        id="TASK-001", title="Waits", status=TaskStatus.OPEN,
+        dependencies=["DEP-1"], created_at=now - timedelta(hours=2),
+    )
+    text = render_status(config, [waiting, dep], daemon_running=False, last_outcome=None)
+    assert "next: (none)" in text
+    assert "waiting on: TASK-001 (needs COMPLETED: DEP-1 (BLOCKED))" in text
+
+
+def test_render_status_no_waiting_line_when_runnable(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [make_task(id="TASK-001", title="Do the thing", status=TaskStatus.OPEN)]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert "waiting on:" not in text
 
 
 def test_status_prints_summary_and_exits_zero(git_repo, tmp_path, capsys):
@@ -401,6 +438,283 @@ def test_status_missing_config(tmp_path, capsys):
     assert "not found" in capsys.readouterr().out
 
 
+# --------------------------------------------------------------------------- #
+# forgeo validate: read-only dry run                                          #
+# --------------------------------------------------------------------------- #
+
+
+def write_validate_config(path: Path, **overrides) -> None:
+    """Write a minimal forgeo.yaml for validate tests (repo + agent command)."""
+    fields = {"agent_command": "echo hi"}
+    fields.update(overrides)
+    body = "".join(f"{key}: {value}\n" for key, value in fields.items())
+    path.write_text(body, encoding="utf-8")
+
+
+def test_parser_help_lists_validate(capsys):
+    build_parser().print_help()
+    assert "validate" in capsys.readouterr().out
+
+
+def test_validate_healthy_reports_ready(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    backlog = tmp_path / "backlog.json"
+    backlog.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "TASK-001",
+                        "title": "First open",
+                        "description": "Do the thing.",
+                        "status": "OPEN",
+                        "created_at": "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        "id": "TASK-002",
+                        "title": "Done already",
+                        "description": "Do the thing.",
+                        "status": "COMPLETED",
+                        "created_at": "2026-01-02T00:00:00Z",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "Forgeo is ready to run." in out
+    assert "lock: not held" in out
+    assert "agent command: echo hi" in out
+    assert "backlog parses (2 tasks)" in out
+
+
+def test_validate_healthy_without_backlog(git_repo, tmp_path, capsys):
+    """A missing backlog is not a problem: the daemon treats it as empty."""
+    config_path = write_config(git_repo, tmp_path)
+    assert not (tmp_path / "backlog.json").exists()
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    assert "Forgeo is ready to run." in capsys.readouterr().out
+
+
+def test_validate_missing_config(tmp_path, capsys):
+    assert cmd_validate(validate_args(tmp_path / "missing.yaml")) == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_validate_invalid_yaml(tmp_path, capsys):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text("name: [unclosed\n", encoding="utf-8")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "not valid YAML" in out
+    assert "name" in out
+
+
+def test_validate_invalid_schema(tmp_path, capsys):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text("agent_command: ''\n", encoding="utf-8")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "is invalid" in out
+    assert "agent_command" in out
+
+
+def test_validate_repo_missing(git_repo, tmp_path, capsys):
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(config_path, repo=tmp_path / "nope")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "repository does not exist" in capsys.readouterr().out
+
+
+def test_validate_repo_not_a_git_repo(tmp_path, capsys):
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(config_path, repo=plain_dir)
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "not a git repository" in capsys.readouterr().out
+
+
+def test_validate_remote_not_configured(git_repo, tmp_path, capsys):
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(config_path, repo=git_repo, remote="origin")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "remote 'origin' is not configured" in capsys.readouterr().out
+
+
+def test_validate_remote_resolves(git_repo, tmp_path, capsys):
+    from tests.conftest import git
+
+    git(git_repo, "remote", "add", "origin", "git@example.com:repo.git")
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(config_path, repo=git_repo, remote="origin")
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "remote 'origin' resolves to git@example.com:repo.git" in out
+    assert "Forgeo is ready to run." in out
+
+
+def test_validate_empty_repo_with_files_needs_initial_commit(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "forgeo.yaml").write_text("agent_command: echo\n", encoding="utf-8")
+    config_path = write_config(repo, tmp_path)
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "no commits yet" in out
+    assert "git add -A && git commit" in out
+
+
+def test_validate_empty_repo_with_clean_tree_is_warning(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    config_path = write_config(repo, tmp_path)
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "no commits yet" in out
+    assert "first cycle will create the initial commit" in out
+    assert "Forgeo is ready to run." in out
+
+
+def test_validate_bad_backlog_json(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    (tmp_path / "backlog.json").write_text("{not json\n", encoding="utf-8")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_validate_backlog_not_a_tasks_object(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    (tmp_path / "backlog.json").write_text(json.dumps({"nope": 1}), encoding="utf-8")
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "'tasks' array" in capsys.readouterr().out
+
+
+def test_validate_backlog_invalid_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    (tmp_path / "backlog.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {"id": "T-1", "title": "Bad", "description": "", "status": "OPEN"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "backlog task #0 is invalid" in out
+    assert "description" in out
+
+
+def test_validate_reports_all_problems_at_once(git_repo, tmp_path, capsys):
+    config_path = tmp_path / "forgeo.yaml"
+    (tmp_path / "backlog.json").write_text("{not json\n", encoding="utf-8")
+    write_validate_config(
+        config_path,
+        repo=git_repo,
+        remote="origin",
+        backlog=tmp_path / "backlog.json",
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    out = capsys.readouterr().out
+    assert "not valid JSON" in out
+    assert "remote 'origin' is not configured" in out
+    assert "not ready to run (2 problem(s))" in out
+
+
+def test_validate_reports_lock_held(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    lock = acquire_run_lock(tmp_path / "backlog.lock")
+    assert lock is not None
+    try:
+        assert cmd_validate(validate_args(config_path)) == 0
+        out = capsys.readouterr().out
+        assert "lock: held" in out
+        assert "run lock held" in out
+        assert "Forgeo is ready to run." in out
+    finally:
+        lock.close()
+
+
+def test_validate_never_invokes_agent_or_writes(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    called: list[str] = []
+
+    def boom(*_a, **_k):
+        called.append("agent")
+        raise AssertionError("agent must not be started")
+
+    monkeypatch.setattr("forgeo.cli._make_forgeo", boom)
+    monkeypatch.setattr("forgeo.cli.ShellAgent", boom)
+
+    assert not (tmp_path / "backlog.lock").exists()
+    assert not (tmp_path / "runs.jsonl").exists()
+    assert cmd_validate(validate_args(config_path)) == 0
+    assert called == []
+    assert not (tmp_path / "backlog.lock").exists()
+    assert not (tmp_path / "runs.jsonl").exists()
+    assert not (tmp_path / "backlog.json").exists()
+
+
+def test_validate_fetches_a_url_backlog(git_repo, tmp_path, backlog_server, capsys):
+    """The endpoint answering is what "ready to run" means for a URL backlog."""
+    backlog_server.document = {"tasks": [json.loads(make_task().model_dump_json())]}
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(config_path, repo=git_repo, backlog=backlog_server.url)
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "backlog endpoint answers (1 tasks)" in out
+    assert "GET" in backlog_server.requests
+    assert "POST" not in backlog_server.requests
+
+
+def test_validate_reports_an_unreachable_url_backlog(git_repo, tmp_path, capsys):
+    """A dead endpoint is a problem here, not a surprise at the first cycle."""
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(
+        config_path, repo=git_repo, backlog="http://127.0.0.1:9/backlog"
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 1
+    assert "backlog endpoint could not be read" in capsys.readouterr().out
+
+
+def test_validate_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path)
+    assert cmd_instance_add(argparse.Namespace(name="my-repo", config=config_path)) == 0
+
+    assert cmd_validate(argparse.Namespace(config=DEFAULT_CONFIG, name="my-repo")) == 0
+    assert "Forgeo is ready to run." in capsys.readouterr().out
+
+
+def test_validate_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    assert cmd_validate(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
+    assert "Unknown instance" in capsys.readouterr().out
+
+
 def test_parser_help_lists_stop_and_restart(capsys):
     build_parser().print_help()
     out = capsys.readouterr().out
@@ -429,15 +743,48 @@ def test_start_registers_instance_in_registry(git_repo, tmp_path, monkeypatch, c
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
     lock_path = tmp_path / "backlog.lock"
 
+    assert cmd_start(start_args(config_path)) == 0
+    try:
+        out = capsys.readouterr().out
+        assert "started in the background" in out
+        assert "interval 600 min" in out
+        assert wait_for(lambda: is_lock_held(lock_path))
+        assert load_registry() == {"test-forgeo": str(config_path.resolve())}
+        assert read_lock_pid(lock_path) is not None
+        assert cmd_stop(stop_args(config_path)) == 0
+        assert wait_for(lambda: not is_lock_held(lock_path))
+    finally:
+        if is_lock_held(lock_path):
+            cmd_stop(stop_args(config_path))
+
+
+def test_start_detached_refuses_when_already_running(git_repo, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path, interval_minutes=600)
+    lock_path = tmp_path / "backlog.lock"
     proc = spawn_daemon(config_path)
     try:
         assert wait_for(lambda: is_lock_held(lock_path))
-        assert load_registry() == {"test-forgeo": str(config_path.resolve())}
-        assert cmd_stop(stop_args(config_path)) == 0
-        assert wait_for(lambda: proc.poll() is not None)
+
+        assert cmd_start(start_args(config_path)) == 1
+        assert "already running" in capsys.readouterr().out
     finally:
         if proc.poll() is None:
             proc.kill()
+        if is_lock_held(lock_path):
+            cmd_stop(stop_args(config_path))
+
+
+def test_start_detached_invalid_config_fails_fast(git_repo, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path, interval_minutes=600)
+    lock_path = tmp_path / "backlog.lock"
+    with config_path.open("a", encoding="utf-8") as handle:
+        handle.write("repo: /nonexistent/forgeo-repo\n")
+
+    assert cmd_start(start_args(config_path)) == 1
+    assert not is_lock_held(lock_path)
+    assert "not ready to run" in capsys.readouterr().out
 
 
 def test_stop_unknown_name_does_not_register(tmp_path, monkeypatch, capsys):
@@ -546,13 +893,17 @@ def test_restart_replaces_running_daemon(git_repo, tmp_path, monkeypatch, capsys
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("command", ["start", "once", "status", "stop", "restart"])
+@pytest.mark.parametrize(
+    "command", ["start", "once", "status", "validate", "stop", "restart"]
+)
 def test_parser_accepts_name_for_commands(command):
     args = build_parser().parse_args([command, "--name", "my-repo"])
     assert getattr(args, "name", None) == "my-repo"
 
 
-@pytest.mark.parametrize("command", ["start", "once", "status", "stop", "restart"])
+@pytest.mark.parametrize(
+    "command", ["start", "once", "status", "validate", "stop", "restart"]
+)
 def test_parser_rejects_name_with_config(command):
     with pytest.raises(SystemExit) as excinfo:
         build_parser().parse_args([command, "--name", "x", "--config", "forgeo.yaml"])

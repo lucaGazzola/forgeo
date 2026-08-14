@@ -1,15 +1,23 @@
 """The backlog: the list of tasks Forgeo works through.
 
-Forgeo pulls the oldest ``OPEN`` task from here. The tasks live in a single
-JSON document — ``{"tasks": [...]}`` — which is either a local file you can
-edit by hand (add, remove, or set a ``BLOCKED`` task back to ``OPEN`` once
-you have provided the input it needed) or an HTTP endpoint owned by another
-application, see :mod:`forgeo.backlog_http`.
+Forgeo pulls the oldest ``OPEN`` task whose dependencies are all ``COMPLETED``
+from here (an optional ``run_at`` one-shot schedule overrides the oldest-first
+order). The tasks live in a single JSON document — ``{"tasks": [...]}`` — which
+is either a local file you can edit by hand (add, remove, or set a ``BLOCKED``
+task back to ``OPEN`` once you have provided the input it needed) or an HTTP
+endpoint owned by another application, see :mod:`forgeo.backlog_http`.
 
 Everything above the storage layer is shared: :class:`BacklogStore` holds all
 the task manipulation and the asyncio lock that serializes writes, and leaves
 exactly two operations to its subclasses — load the document, store the
 document.
+
+A file backlog is the single source of truth, so it is guarded against bad
+writes: before every agent run (and on daemon startup) a rotating snapshot is
+written next to it (``backlog.json.bak``, ``backlog.json.bak.1``, ...) and a
+read that finds a corrupt store restores the newest valid snapshot in place
+instead of silently starting from an empty one. A URL backlog is owned by the
+remote application, which keeps its own history, so it is never snapshotted.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
@@ -31,6 +40,9 @@ from forgeo.models import ForgeoConfig, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 
+#: How many rotating backlog snapshots to keep (default 2: ``.bak``, ``.bak.1``).
+DEFAULT_SNAPSHOT_COUNT = 2
+
 #: The task fields the web console may edit through ``update_task``.
 EDITABLE_TASK_FIELDS = frozenset(
     {
@@ -41,16 +53,102 @@ EDITABLE_TASK_FIELDS = frozenset(
         "files_to_modify",
         "agent_command",
         "agent_timeout_seconds",
+        "retries_left",
+        "run_at",
     }
 )
 
 
-def oldest_open_task(tasks: list[Task]) -> Task | None:
-    """Return the oldest OPEN task (smallest ``created_at``), or ``None``."""
-    open_tasks = [task for task in tasks if task.status is TaskStatus.OPEN]
-    if not open_tasks:
+def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
+    """The dependencies of ``task`` that are not yet satisfied.
+
+    A dependency is satisfied only when a task with that id exists in the
+    backlog and its status is ``COMPLETED``. Each returned entry carries the
+    dependency id and its current status (``missing`` when no task with that
+    id exists), in ``task.dependencies`` order.
+    """
+    status_by_id = {t.id: t.status for t in tasks}
+    unmet: list[dict[str, str]] = []
+    for dep_id in task.dependencies:
+        status = status_by_id.get(dep_id)
+        if status is TaskStatus.COMPLETED:
+            continue
+        unmet.append(
+            {
+                "id": dep_id,
+                "status": status.value if status is not None else "missing",
+            }
+        )
+    return unmet
+
+
+def _runnable_open_tasks(tasks: list[Task]) -> list[Task]:
+    """The OPEN tasks whose dependencies are all COMPLETED.
+
+    A task is only runnable when every id in its ``dependencies`` exists and
+    is ``COMPLETED``; tasks referencing missing or still-pending tasks are
+    skipped. Tasks without dependencies are always runnable when OPEN.
+    """
+    status_by_id = {t.id: t.status for t in tasks}
+    return [
+        task
+        for task in tasks
+        if task.status is TaskStatus.OPEN
+        and all(
+            status_by_id.get(dep_id) is TaskStatus.COMPLETED
+            for dep_id in task.dependencies
+        )
+    ]
+
+
+def oldest_open_task(tasks: list[Task], *, now: datetime | None = None) -> Task | None:
+    """Return the runnable OPEN task Forgeo should pick next.
+
+    The default is the oldest ``created_at`` task whose dependencies are all
+    ``COMPLETED``, exactly as before. An optional one-shot ``run_at`` changes
+    the order:
+
+    * A runnable OPEN task whose ``run_at`` is in the past (or equal to
+      ``now``) is picked *before* every task without ``run_at`` — the
+      "run this after deploy" case. Among due tasks the one with the earliest
+      ``run_at`` (most overdue) is picked first, ties broken by ``created_at``.
+    * A runnable OPEN task whose ``run_at`` is in the future is skipped until
+      that moment arrives, so it never displaces an already-eligible task.
+
+    Returns ``None`` when no runnable OPEN task exists (e.g. an empty backlog,
+    a cycle of tasks all waiting on each other, or only future-``run_at``
+    tasks).
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    runnable = _runnable_open_tasks(tasks)
+    due = [task for task in runnable if task.run_at is not None and task.run_at <= now]
+    if due:
+        return min(due, key=lambda task: (task.run_at, task.created_at))
+    normal = [task for task in runnable if task.run_at is None]
+    if not normal:
         return None
-    return min(open_tasks, key=lambda task: task.created_at)
+    return min(normal, key=lambda task: task.created_at)
+
+
+def next_due_run_at(tasks: list[Task], *, now: datetime | None = None) -> datetime | None:
+    """The earliest ``run_at`` among runnable OPEN tasks, or ``None``.
+
+    The daemon uses this to wake early: when a scheduled task's ``run_at`` is
+    sooner than the next interval (or already in the past), it sleeps only
+    until that moment instead of the full interval, so a one-shot task fires
+    promptly rather than waiting for the next scheduled pick. Tasks that are
+    not runnable (not ``OPEN``, or blocked on an uncompleted dependency) and
+    tasks without ``run_at`` are ignored.
+    """
+    run_at_times = [
+        task.run_at
+        for task in _runnable_open_tasks(tasks)
+        if task.run_at is not None
+    ]
+    if not run_at_times:
+        return None
+    return min(run_at_times)
 
 
 def backlog_status_counts(tasks: list[Task]) -> dict[str, int]:
@@ -58,6 +156,24 @@ def backlog_status_counts(tasks: list[Task]) -> dict[str, int]:
     counts = {status.value: 0 for status in TaskStatus}
     counts.update(Counter(task.status.value for task in tasks))
     return counts
+
+
+def snapshot_paths_for(
+    path: str | Path, *, count: int = DEFAULT_SNAPSHOT_COUNT
+) -> list[Path]:
+    """The rotating snapshot paths for ``path``, newest first.
+
+    The newest snapshot lives at ``<name>.bak``; older snapshots gain an
+    index, ``<name>.bak.1``, ``<name>.bak.2``, ... up to ``<name>.bak.{count-1}``.
+    A ``count`` of ``0`` disables snapshotting entirely.
+    """
+    base = Path(path)
+    return [
+        base.with_name(
+            base.name + ".bak" if index == 0 else f"{base.name}.bak.{index}"
+        )
+        for index in range(max(0, count))
+    ]
 
 
 class BacklogUnavailableError(RuntimeError):
@@ -112,6 +228,20 @@ class BacklogStore(ABC):
         store = await self._read()
         return [self._to_task(entry) for entry in store["tasks"]]
 
+    async def fetch_next_task(self, *, now: datetime | None = None) -> Task | None:
+        """Return the task Forgeo should run next (honoring ``run_at``
+        one-shot schedules), or ``None`` when nothing is runnable."""
+        return oldest_open_task(await self.list_tasks(), now=now)
+
+    async def snapshot(self) -> None:
+        """Take a rollback copy of the backlog before it is written to.
+
+        A no-op by default: only a backend that *owns* the document can
+        meaningfully snapshot it. :class:`JSONBacklog` overrides this; a
+        backlog served over HTTP belongs to the remote application, which
+        keeps its own history, so Forgeo does not shadow-copy it.
+        """
+
     async def get_task(self, task_id: str) -> Task | None:
         """Return a task by id, or ``None`` if it does not exist."""
         store = await self._read()
@@ -133,12 +263,23 @@ class BacklogStore(ABC):
 
         Any transition away from ``FAILED`` clears the persisted
         ``failure_reason``, so a task that stops being failed no longer shows
-        the stale reason.
+        the stale reason. A transition that leaves ``FAILED`` (e.g. a human
+        setting the status back to ``OPEN``) also resets the engine-managed
+        retry state (``retry_count`` and ``failed_wait_cycles``), so the
+        manual retry starts with a fresh retry budget. A task completing
+        normally keeps its ``retry_count``, so the run record can show it.
         """
         def mutate(entry: dict[str, Any]) -> None:
+            leaving_failed = (
+                entry.get("status") == TaskStatus.FAILED.value
+                and status is not TaskStatus.FAILED
+            )
             entry["status"] = status.value
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
+                if leaving_failed:
+                    entry["retry_count"] = 0
+                    entry["failed_wait_cycles"] = 0
 
         return await self._update_entry(task_id, mutate)
 
@@ -163,12 +304,43 @@ class BacklogStore(ABC):
 
         ``reason`` is stored on the task as ``failure_reason`` (shown in the
         web console's task modal) every time a task transitions into
-        ``FAILED``. An unknown ``task_id`` returns ``None`` without writing
-        anything.
+        ``FAILED``. The engine-managed retry wait counter is reset, so a fresh
+        failure restarts the ``failed_retry_wait_cycles`` backoff. An unknown
+        ``task_id`` returns ``None`` without writing anything.
         """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
+            entry["failed_wait_cycles"] = 0
+
+        return await self._update_entry(task_id, mutate)
+
+    async def bump_failed_wait(self, task_id: str) -> Task | None:
+        """Increment a retry-eligible ``FAILED`` task's wait-cycle counter.
+
+        Called once per cycle while a task is ``FAILED`` and awaiting a
+        retry, so the ``failed_retry_wait_cycles`` backoff counts real
+        cycles. An unknown ``task_id`` returns ``None`` without writing
+        anything.
+        """
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["failed_wait_cycles"] = int(entry.get("failed_wait_cycles", 0)) + 1
+
+        return await self._update_entry(task_id, mutate)
+
+    async def retry_task(self, task_id: str) -> Task | None:
+        """Move a retry-eligible ``FAILED`` task back to ``OPEN`` for a retry.
+
+        Increments the engine-managed ``retry_count`` and resets the wait
+        counter; the persisted ``failure_reason`` is cleared because the task
+        is no longer failed (a fresh failure records a fresh reason). An
+        unknown ``task_id`` returns ``None`` without writing anything.
+        """
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["status"] = TaskStatus.OPEN.value
+            entry["retry_count"] = int(entry.get("retry_count", 0)) + 1
+            entry["failed_wait_cycles"] = 0
+            entry["failure_reason"] = []
 
         return await self._update_entry(task_id, mutate)
 
@@ -239,6 +411,16 @@ class BacklogStore(ABC):
                 or not all(isinstance(item, str) for item in updates[field])
             ):
                 raise ValueError(f"{field} must be a list of strings")
+        if "retries_left" in updates and updates["retries_left"] is not None and (
+            not isinstance(updates["retries_left"], int)
+            or isinstance(updates["retries_left"], bool)
+            or updates["retries_left"] < 0
+        ):
+            raise ValueError("retries_left must be a non-negative integer or null")
+        if "run_at" in updates and updates["run_at"] is not None and not isinstance(
+            updates["run_at"], str
+        ):
+            raise ValueError("run_at must be an ISO-8601 datetime string or null")
 
         async with self._lock:
             store = await self._read()
@@ -308,38 +490,131 @@ class BacklogStore(ABC):
 class JSONBacklog(BacklogStore):
     """A backlog stored in a single JSON document on disk."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        snapshot_count: int = DEFAULT_SNAPSHOT_COUNT,
+    ) -> None:
         super().__init__()
         self.path = Path(path)
+        self.snapshot_count = max(0, snapshot_count)
+
+    @property
+    def snapshot_paths(self) -> list[Path]:
+        """The rotating snapshot paths for this backlog, newest (``.bak``) first."""
+        return snapshot_paths_for(self.path, count=self.snapshot_count)
+
+    async def snapshot(self) -> None:
+        """Copy the current store to a rotating snapshot (``backlog.json.bak``).
+
+        Called before every agent run and on daemon startup so a bad write to
+        the backlog (a hostile agent, a half-written file, an accidental
+        manual edit) can always be rolled back to the newest valid snapshot.
+        The newest snapshot is always ``<backlog>.bak``; existing snapshots
+        are rotated up by one index and the oldest beyond ``snapshot_count``
+        is dropped. A missing backlog is a no-op and a failure is logged
+        without raising, so snapshotting can never break a cycle.
+        """
+        if not self.path.exists() or self.snapshot_count <= 0:
+            return
+        async with self._lock:
+            try:
+                store = await self._read()
+                self._rotate_snapshots()
+                self._write_snapshot(store)
+                logger.info("Backlog snapshot written to %s", self.snapshot_paths[0])
+            except OSError as exc:
+                logger.warning("Could not snapshot backlog at %s: %s", self.path, exc)
 
     async def _read(self) -> dict[str, Any]:
-        """Load the store from disk, tolerating a missing or corrupt file."""
+        """Load the store from disk, tolerating a missing or corrupt file.
+
+        A missing file yields an empty store. A corrupt file (unparseable,
+        not a JSON object, or missing a ``tasks`` list) falls back to the
+        newest valid snapshot when one exists — restoring it in place and
+        preserving the corrupt file under a ``.corrupt-<timestamp>`` name —
+        and to an empty store otherwise.
+        """
         if not self.path.exists():
             return {"tasks": []}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-            corrupt_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
-            try:
-                self.path.rename(corrupt_path)
-                logger.warning(
-                    "Corrupt backlog at %s renamed to %s; starting with empty store",
-                    self.path,
-                    corrupt_path,
-                )
-            except OSError:
-                logger.warning(
-                    "Corrupt backlog at %s could not be preserved; starting with empty store",
-                    self.path,
-                )
+            restored = await self._restore_from_snapshot()
+            if restored is not None:
+                return restored
+            self._preserve_corrupt_file()
             return {"tasks": []}
-        return normalize_store(data)
+        if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+            restored = await self._restore_from_snapshot()
+            if restored is not None:
+                return restored
+            return {"tasks": []}
+        return {"tasks": data["tasks"]}
+
+    async def _restore_from_snapshot(self) -> dict[str, Any] | None:
+        """Return the newest valid snapshot's store, or ``None`` when none exists.
+
+        When a valid snapshot is found, the corrupt backlog is preserved
+        under a ``.corrupt-<timestamp>`` name and the snapshot is restored as
+        the current backlog (rewritten atomically) so later reads see valid
+        content. A failure to persist the restored store is logged and the
+        store is still returned for this read.
+        """
+        for snapshot in self.snapshot_paths:
+            if not snapshot.is_file():
+                continue
+            try:
+                data = json.loads(snapshot.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+                continue
+            store = {"tasks": data["tasks"]}
+            self._preserve_corrupt_file()
+            try:
+                self._write_store(self.path, store)
+            except OSError as exc:
+                logger.warning(
+                    "Restored backlog could not be persisted to %s: %s", self.path, exc
+                )
+            logger.warning(
+                "Corrupt backlog at %s restored from snapshot %s", self.path, snapshot
+            )
+            return store
+        return None
+
+    def _preserve_corrupt_file(self) -> None:
+        """Rename the corrupt backlog aside so nothing is silently discarded."""
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        corrupt_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
+        try:
+            self.path.rename(corrupt_path)
+            logger.warning("Corrupt backlog at %s renamed to %s", self.path, corrupt_path)
+        except OSError:
+            logger.warning("Corrupt backlog at %s could not be preserved", self.path)
+
+    def _rotate_snapshots(self) -> None:
+        """Shift existing snapshots up by one index, dropping the oldest."""
+        paths = self.snapshot_paths
+        for index in range(len(paths) - 1, 0, -1):
+            if paths[index - 1].exists():
+                os.replace(paths[index - 1], paths[index])
+
+    def _write_snapshot(self, store: dict[str, Any]) -> None:
+        """Persist ``store`` to the newest snapshot slot atomically."""
+        self._write_store(self.snapshot_paths[0], store)
 
     async def _write(self, store: dict[str, Any]) -> None:
         """Atomically persist the store (temp file + rename)."""
+        self._write_store(self.path, store)
+
+    @staticmethod
+    def _write_store(path: Path, store: dict[str, Any]) -> None:
+        """Atomically persist ``store`` to ``path`` (temp file + rename)."""
         atomic_write_text(
-            self.path,
+            path,
             json.dumps(store, indent=2, ensure_ascii=False) + "\n",
         )
 

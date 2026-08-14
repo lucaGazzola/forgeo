@@ -17,9 +17,10 @@ forgeo web --host 127.0.0.1
 forgeo web -d            # start it in the background and return
 forgeo web status        # running? pid + host + port
 forgeo web stop          # SIGTERM the background dashboard
+forgeo web --token       # optional: generate a token and require it on /api/*
 ```
 
-It runs in the foreground like `forgeo start`, or in the background with
+It runs in the foreground by default, or in the background with
 `-d`/`--detach` (managed through `forgeo web stop`/`forgeo web status` and
 its host-global `~/.config/forgeo/web.lock` — see the
 [CLI reference](cli-reference.md#forgeo-web)). By default it binds
@@ -32,34 +33,82 @@ firewall too).
 The server is implemented with the standard library (`forgeo.central`);
 static files in `src/forgeo/web/` are served at their URL paths.
 
+## Authentication (optional)
+
+By default the dashboard is **open**: anyone who can reach the port can read
+every instance's backlog, logs, and config, and can mutate tasks or manage
+daemons. On a shared host, enable **bearer-token auth** so every `/api/*`
+route requires an `Authorization: Bearer <token>` header and answers `401`
+otherwise:
+
+```bash
+forgeo web --token            # generates a token, prints it once, saves it
+forgeo web --token my-secret  # or set your own token
+```
+
+The token is stored in `~/.config/forgeo/web.toml` (or
+`$FORGEO_CONFIG_DIR/web.toml`, mode `0600`). Once the file holds a token,
+auth is on even without the flag; a generated token is printed exactly once
+at the moment it is created. Every `curl`/client then adds the header:
+
+```bash
+curl -H "Authorization: Bearer my-secret" http://127.0.0.1:8790/api/instances
+```
+
+Static assets and the **token prompt page** (`/central/login.html`) stay
+reachable without a token: the page asks for the token and stores it in the
+browser, so the console itself keeps working. Opening the dashboard with
+`?token=YOUR_TOKEN` in the URL signs the browser in automatically (the token
+is stripped from the address bar). Delete `web.toml` to return to the
+open-by-default behavior.
+
 ## Pages
 
 - `GET /` — home page listing every registered instance: name, repository,
   daemon state (lock held), last outcome, next run, and per-status backlog
   counts, each linking to its instance page.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
-  **Create** tab with a form to add tasks, plus tabs for **logs**, **runs**,
+  **Create** tab with a form to add tasks (including an optional *Run at*
+  date/time input for a one-shot schedule), plus tabs for **logs**, **history**,
   **blocker** and **config**. The header carries a **DAEMON** section with the
   daemon status tag (`running`/`stopped`) and **Start**/**Stop**/**Restart**
   buttons that call `POST /api/instances/<name>/start|stop|restart`; the
   buttons reflect the current state (Start is disabled while running, Stop
   while stopped), give inline success/error feedback, and the status tag
   refreshes after each action and on the 30-second auto-refresh. The
-  **Config** tab renders `forgeo.yaml` as an
+  **History** tab lists recent finished cycles from `runs.jsonl` in a
+  paginated table — time, kind, task id and title, an outcome badge, duration,
+  commit SHA and reason — newest first, with a pager once more than a page of
+  runs exist (a friendly empty state is shown when no runs have been recorded
+  yet). Runs that carry persisted agent output show a collapsible
+  "agent output" row under the record: a read-only, monospace view of the
+  bounded stdout/stderr tail (see `run_output_lines`). The **Config** tab renders `forgeo.yaml` as an
   editable form (interval, agent command, sandbox, telegram settings, ...):
   **Save** persists it via `PUT /api/instances/<name>/config`, surfaces
   validation errors inline (highlighted next to the failing field), and shows
   a notice that the running daemon applies the change only on its next
   restart. Clicking a task card opens a modal with the full
   task details (description, acceptance criteria, dependencies, files to
-  modify, agent command, timestamps); it closes via the close button, the
+  modify, agent command, timestamps, and the optional `run_at` one-shot
+  schedule); it closes via the close button, the
   backdrop, or Escape. An **Edit** button switches the modal to an editable
-  form for those fields; **Save** persists the change via `PATCH` and
-  **Cancel** discards it. A `BLOCKED` task's modal shows a highlighted banner
+  form for those fields (a *Run at* date/time input sets or clears the
+  schedule); **Save** persists the change via `PATCH` and
+  **Cancel** discards it. A task whose dependencies are not all `COMPLETED`
+  shows a *Waiting on dependencies* banner listing each uncompleted
+  dependency with its current status (or `missing` when the id does not
+  exist in the backlog) — Forgeo will not pick the task until every
+  dependency is `COMPLETED`. A `BLOCKED` task's modal shows a highlighted
+  banner
   at the top with the agent's blocker reason (the persisted per-task
   `blocker_reason`) and how many times the task has blocked (`blocked_count`,
   e.g. "blocked 3x"); a `FAILED` task's modal shows an analogous red banner
-  with the failure reason (the persisted per-task `failure_reason`), so you
+  with the failure reason (the persisted per-task `failure_reason`) and the
+  task's retry state — how many times it was retried, how many retries
+  remain (from `retry_budget` / `retries_remaining`), or a "retries
+  exhausted" note when automatic retries are spent (see
+  [Backlog format](backlog.md#retrying-a-failed-task)). A failed task that
+  was retried also carries a small `retried Nx` badge on its card, so you
   never have to open the logs to see why something failed. You can **Edit** a
   `BLOCKED` task to correct it and then **Reopen** it, or **Reopen** it
   as-is — Forgeo retries it on its next scheduled run. `BLOCKED` tasks can
@@ -75,6 +124,16 @@ static files in `src/forgeo/web/` are served at their URL paths.
   expanding the column, and expanded/show-more state survives the 30-second
   auto-refresh. This is presentation only — the task data itself is never
   trimmed or reordered server-side.
+
+  Above the board, a **search box** and a **status filter** find a specific
+  task without scrolling. Typing filters the columns by `id`, `title`, and
+  `description` substring as you type (matching is case-insensitive), and the
+  status select narrows the board to a single status column. While either
+  filter is active every match is rendered — no "show more" or collapsed
+  columns — and a "no matching tasks" state is shown when nothing fits. Both
+  filters are reflected in the URL (`?q=…&status=…`) so the view survives
+  reloads and can be shared; they are applied entirely client-side against the
+  full backlog already returned by the API.
 - `GET /style.css`, `/central/central.js`, `/central/central.css` — the
   shared dark theme and dashboard scripts (no frameworks).
 
@@ -101,7 +160,8 @@ whole listing.
 
 ### `GET /api/instances/<name>/tasks`
 
-List every task in that instance's backlog, in creation order.
+List every task in that instance's backlog, in creation order. Each task
+carries extra `unsatisfied_dependencies` and retry fields (see below).
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/tasks
@@ -119,9 +179,11 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
     "failure_reason": [],
     "created_at": "2026-07-31T10:00:00Z",
     "updated_at": "2026-07-31T10:00:00Z",
+    "run_at": null,
     "dependencies": [],
     "acceptance_criteria": [],
-    "files_to_modify": []
+    "files_to_modify": [],
+    "unsatisfied_dependencies": []
   }
 ]
 ```
@@ -139,19 +201,52 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001
 
 Returns `404` with `{"error": "not found"}` for an unknown id.
 
+### `unsatisfied_dependencies`
+
+Every task returned by `GET .../tasks` and `GET .../tasks/{id}` includes an
+`unsatisfied_dependencies` field: a list of the task's `dependencies` that are
+**not** `COMPLETED`, in `dependencies` order. Each entry has the dependency id
+and its current status — or `missing` when no task with that id exists:
+
+```json
+[
+  { "id": "TASK-001", "status": "OPEN" },
+  { "id": "TASK-003", "status": "missing" }
+]
+```
+
+Forgeo only picks an `OPEN` task once every dependency is `COMPLETED` (see
+[Backlog format](backlog.md)); the field is how the web console explains why a
+task is waiting and is `[]` when the task has no (or only `COMPLETED`)
+dependencies.
+
+### `retry_budget` and `retries_remaining`
+
+Every task returned by `GET .../tasks` and `GET .../tasks/{id}` also carries
+its effective automatic-retry state (when the instance's config is
+available): `retry_budget` is the number of retries the task may have (the
+per-task `retries_left` override falling back to the config's
+`failed_retry_max`) and `retries_remaining` is `max(0, retry_budget -
+retry_count)`. The engine-managed `retry_count` and `failed_wait_cycles`
+fields are part of the task object itself. The web console uses these to
+show how many retries a failed task has left, or that its retries are
+exhausted (see [Backlog format](backlog.md#retrying-a-failed-task)).
+
 ### `POST /api/instances/<name>/tasks`
 
 Create a new task in that instance's backlog. The request body must be a JSON
 object with a non-blank `title` and a non-blank `description`;
-`acceptance_criteria` (array of strings) and `agent_command` (string or
-`null`, overriding the configured agent for this task) are optional. The
-server generates the id as the next free `WEB-###` id and stamps
-`created_at`/`updated_at`.
+`acceptance_criteria` (array of strings), `agent_command` (string or
+`null`, overriding the configured agent for this task) and `run_at` (an
+ISO-8601 datetime string or `null` — the optional one-shot schedule: a past
+value fires the task immediately, a future value keeps it unpicked until
+then) are optional. The server generates the id as the next free `WEB-###` id
+and stamps `created_at`/`updated_at`.
 
 ```bash
 curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"title": "Implement fibonacci module", "description": "With tests.", "acceptance_criteria": ["passes pytest"], "agent_command": "claude -p \"$FORGEO_TASK\" --model claude-3-haiku"}'
+  -d '{"title": "Implement fibonacci module", "description": "With tests.", "acceptance_criteria": ["passes pytest"], "agent_command": "claude -p \"$FORGEO_TASK\" --model claude-3-haiku", "run_at": "2026-08-20T12:30:00Z"}'
 ```
 
 ```json
@@ -165,6 +260,7 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   "failure_reason": [],
   "created_at": "2026-08-01T12:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
+  "run_at": "2026-08-20T12:30:00Z",
   "dependencies": [],
   "acceptance_criteria": ["passes pytest"],
   "files_to_modify": []
@@ -228,10 +324,13 @@ the next cycle automatically. Errors:
 
 Update an existing task's editable fields: `title`, `description`,
 `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`,
-and `agent_timeout_seconds`. The request body is a JSON object; omitted fields
-are left unchanged and `id`, `status`, `blocker_reason`, `blocked_count`,
-`failure_reason`, and `created_at` are always preserved (they are
-engine-managed — `PATCH` rejects them like it rejects `status`).
+`agent_timeout_seconds`, `retries_left` (the per-task automatic-retry
+budget override; a non-negative integer or `null`), and `run_at` (the
+optional one-shot schedule; an ISO-8601 datetime string or `null` to clear
+it). The request body is a JSON object; omitted fields are left unchanged
+and `id`, `status`, `blocker_reason`, `blocked_count`, `failure_reason`,
+`retry_count`, `failed_wait_cycles`, and `created_at` are always preserved
+(they are engine-managed — `PATCH` rejects them like it rejects `status`).
 `agent_command` may be a string, an array, or `null` (clear the per-task
 override); `agent_timeout_seconds` may be a positive number or `null`.
 `updated_at` is bumped to the current time.
@@ -239,7 +338,7 @@ override); `agent_timeout_seconds` may be a positive number or `null`.
 ```bash
 curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
   -H 'Content-Type: application/json' \
-  -d '{"description": "Write a fibonacci module with tests.", "agent_timeout_seconds": 120}'
+  -d '{"description": "Write a fibonacci module with tests.", "agent_timeout_seconds": 120, "run_at": "2026-08-20T12:30:00Z"}'
 ```
 
 ```json
@@ -346,20 +445,22 @@ curl -X PUT http://127.0.0.1:8790/api/instances/my-repo/config \
 ```
 
 The write is atomic (temp file + rename), like the other write endpoints.
-Returns `200` with the reloaded config plus an explicit restart notice:
+Returns `200` with the reloaded config plus a note on when it takes effect:
 
 ```json
 {
   "saved": true,
-  "restart_required": true,
-  "message": "Config saved. The daemon picks up changes on its next restart.",
+  "restart_required": false,
+  "message": "Config saved. The daemon picks up changes on its next cycle.",
   "config": { "...": "the reloaded config, paths resolved" }
 }
 ```
 
-The daemon re-reads `forgeo.yaml` only on restart (`forgeo restart`); a config
-save never restarts it for you, and `restart_required` is `true` on every
-successful save so the caller cannot miss it. Errors:
+The daemon watches `forgeo.yaml` and picks the change up on its next cycle
+(`SIGHUP` wakes it sooner), so a config save needs no restart; `restart_required`
+is `false` on every successful save. Path changes (`repo`, `backlog`,
+`blocker_file`, `log_file`) are pinned to the daemon's startup paths and need
+a restart (via the **Restart** button or `POST .../restart`). Errors:
 
 - `400` with `{"error": "..."}` — an unparseable, non-object or empty body; a
   payload that fails `ForgeoConfig` validation (e.g. a blank `agent_command`,
@@ -384,11 +485,13 @@ carry credentials the agent needs) is editable.
 
 Start, stop, or restart that instance's daemon — the same lifecycle as
 `forgeo start`/`forgeo stop`/`forgeo restart`, exposed to the web console as
-an explicit operator action. This is also how a config saved from the
-**Config** tab is applied: the daemon re-reads `forgeo.yaml` on every start,
-so a restart picks up the saved settings. No request body is required.
+an explicit operator action. This is how a config saved from the **Config**
+tab that moves paths is applied: the daemon re-reads `forgeo.yaml` on every
+start, so a restart picks up the saved settings (a plain config edit is
+picked up on the next cycle without one). No request body is required.
 
-- `start` — launch a detached `forgeo start` for the instance. Refused with
+- `start` — launch a detached `forgeo start` for the instance (the same
+  background daemon `forgeo start` launches). Refused with
   `409` when the daemon is already running.
 - `stop` — SIGTERM the running daemon and wait for it to exit. A cycle in
   progress always finishes first, so partial work is never lost. When the
@@ -435,19 +538,59 @@ curl http://127.0.0.1:8790/api/instances/my-repo/logs
 curl "http://127.0.0.1:8790/api/instances/my-repo/logs?lines=50"
 ```
 
-### `GET /api/instances/<name>/runs?limit=N`
+### `GET /api/instances/<name>/runs?limit=N&offset=M`
 
-That instance's durable run history from `runs.jsonl`, newest first (`limit`
-defaults to `10`, max `10000`). Each record has started/finished timestamps,
-the run kind (`task` or `refactor`), the task id and title when applicable,
-the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the agent exit code, the commit
-SHA when a commit was created, the duration in seconds, and an optional
-`reason` when the run completed without a commit (a no-change SUCCESS is
-surfaced here instead of silently showing a null commit SHA).
+That instance's durable run history from `runs.jsonl`, newest first and
+paginated. `limit` defaults to `10` (max `10000`); `offset` defaults to `0`
+and skips that many of the newest records, so the web console's **History**
+tab pages through old runs. The response is an object: `runs` holds the
+requested page, `total` is the number of readable records (for pager
+controls), and `limit`/`offset` echo the request. Each record has
+started/finished timestamps, the run kind (`task` or `refactor`), the task id
+and title when applicable, the outcome (`SUCCESS` / `BLOCKED` / `ERROR`), the
+agent exit code, the commit SHA when a commit was created, the duration in
+seconds, an optional `reason` when the run completed without a commit (a
+no-change SUCCESS is surfaced here instead of silently showing a null commit
+SHA), and `output_logs`: the bounded tail of the agent's stdout/stderr for
+that run (at most `run_output_lines` lines) or `null` for runs that never
+reached the agent or that predate the field. When the run was a retry of a
+previously failed task, `retry_count` carries how many times the task had
+already been retried (task runs only; `null` otherwise), so the History tab
+can show which runs were retries. The web console renders the output tail in
+a read-only, collapsible view in the **History** tab. A missing or empty
+`runs.jsonl` yields `runs: []` with `total: 0`.
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/runs
 curl "http://127.0.0.1:8790/api/instances/my-repo/runs?limit=5"
+curl "http://127.0.0.1:8790/api/instances/my-repo/runs?limit=25&offset=25"
+```
+
+```json
+{
+  "runs": [
+    {
+      "started_at": "2026-08-01T11:55:00Z",
+      "finished_at": "2026-08-01T12:00:10Z",
+      "kind": "task",
+      "task_id": "TASK-001",
+      "task_title": "Implement fibonacci module",
+      "outcome": "SUCCESS",
+      "agent_exit_code": 0,
+      "commit_sha": "a1b2c3d4e5f6",
+      "duration_seconds": 310.2,
+      "reason": null,
+      "output_logs": [
+        "[stdout] Creating module fibonacci.py",
+        "[stdout] Running tests: 12 passed, 0 failed",
+        "[shell] Task TASK-001 finished successfully (exit 0)."
+      ]
+    }
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 10
+}
 ```
 
 ### `GET /api/instances/<name>/blocker`
@@ -471,7 +614,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/blocker
   `PATCH /api/instances/<name>/tasks/<id>` (update a task's editable fields),
   `DELETE /api/instances/<name>/tasks/<id>` (delete an `OPEN` or `BLOCKED`
   task), and `PUT /api/instances/<name>/config` (validate and persist the
-  instance's `forgeo.yaml`; applies on the daemon's next restart).
+  instance's `forgeo.yaml`; applies on the daemon's next cycle).
 
 ## Errors
 
@@ -500,6 +643,14 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
   visible from your LAN. Exposing it publicly (`--host 0.0.0.0` on a public
   interface) makes every instance's backlog, logs, and config visible to
   every host that can reach the port — only do that on a trusted network.
+- **Bearer-token auth** (see [Authentication](#authentication-optional))
+  closes the API to anonymous clients: every `/api/*` route — read *and*
+  write — requires `Authorization: Bearer <token>` and returns `401`
+  otherwise, while static pages and the token prompt stay public. It does
+  not add transport encryption: put the dashboard behind a TLS proxy (or an
+  SSH tunnel) when you use the token over the network, so the token is not
+  sent in cleartext. The `?token=...` URL convenience form puts the token in
+  the address bar and server logs — prefer pasting it on the prompt page.
 - The write endpoints are `POST /api/instances/<name>/tasks` and `PATCH
   /api/instances/<name>/tasks/<id>` (and `POST
   /api/instances/<name>/tasks/<id>/reopen` to retry a `BLOCKED` task, plus
@@ -512,6 +663,7 @@ curl -s http://127.0.0.1:8790/api/instances/my-repo/status
   and restart that instance's daemon, and change an
   instance's configuration (interval, agent command, paths, ...). The config
   write cannot change an instance's registered `name` or its
-  `telegram_bot_token`, and it never restarts a daemon — the new config applies
-  only on the daemon's next restart (via the **Restart** button or
-  `POST .../restart`).
+  `telegram_bot_token`, and it never restarts a daemon — the new config
+  applies on the daemon's next cycle, except path changes (`repo`, `backlog`,
+  `blocker_file`, `log_file`) which need a restart (via the **Restart** button
+  or `POST .../restart`).

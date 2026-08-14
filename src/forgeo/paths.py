@@ -37,16 +37,13 @@ _URL_BACKLOG_STEM = "backlog"
 def state_dir_for(config: ForgeoConfig) -> Path:
     """The directory holding Forgeo's runtime files for ``config``.
 
-    An explicit ``state_dir`` always wins. Otherwise a backlog file keeps
-    them beside itself, and a backlog URL falls back to the current directory
-    — in practice ``load_config`` has already resolved ``state_dir`` to the
-    config file's directory, so that fallback only applies to a config built
-    programmatically.
+    An explicit ``state_dir`` always wins; otherwise a backlog file keeps
+    them beside itself. A URL backlog always has one, because ``load_config``
+    resolves ``state_dir`` to the config file's own directory when it is left
+    unset.
     """
     if config.state_dir is not None:
         return Path(config.state_dir)
-    # if config.backlog_is_url:
-    #     return Path.cwd()
     return Path(config.backlog).parent
 
 

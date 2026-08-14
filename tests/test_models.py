@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,9 @@ def test_task_defaults_to_open():
     assert task.acceptance_criteria == []
     assert task.agent_command is None
     assert task.agent_timeout_seconds is None
+    assert task.retries_left is None
+    assert task.retry_count == 0
+    assert task.failed_wait_cycles == 0
 
 
 def test_task_requires_description():
@@ -62,6 +66,62 @@ def test_task_rejects_non_positive_agent_timeout():
         Task(id="TASK-001", title="t", description="Do it.", agent_timeout_seconds=0)
 
 
+def test_task_accepts_retries_left_override():
+    task = Task(id="TASK-001", title="t", description="Do it.", retries_left=3)
+    assert task.retries_left == 3
+
+
+def test_task_rejects_negative_retries_left():
+    with pytest.raises(ValidationError):
+        Task(id="TASK-001", title="t", description="Do it.", retries_left=-1)
+
+
+def test_task_run_at_defaults_to_none():
+    task = Task(id="TASK-001", title="t", description="Do it.")
+    assert task.run_at is None
+
+
+def test_task_accepts_run_at():
+    run_at = datetime(2026, 8, 20, 12, 30, tzinfo=UTC)
+    task = Task(id="TASK-001", title="t", description="Do it.", run_at=run_at)
+    assert task.run_at == run_at
+
+
+def test_task_run_at_accepts_iso_string_and_normalizes_to_utc():
+    task = Task(
+        id="TASK-001",
+        title="t",
+        description="Do it.",
+        run_at="2026-08-14T12:00:00+02:00",
+    )
+    assert task.run_at == datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+    assert task.run_at.tzinfo is UTC
+
+
+def test_task_run_at_naive_assumed_utc():
+    task = Task(
+        id="TASK-001",
+        title="t",
+        description="Do it.",
+        run_at="2026-08-14T12:00:00",
+    )
+    assert task.run_at == datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+
+
+def test_task_run_at_round_trips_through_json():
+    run_at = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+    task = Task(id="TASK-001", title="t", description="Do it.", run_at=run_at)
+    payload = task.model_dump(mode="json")
+    assert payload["run_at"] == "2026-08-14T10:00:00Z"
+    assert Task.model_validate(payload).run_at == run_at
+
+
+def test_task_run_at_rejects_invalid_value():
+    for bad in ("not-a-datetime", 42, [], {}):
+        with pytest.raises(ValidationError):
+            Task(id="TASK-001", title="t", description="Do it.", run_at=bad)
+
+
 def test_config_requires_agent_command():
     with pytest.raises(ValidationError):
         ForgeoConfig(name="x", agent_command="")
@@ -78,6 +138,35 @@ def test_config_defaults():
     assert config.refactor_prompt == DEFAULT_REFACTOR_PROMPT
     assert config.telegram_bot_token is None
     assert config.telegram_chat_id is None
+    assert config.notify_webhook_url is None
+    assert config.notify_webhook_events == ["blocked"]
+    assert config.failed_retry_max == 0
+    assert config.failed_retry_wait_cycles == 1
+
+
+def test_config_rejects_negative_retry_settings():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", failed_retry_max=-1)
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", failed_retry_wait_cycles=0)
+
+
+def test_config_accepts_retry_settings():
+    config = ForgeoConfig(agent_command="x", failed_retry_max=3, failed_retry_wait_cycles=2)
+    assert config.failed_retry_max == 3
+    assert config.failed_retry_wait_cycles == 2
+
+
+def test_config_rejects_unknown_webhook_events():
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", notify_webhook_events=["blocked", "bogus"])
+
+
+def test_config_webhook_events_deduped():
+    config = ForgeoConfig(
+        agent_command="x", notify_webhook_events=["blocked", "blocked", "failed"]
+    )
+    assert config.notify_webhook_events == ["blocked", "failed"]
 
 
 def test_config_rejects_no_changes_exit_code_of_zero():

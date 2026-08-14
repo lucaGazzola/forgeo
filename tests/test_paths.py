@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from forgeo.config import load_config, save_config
 from forgeo.models import ForgeoConfig
 from forgeo.paths import (
@@ -98,11 +96,3 @@ def test_url_backlog_survives_a_config_round_trip(tmp_path: Path) -> None:
     saved = save_config(config_path, url_config())
     assert saved.backlog == URL
     assert load_config(config_path).backlog == URL
-
-
-def test_url_backlog_without_state_dir_falls_back_to_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Only reachable for a config built in code, never one loaded from disk."""
-    monkeypatch.chdir(tmp_path)
-    assert state_dir_for(url_config()) == Path.cwd()

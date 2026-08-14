@@ -45,6 +45,20 @@ class GitManager:
             )
         return proc.stdout.strip()
 
+    def is_git_repo(self) -> bool:
+        """Return whether ``repo_path`` is inside a git working tree.
+
+        ``False`` also when the ``git`` executable is missing or the path is
+        not a directory, so callers never have to probe the environment
+        themselves.
+        """
+        if not self.repo_path.is_dir() or not shutil.which("git"):
+            return False
+        try:
+            return self._run("rev-parse", "--is-inside-work-tree") == "true"
+        except GitError:
+            return False
+
     def ensure_branch(self, branch: str) -> None:
         """Switch to ``branch``, creating it from HEAD when it does not exist."""
         try:

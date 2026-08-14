@@ -1,5 +1,5 @@
 /* Central dashboard script: renders the home instance list and the
-   per-instance page (kanban backlog + logs/runs/blocker/config tabs).
+   per-instance page (kanban backlog + logs/history/blocker/config tabs).
    Plain JS, no frameworks, refreshes every 30 seconds. */
 
 (function () {
@@ -8,7 +8,14 @@
   var REFRESH_MS = 30000;
   var TIMEOUT_MS = 5000;
   var STATUS_ORDER = ["OPEN", "BLOCKED", "COMPLETED", "FAILED"];
-  var TABS = ["backlog", "create", "logs", "runs", "blocker", "config"];
+  var TABS = ["backlog", "create", "logs", "history", "blocker", "config"];
+
+  /* Optional bearer auth: the token lives in localStorage under TOKEN_KEY.
+     When the dashboard requires one (any /api/* call answers 401), the user
+     is sent to the token prompt (LOGIN_PATH) unless a token is already
+     stored — a `?token=...` URL also signs in automatically. */
+  var TOKEN_KEY = "forgeo.web.token";
+  var LOGIN_PATH = "/central/login.html";
 
   /* Board compaction: non-OPEN columns collapse behind a count + expand
      toggle once they exceed COLLAPSE_MIN_TASKS, and every column renders at
@@ -19,6 +26,21 @@
   var COLLAPSED_BY_DEFAULT = { BLOCKED: true, COMPLETED: true, FAILED: true };
   var expandedColumns = {};
   var showAllColumns = {};
+
+  /* Backlog search + status filter: the search box matches id/title/
+     description substrings and the status select narrows which columns are
+     shown. Both live in the URL as ?q=... and ?status=... so a view survives
+     reloads and can be shared. While a filter is active every match is shown
+     (no column compaction), so searching a large backlog never hides results
+     behind "show more". */
+  var filterQuery = "";
+  var filterStatus = "all";
+
+  /* Run history pagination: one page of recent runs at a time, newest first.
+     runsPage is the current page index (0 = the newest page) and survives the
+     30s auto-refresh, like the board's expanded-column state. */
+  var RUNS_PAGE_SIZE = 25;
+  var runsPage = 0;
 
   var page = document.body.dataset.page || "home";
   var match = page === "instance" ? location.pathname.match(/^\/instances\/([^/]+)\/?/) : null;
@@ -43,17 +65,18 @@
     if (node) node.textContent = text;
   }
 
-  function formatTime(iso) {
+  function formatTime(iso, short) {
     if (!iso) return "—";
     var d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      year: "numeric",
+    var opts = {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-    });
+    };
+    if (!short) opts.year = "numeric";
+    return d.toLocaleString(undefined, opts);
   }
 
   function formatInterval(minutes) {
@@ -62,19 +85,83 @@
     return minutes + " mins";
   }
 
-  function timeEl(label, iso) {
+  /* Render a UTC ISO timestamp into a <input type="datetime-local"> value
+     (the browser's local time, no seconds). Empty string for null/invalid. */
+  function toLocalInputValue(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var pad = function (n) {
+      return (n < 10 ? "0" : "") + n;
+    };
+    return (
+      d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      "T" + pad(d.getHours()) + ":" + pad(d.getMinutes())
+    );
+  }
+
+  function timeEl(label, iso, short) {
     var span = el("span", null, label + " ");
-    var time = el("time", null, formatTime(iso));
+    var time = el("time", null, formatTime(iso, short));
     time.dateTime = iso || "";
     span.appendChild(time);
     return span;
   }
 
+  function getStoredToken() {
+    try {
+      return localStorage.getItem(TOKEN_KEY) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function storeToken(token) {
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch (e) {}
+  }
+
+  function clearStoredToken() {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch (e) {}
+  }
+
+  function authHeaders(extra) {
+    var headers = extra || {};
+    var token = getStoredToken();
+    if (token) headers.Authorization = "Bearer " + token;
+    return headers;
+  }
+
+  function goToLogin(returnUrl) {
+    if (location.pathname.indexOf(LOGIN_PATH) === 0) return;
+    var next = returnUrl ? encodeURIComponent(returnUrl) : "";
+    window.location.href = LOGIN_PATH + "?next=" + next;
+  }
+
+  /* fetch() that always attaches the stored bearer token (when present) and
+     sends 401 responses to the token prompt — the login flow is the only
+     static page that must work without a token. */
+  function apiFetch(url, options) {
+    options = options || {};
+    options.headers = authHeaders(options.headers || {});
+    return fetch(url, options).then(function (resp) {
+      if (resp.status === 401) {
+        clearStoredToken();
+        goToLogin(url);
+        throw new Error("unauthorized");
+      }
+      return resp;
+    });
+  }
+
   function fetchJSON(url) {
     var controller = typeof AbortController === "function" ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, TIMEOUT_MS) : null;
-    var opts = controller ? { signal: controller.signal } : undefined;
-    return fetch(url, opts)
+    var opts = controller ? { signal: controller.signal } : {};
+    return apiFetch(url, opts)
       .then(function (resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
@@ -179,7 +266,7 @@
   /* ------------------------------------------------------------------ */
 
   function buildColumns() {
-    var board = document.getElementById("tab-backlog");
+    var board = document.getElementById("backlog-board");
     if (!board) return;
     STATUS_ORDER.forEach(function (status) {
       var col = document.createElement("section");
@@ -216,14 +303,20 @@
     var top = el("div", "task__top");
     top.appendChild(el("span", "task__id", task.id));
     top.appendChild(el("span", "badge badge--" + status, status));
+    if (status === "FAILED" && task.retry_count) {
+      top.appendChild(el("span", "badge badge--retry", "retried " + task.retry_count + "x"));
+    }
     card.appendChild(top);
     card.appendChild(el("h3", "task__title", task.title));
     if (task.description) {
       card.appendChild(el("p", "task__desc", task.description));
     }
     var times = el("div", "task__times");
-    times.appendChild(timeEl("created", task.created_at));
-    times.appendChild(timeEl("updated", task.updated_at));
+    if (task.run_at) {
+      times.appendChild(timeEl("scheduled", task.run_at, true));
+    }
+    times.appendChild(timeEl("created", task.created_at, true));
+    times.appendChild(timeEl("updated", task.updated_at, true));
     card.appendChild(times);
     return card;
   }
@@ -287,21 +380,23 @@
       return;
     }
 
-    if (isColumnCollapsed(status, group.length)) {
+    var filterActive = isFilterActive();
+
+    if (!filterActive && isColumnCollapsed(status, group.length)) {
       list.appendChild(expandColumnButton(status, group.length, list, group));
       return;
     }
 
     var visible = group;
     var older = [];
-    if (group.length > MAX_VISIBLE_PER_COLUMN && !showAllColumns[status]) {
+    if (!filterActive && group.length > MAX_VISIBLE_PER_COLUMN && !showAllColumns[status]) {
       older = group.slice(0, group.length - MAX_VISIBLE_PER_COLUMN);
       visible = group.slice(older.length);
     }
 
     if (older.length > 0) {
       list.appendChild(showMoreButton(status, older, list, group));
-    } else if (COLLAPSED_BY_DEFAULT[status] && group.length > COLLAPSE_MIN_TASKS) {
+    } else if (!filterActive && COLLAPSED_BY_DEFAULT[status] && group.length > COLLAPSE_MIN_TASKS) {
       list.appendChild(collapseColumnButton(status, list, group));
     }
 
@@ -310,28 +405,104 @@
     });
   }
 
+  function isFilterActive() {
+    return filterQuery.trim() !== "" || filterStatus !== "all";
+  }
+
+  function filterTasks(tasks) {
+    var q = filterQuery.trim().toLowerCase();
+    return tasks.filter(function (task) {
+      var status = (task.status || "OPEN").toUpperCase();
+      if (filterStatus !== "all" && status !== filterStatus) return false;
+      if (!q) return true;
+      var haystack = (
+        (task.id || "") + " " +
+        (task.title || "") + " " +
+        (task.description || "")
+      ).toLowerCase();
+      return haystack.indexOf(q) !== -1;
+    });
+  }
+
   function renderTasks(tasks) {
-    var board = document.getElementById("tab-backlog");
+    var board = document.getElementById("backlog-board");
     var empty = document.getElementById("empty-state");
+    var noMatches = document.getElementById("no-matches-state");
     if (!board) return;
-    var hasAny = false;
+    allTasks = tasks || [];
+    var filtered = filterTasks(allTasks);
+    var filterActive = isFilterActive();
+
+    if (empty) empty.hidden = allTasks.length > 0;
+    if (noMatches) {
+      noMatches.hidden = !(allTasks.length > 0 && filterActive && filtered.length === 0);
+    }
+    var countNode = document.getElementById("backlog-count");
+    if (countNode) {
+      var showing = filterActive && allTasks.length > 0;
+      countNode.hidden = !showing;
+      if (showing) {
+        countNode.textContent = filtered.length + " of " + allTasks.length + " tasks";
+      }
+    }
 
     STATUS_ORDER.forEach(function (status) {
       var col = board.querySelector('.status-col[data-status="' + status + '"]');
       if (!col) return;
       var list = col.querySelector(".status-col__list");
       var count = col.querySelector(".status-col__count");
-      var group = tasks.filter(function (t) {
+      var group = filtered.filter(function (t) {
         return (t.status || "OPEN").toUpperCase() === status;
       });
+      col.hidden = filterStatus !== "all" && status !== filterStatus;
       count.textContent = String(group.length);
-      if (group.length > 0) hasAny = true;
       renderColumn(list, status, group);
     });
 
-    if (empty) empty.hidden = hasAny || tasks.length > 0;
+    syncModal(allTasks);
+  }
 
-    syncModal(tasks);
+  /* Backlog filter wiring: read ?q= and ?status= from the URL on load and
+     push changes back into it so filters survive reloads and are shareable. */
+  function readFilters() {
+    var params = new URLSearchParams(location.search);
+    filterQuery = params.get("q") || "";
+    var status = params.get("status") || "all";
+    filterStatus = STATUS_ORDER.indexOf(status) !== -1 ? status : "all";
+    var search = document.getElementById("backlog-search");
+    if (search) search.value = filterQuery;
+    var statusSelect = document.getElementById("backlog-status");
+    if (statusSelect) statusSelect.value = filterStatus;
+  }
+
+  function syncFilterUrl() {
+    var params = new URLSearchParams(location.search);
+    if (filterQuery) params.set("q", filterQuery);
+    else params.delete("q");
+    if (filterStatus !== "all") params.set("status", filterStatus);
+    else params.delete("status");
+    var search = params.toString();
+    var url = location.pathname + (search ? "?" + search : "") + location.hash;
+    history.replaceState(null, "", url);
+  }
+
+  function wireBacklogFilters() {
+    var search = document.getElementById("backlog-search");
+    if (search) {
+      search.addEventListener("input", function () {
+        filterQuery = search.value;
+        syncFilterUrl();
+        renderTasks(allTasks);
+      });
+    }
+    var statusSelect = document.getElementById("backlog-status");
+    if (statusSelect) {
+      statusSelect.addEventListener("change", function () {
+        filterStatus = statusSelect.value;
+        syncFilterUrl();
+        renderTasks(allTasks);
+      });
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -341,6 +512,7 @@
   var modalTaskId = null;
   var modalTask = null;
   var modalLastFocus = null;
+  var allTasks = [];
 
   function listItems(values) {
     var ul = el("ul", "modal__list");
@@ -352,6 +524,28 @@
       });
     }
     return ul;
+  }
+
+  function taskById(id) {
+    for (var i = 0; i < allTasks.length; i++) {
+      if (allTasks[i].id === id) return allTasks[i];
+    }
+    return null;
+  }
+
+  function computeUnsatisfied(task) {
+    /* Fallback for task objects that carry no server-computed
+       unsatisfied_dependencies (e.g. a PATCH/POST response): resolve each
+       dependency against the full backlog we already have. */
+    var unmet = [];
+    (task.dependencies || []).forEach(function (depId) {
+      var dep = taskById(depId);
+      var status = dep ? (dep.status || "OPEN").toUpperCase() : "missing";
+      if (status !== "COMPLETED") {
+        unmet.push({ id: depId, status: status });
+      }
+    });
+    return unmet;
   }
 
   function showModalSection(id, show) {
@@ -411,6 +605,24 @@
           ? failLines.join("\n")
           : "The agent errored; no reason was recorded.";
       }
+      var failCount = document.getElementById("task-modal-failed-count");
+      if (failCount) {
+        var bits = [];
+        if (task.retry_count) bits.push("retried " + task.retry_count + "x");
+        if (typeof task.retry_budget === "number" && task.retry_budget > 0) {
+          if (task.retries_remaining > 0) {
+            bits.push(
+              task.retries_remaining + " retr" + (task.retries_remaining === 1 ? "y" : "ies") + " left"
+            );
+          } else {
+            bits.push("retries exhausted — reopen manually to retry");
+          }
+        } else if (task.retries_left === 0) {
+          bits.push("retries disabled for this task");
+        }
+        failCount.textContent = bits.join(" · ");
+        failCount.hidden = bits.length === 0;
+      }
     }
 
     setText("task-modal-description", task.description || "");
@@ -424,6 +636,21 @@
       dependencies.textContent = "";
       dependencies.appendChild(listItems(task.dependencies));
     }
+    var unmet = Array.isArray(task.unsatisfied_dependencies)
+      ? task.unsatisfied_dependencies
+      : computeUnsatisfied(task);
+    var unmetList = document.getElementById("task-modal-unmet-dependencies");
+    if (unmetList) {
+      unmetList.textContent = "";
+      unmetList.appendChild(
+        listItems(
+          unmet.map(function (dep) {
+            return dep.id + " — " + dep.status;
+          })
+        )
+      );
+    }
+    showModalSection("task-modal-unmet-dependencies-section", unmet.length > 0);
     var files = document.getElementById("task-modal-files");
     if (files) {
       files.textContent = "";
@@ -434,6 +661,21 @@
       command.textContent = Array.isArray(task.agent_command)
         ? task.agent_command.join(" ")
         : task.agent_command || "";
+    }
+    var retries = document.getElementById("task-modal-retries");
+    if (retries) {
+      var retryText = null;
+      if (task.retries_left !== null && task.retries_left !== undefined) {
+        var overrideBudget = typeof task.retry_budget === "number" ? task.retry_budget : task.retries_left;
+        retryText = "retries left: " + task.retries_left + " of " + overrideBudget + " (per-task override)";
+      }
+      retries.textContent = retryText || "";
+    }
+    var runAt = document.getElementById("task-modal-run-at");
+    if (runAt) {
+      runAt.textContent = task.run_at
+        ? "scheduled for " + formatTime(task.run_at)
+        : "";
     }
     var created = document.getElementById("task-modal-created");
     if (created) created.textContent = formatTime(task.created_at);
@@ -454,6 +696,11 @@
       task.files_to_modify && task.files_to_modify.length > 0
     );
     showModalSection("task-modal-command-section", Boolean(task.agent_command));
+    showModalSection(
+      "task-modal-retries-section",
+      Boolean(retries && retries.textContent)
+    );
+    showModalSection("task-modal-run-at-section", Boolean(task.run_at));
   }
 
   function splitLines(value) {
@@ -488,6 +735,13 @@
         ? ""
         : String(modalTask.agent_timeout_seconds)
     );
+    setValue(
+      "task-edit-retries",
+      modalTask.retries_left === null || modalTask.retries_left === undefined
+        ? ""
+        : String(modalTask.retries_left)
+    );
+    setValue("task-edit-run-at", toLocalInputValue(modalTask.run_at));
 
     showModalSection("task-modal-view", false);
     showModalSection("task-modal-edit-form", true);
@@ -515,6 +769,8 @@
     };
     var command = value("task-edit-command").trim();
     var timeout = value("task-edit-timeout").trim();
+    var retries = value("task-edit-retries").trim();
+    var runAt = value("task-edit-run-at").trim();
     var updates = {
       title: value("task-edit-title").trim(),
       description: value("task-edit-description").trim(),
@@ -523,6 +779,8 @@
       files_to_modify: splitLines(value("task-edit-files")),
       agent_command: command ? command : null,
       agent_timeout_seconds: timeout === "" ? null : Number(timeout),
+      retries_left: retries === "" ? null : parseInt(retries, 10),
+      run_at: runAt ? new Date(runAt).toISOString() : null,
     };
     return updates;
   }
@@ -548,8 +806,19 @@
       }
       return;
     }
+    var retries = document.getElementById("task-edit-retries");
+    if (retries && retries.value.trim() !== "") {
+      var retriesNum = parseInt(retries.value.trim(), 10);
+      if (isNaN(retriesNum) || retriesNum < 0 || String(retriesNum) !== retries.value.trim()) {
+        if (error) {
+          error.textContent = "retries left must be a non-negative integer";
+          error.hidden = false;
+        }
+        return;
+      }
+    }
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectEditForm()),
@@ -584,7 +853,7 @@
     var error = document.getElementById("task-modal-delete-error");
     if (error) error.hidden = true;
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId), {
       method: "DELETE",
     })
       .then(function (resp) {
@@ -617,7 +886,7 @@
     var reopenBtn = document.getElementById("task-modal-reopen");
     if (reopenBtn) reopenBtn.disabled = true;
 
-    fetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/reopen", {
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/reopen", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
@@ -733,7 +1002,7 @@
     if (!API) return;
     setDaemonBusy(true);
     showDaemonFeedback(action + "…", false);
-    fetch(API + action, { method: "POST" })
+    apiFetch(API + action, { method: "POST" })
       .then(function (resp) {
         return resp.json().then(function (data) {
           if (!resp.ok) {
@@ -777,18 +1046,51 @@
     return "OPEN";
   }
 
-  function renderRuns(runs) {
-    var body = document.getElementById("runs-body");
+  function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined || isNaN(seconds)) return "—";
+    var total = Math.max(0, Math.round(seconds));
+    if (total < 60) return total + "s";
+    var minutes = Math.floor(total / 60);
+    var rest = total % 60;
+    return rest ? minutes + "m " + rest + "s" : minutes + "m";
+  }
+
+  function shortSha(sha) {
+    if (!sha) return "—";
+    return sha.length > 8 ? sha.slice(0, 7) : sha;
+  }
+
+  function historyEmptyState() {
+    var empty = el("div", "empty-state");
+    empty.appendChild(el("p", "empty-title", "No runs yet"));
+    empty.appendChild(
+      el(
+        "p",
+        "empty-sub",
+        "Finished forgeo cycles appear here, newest first. Each cycle writes one record to runs.jsonl."
+      )
+    );
+    return empty;
+  }
+
+  function renderHistory(data) {
+    var body = document.getElementById("history-body");
     if (!body) return;
     body.textContent = "";
-    if (!runs.length) {
-      body.appendChild(el("p", "status-col__empty", "no runs recorded"));
+    var runs = (data && data.runs) || [];
+    var total = data && typeof data.total === "number" ? data.total : runs.length;
+    if (total === 0) {
+      runsPage = 0;
+      body.appendChild(historyEmptyState());
       return;
     }
+    var pages = Math.max(1, Math.ceil(total / RUNS_PAGE_SIZE));
+    if (runsPage > pages - 1) runsPage = pages - 1;
+
     var table = el("table", "run-table");
     var thead = el("thead");
     var headRow = el("tr");
-    ["finished", "kind", "task", "outcome", "exit", "commit", "duration", "reason"].forEach(function (h) {
+    ["time", "kind", "task", "outcome", "duration", "commit", "retry", "reason"].forEach(function (h) {
       headRow.appendChild(el("th", null, h));
     });
     thead.appendChild(headRow);
@@ -799,20 +1101,89 @@
       var row = el("tr");
       row.appendChild(el("td", null, formatTime(run.finished_at)));
       row.appendChild(el("td", null, run.kind || "—"));
-      row.appendChild(el("td", "mono", run.task_id || "—"));
+
+      var task = el("td", "run-task");
+      task.appendChild(el("span", "run-task-id", run.task_id || "—"));
+      if (run.task_title) {
+        task.appendChild(document.createTextNode(" "));
+        task.appendChild(el("span", "run-task-title", run.task_title));
+      }
+      row.appendChild(task);
+
       row.appendChild(el("td", "badge badge--" + outcomeBadge(run.outcome), run.outcome));
-      row.appendChild(
-        el("td", "mono", run.agent_exit_code === null || run.agent_exit_code === undefined ? "—" : String(run.agent_exit_code))
-      );
-      row.appendChild(el("td", "mono", run.commit_sha || "—"));
-      row.appendChild(
-        el("td", "mono", run.duration_seconds === null || run.duration_seconds === undefined ? "—" : run.duration_seconds + "s")
-      );
+      row.appendChild(el("td", "mono", formatDuration(run.duration_seconds)));
+      var commit = el("td", "mono", shortSha(run.commit_sha));
+      if (run.commit_sha) commit.title = run.commit_sha;
+      row.appendChild(commit);
+      var retry = el("td", "mono", run.retry_count ? "retry " + run.retry_count : "—");
+      if (run.retry_count) retry.title = "run was a retry (retry count at the time)";
+      row.appendChild(retry);
       row.appendChild(el("td", run.reason ? "run-reason" : null, run.reason || "—"));
       tbody.appendChild(row);
+
+      if (run.output_logs && run.output_logs.length > 0) {
+        var outputRow = el("tr", "run-output-row");
+        var outputCell = el("td", null);
+        outputCell.colSpan = 8;
+        var details = el("details", "run-output");
+        var summary = el("summary", "run-output__summary");
+        summary.appendChild(el("span", null, "agent output"));
+        summary.appendChild(
+          el("span", "run-output__count", run.output_logs.length + " lines")
+        );
+        details.appendChild(summary);
+        var pre = el("pre", "run-output__pre");
+        pre.textContent = run.output_logs.join("\n");
+        details.appendChild(pre);
+        outputCell.appendChild(details);
+        outputRow.appendChild(outputCell);
+        tbody.appendChild(outputRow);
+      }
     });
     table.appendChild(tbody);
     body.appendChild(table);
+
+    var pager = el("div", "run-pager");
+    var prevBtn = el("button", "run-pager__btn", "← Newer");
+    prevBtn.setAttribute("type", "button");
+    prevBtn.disabled = runsPage === 0;
+    prevBtn.addEventListener("click", function () {
+      if (runsPage > 0) {
+        runsPage -= 1;
+        loadRuns();
+      }
+    });
+    var info = el(
+      "span",
+      "run-pager__info",
+      "page " + (runsPage + 1) + " of " + pages + " · " + total + (total === 1 ? " run" : " runs")
+    );
+    var nextBtn = el("button", "run-pager__btn", "Older →");
+    nextBtn.setAttribute("type", "button");
+    nextBtn.disabled = runsPage >= pages - 1;
+    nextBtn.addEventListener("click", function () {
+      if (runsPage < pages - 1) {
+        runsPage += 1;
+        loadRuns();
+      }
+    });
+    pager.appendChild(prevBtn);
+    pager.appendChild(info);
+    pager.appendChild(nextBtn);
+    body.appendChild(pager);
+  }
+
+  function loadRuns() {
+    if (!API) return;
+    var url = API + "runs?limit=" + RUNS_PAGE_SIZE + "&offset=" + runsPage * RUNS_PAGE_SIZE;
+    fetchJSON(url)
+      .then(function (data) {
+        renderHistory(data);
+        setDown(false);
+      })
+      .catch(function () {
+        setDown(true);
+      });
   }
 
   function renderTextPanel(id, text, fallback) {
@@ -838,6 +1209,9 @@
     { key: "backlog", label: "Backlog file or URL", type: "text", hint: "Path of the JSON backlog file (created on first use), or an http(s) endpoint serving the same document (GET to read, POST to write)." },
     { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
     { key: "log_file", label: "Log file", type: "text" },
+    { key: "run_output_lines", label: "Run output lines", type: "number", min: 0, step: 1, hint: "How many agent output lines each run record keeps in runs.jsonl (bounded tail, shown in the History tab). 0 = don't persist agent output." },
+    { key: "failed_retry_max", label: "Failed retry max", type: "number", min: 0, step: 1, hint: "How many times a FAILED task is retried automatically. 0 = disabled (a FAILED task stays FAILED until a human reopens it). A task can override this with its own retries_left." },
+    { key: "failed_retry_wait_cycles", label: "Failed retry wait (cycles)", type: "number", min: 1, step: 1, hint: "How many cycles a FAILED task waits (backoff) before it is retried." },
     { key: "agent_sandbox", label: "Agent sandbox", type: "select", options: ["none", "docker"], hint: "none = run directly on the host; docker = run inside a container." },
     { key: "agent_sandbox_image", label: "Sandbox image", type: "text", optional: true, hint: "Container image used when agent_sandbox is docker. Required in that mode." },
     { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },
@@ -931,7 +1305,7 @@
     setConfigLoading(false);
     var form = document.getElementById("config-form");
     if (form) form.hidden = true;
-    var hint = document.getElementById("config-restart-hint");
+    var hint = document.getElementById("config-reload-hint");
     if (hint) hint.hidden = true;
     var error = document.getElementById("config-error");
     if (error) {
@@ -946,7 +1320,7 @@
     configDirty = false;
     var error = document.getElementById("config-error");
     if (error) error.hidden = true;
-    var hint = document.getElementById("config-restart-hint");
+    var hint = document.getElementById("config-reload-hint");
     if (hint) hint.hidden = true;
     var form = document.getElementById("config-form");
     var fields = document.getElementById("config-fields");
@@ -1034,23 +1408,25 @@
     return payload;
   }
 
-  function renderRestartHint(message, status) {
-    var hint = document.getElementById("config-restart-hint");
+  function renderReloadHint(message, status) {
+    var hint = document.getElementById("config-reload-hint");
     if (!hint) return;
     hint.textContent = "";
     hint.appendChild(el("strong", null, "Config saved"));
-    var notice = String(message || "The daemon picks up changes on its next restart.").replace(/^Config saved\.?\s*/i, "");
+    var notice = String(message || "The daemon picks up changes on its next cycle.").replace(/^Config saved\.?\s*/i, "");
     hint.appendChild(document.createTextNode(" — " + notice + " "));
     if (status) {
       var state = status.daemon_running ? "running" : "stopped";
       hint.appendChild(
         document.createTextNode(
-          "The daemon is currently " + state + " and still uses the previous config until it is restarted (forgeo restart)."
+          state === "running"
+            ? "The daemon is currently running and picks up the change on its next cycle."
+            : "The daemon is currently stopped; the change applies on its next start."
         )
       );
     } else {
       hint.appendChild(
-        document.createTextNode("The running daemon still uses the previous config until it is restarted (forgeo restart).")
+        document.createTextNode("A running daemon picks up the change on its next cycle.")
       );
     }
     hint.hidden = false;
@@ -1069,7 +1445,7 @@
       status.dataset.state = "saving";
     }
 
-    fetch(API + "config", {
+    apiFetch(API + "config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectConfig()),
@@ -1097,7 +1473,7 @@
             return null;
           })
           .then(function (statusData) {
-            renderRestartHint(data.message, statusData);
+            renderReloadHint(data.message, statusData);
           });
       })
       .catch(function (err) {
@@ -1145,15 +1521,8 @@
         .catch(function () {
           setDown(true);
         });
-    } else if (tab === "runs") {
-      fetchJSON(API + "runs?limit=50")
-        .then(function (data) {
-          renderRuns(data);
-          setDown(false);
-        })
-        .catch(function () {
-          setDown(true);
-        });
+    } else if (tab === "history") {
+      loadRuns();
     } else if (tab === "blocker") {
       fetchJSON(API + "blocker")
         .then(function (data) {
@@ -1267,8 +1636,10 @@
       }
       var commandInput = document.getElementById("task-command");
       var command = commandInput ? commandInput.value.trim() : "";
+      var runAtInput = document.getElementById("task-run-at");
+      var runAt = runAtInput ? runAtInput.value.trim() : "";
 
-      fetch(API + "tasks", {
+      apiFetch(API + "tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1276,6 +1647,7 @@
           description: description,
           acceptance_criteria: criteria.slice(),
           agent_command: command ? command : null,
+          run_at: runAt ? new Date(runAt).toISOString() : null,
         }),
       })
         .then(function (resp) {
@@ -1306,6 +1678,8 @@
 
   function wire() {
     if (page === "instance") {
+      readFilters();
+      wireBacklogFilters();
       wireNewTask();
       wireDaemonActions();
       var configForm = document.getElementById("config-form");
@@ -1354,6 +1728,20 @@
   /* ------------------------------------------------------------------ */
   /* Boot                                                                */
   /* ------------------------------------------------------------------ */
+
+  /* Token-URL form: a `?token=...` query signs the browser in and is
+     stripped from the URL so it never lingers in the address bar. */
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var urlToken = params.get("token");
+    if (urlToken) {
+      storeToken(urlToken);
+      params.delete("token");
+      var search = params.toString();
+      var cleanUrl = location.pathname + (search ? "?" + search : "") + location.hash;
+      history.replaceState(null, "", cleanUrl);
+    }
+  })();
 
   function refresh() {
     if (page === "home") {

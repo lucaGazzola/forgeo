@@ -396,6 +396,11 @@ body {
   color: var(--failed);
   background: rgba(224, 108, 117, 0.1);
 }
+.badge--retry {
+  color: var(--open);
+  background: rgba(143, 183, 255, 0.14);
+  border: 1px solid rgba(143, 183, 255, 0.4);
+}
 
 .task__title {
   margin: 0;
@@ -417,7 +422,8 @@ body {
 
 .task__times {
   display: flex;
-  gap: 14px;
+  flex-direction: column;
+  gap: 2px;
   margin-top: 2px;
   font-size: 11px;
   color: var(--text-faint);

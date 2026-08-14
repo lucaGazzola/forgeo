@@ -1,6 +1,13 @@
 # Forgeo configuration.
 # Everything is one flat file; relative paths resolve against this file's directory.
-# Copy to your forgeo directory and run `forgeo start --config forgeo.yaml`.
+# Copy to your forgeo directory, run `forgeo validate --config forgeo.yaml` to
+# check it is ready, then `forgeo start --config forgeo.yaml`.
+#
+# A running daemon watches this file and re-reads it on the next cycle when it
+# changes (or on SIGHUP); an invalid change is logged and the last valid config
+# stays in use. Changing the `repo`, `backlog`, `blocker_file` or `log_file`
+# paths still needs `forgeo restart` (the daemon pins its lock files to the
+# paths it started with).
 
 name: my-forgeo                # Display name used in logs and commit messages.
 repo: /path/to/repository       # The git repository the forgeo works on.
@@ -36,6 +43,24 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #     timeout_seconds: 10     # Optional, default 10.
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.
+# run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest
+                                # lines are trimmed atomically on append. Set 0 to
+                                # disable retention (file grows forever).
+# run_output_lines: 200         # How many agent output lines each run record keeps
+                                # in runs.jsonl (the bounded tail of the agent's
+                                # stdout/stderr, shown in the web console History
+                                # tab). Set 0 to stop persisting agent output.
+
+# Optional automatic retries for FAILED tasks. Transient failures (a network
+# blip, a flaky test, a version hiccup) can succeed on a retry without a human.
+# failed_retry_max: 0           # How many times a FAILED task is retried
+                                # automatically. 0 (default) = a FAILED task
+                                # stays FAILED until a human reopens it.
+                                # A task can override this budget per-task with
+                                # `retries_left` in the backlog.
+# failed_retry_wait_cycles: 1   # How many cycles a retry-eligible FAILED task
+                                # waits (backoff) before it is moved back to
+                                # OPEN. Blocked tasks are never auto-retried.
 
 # The coding agent: any shell command. Read $FORGEO_TASK for the task, work in the
 # repo directory, and exit with:
@@ -91,3 +116,14 @@ log_file: forgeo.log
 # reason. Uses the stdlib only; a failed notification never affects the run.
 # telegram_bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
 # telegram_chat_id: "-1001234567890"
+
+# Optional vendor-neutral webhook notifications (Slack, Discord, ntfy, ...):
+# a JSON POST per run outcome with the forgeo name, outcome, task id/title,
+# and reason. The URL alone enables blocked-run notifications; add outcomes
+# to notify_webhook_events to report them too. A failed/unreachable webhook
+# is logged as a warning and never affects the run.
+# notify_webhook_url: "https://hooks.example.com/forgeo"
+# notify_webhook_events:
+#   - blocked        # default: blocked only
+#   - completed
+#   - failed

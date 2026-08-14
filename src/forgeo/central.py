@@ -14,15 +14,15 @@ Routes:
 * ``GET /`` — home page listing every registered instance: name, repo,
   daemon state, last outcome, next run, and backlog counts.
 * ``GET /instances/<name>/`` — per-instance page: that instance's kanban
-  backlog (with a form to add tasks) plus tabs for logs, runs, blocker, and
+  backlog (with a form to add tasks) plus tabs for logs, history, blocker, and
   config.
 * ``GET /api/instances`` — JSON summary of every registered instance.
 * ``GET /api/instances/<name>/tasks``, ``/tasks/<id>``, ``/status``,
-  ``/logs?lines=N``, ``/runs?limit=N``, ``/blocker``, ``/config`` — the
-  per-instance API.
+  ``/logs?lines=N``, ``/runs?limit=N&offset=M``, ``/blocker``, ``/config`` —
+  the per-instance API.
 * ``PUT /api/instances/<name>/config`` — validate and persist an instance's
-  ``forgeo.yaml`` from a config payload (applies on the daemon's next
-  restart; ``name`` and ``telegram_bot_token`` are not editable).
+  ``forgeo.yaml`` from a config payload (applies on the daemon's next cycle;
+  ``name`` and ``telegram_bot_token`` are not editable).
 * ``POST /api/instances/<name>/tasks`` — add a new task to that instance's
   backlog.
 * ``POST /api/instances/<name>/tasks/<id>/reopen`` — reopen a ``BLOCKED``
@@ -40,22 +40,33 @@ Routes:
 An unknown instance name returns ``404``; a registered instance with missing
 data files renders with empty data and ``daemon_running=false`` rather than
 erroring.
+
+Authentication: ``forgeo web`` takes an optional bearer token (the
+``--token`` CLI flag and/or the ``~/.config/forgeo/web.toml`` token file,
+auto-generated and printed once when it is unset). When configured, every
+``/api/*`` route requires ``Authorization: Bearer <token>`` and answers
+``401`` otherwise; static pages and the token-prompt login flow stay
+reachable without a token. With no token configured the dashboard behaves
+exactly as before (no auth).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
 import threading
 import time
+import tomllib
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -66,7 +77,11 @@ from rich.console import Console
 from rich.panel import Panel
 
 from forgeo import daemon_control
-from forgeo.backlog import backlog_status_counts, open_backlog
+from forgeo.backlog import (
+    backlog_status_counts,
+    open_backlog,
+    unsatisfied_dependencies,
+)
 from forgeo.config import save_config
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.instances import (
@@ -81,8 +96,10 @@ from forgeo.runs import RunRecorder
 from forgeo.web_common import (
     DEFAULT_LOG_LINES,
     DEFAULT_RUN_LIMIT,
+    DEFAULT_RUN_OFFSET,
     MAX_LOG_LINES,
     MAX_RUN_LIMIT,
+    MAX_RUN_OFFSET,
     clamp_query_int,
     guess_content_type,
     iso,
@@ -120,6 +137,76 @@ def forgeo_config_dir() -> Path:
 def web_lock_path() -> Path:
     """The host-global dashboard lock file (one per user, not per-repo)."""
     return forgeo_config_dir() / "web.lock"
+
+
+def web_token_path() -> Path:
+    """The dashboard auth token file: ``$FORGEO_CONFIG_DIR/web.toml``."""
+    return forgeo_config_dir() / "web.toml"
+
+
+AUTOGENERATE_TOKEN = object()
+"""Sentinel for ``forgeo web --token`` given without a value: generate one."""
+
+
+def load_web_token(path: Path | None = None) -> str | None:
+    """The bearer token configured in ``web.toml``, or ``None`` when absent.
+
+    A missing, unreadable, or malformed file, or one without a usable
+    ``token`` value, reads as ``None`` (auth stays off until a token exists).
+    """
+    path = web_token_path() if path is None else path
+    if not path.is_file():
+        return None
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    token = data.get("token")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def save_web_token(token: str, path: Path | None = None) -> None:
+    """Persist ``token`` to the dashboard token file (``0600``).
+
+    A failed write is logged and skipped — the token still takes effect for
+    this process — never fatal to ``forgeo web``.
+    """
+    path = web_token_path() if path is None else path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'token = "{token}"\n', encoding="utf-8")
+        path.chmod(0o600)
+    except OSError:
+        logger.warning("Could not persist web token to %s.", path)
+
+
+def resolve_web_token(cli_token: Any) -> tuple[str | None, bool]:
+    """Resolve the effective dashboard token; ``(token, generated_now)``.
+
+    * A non-blank ``cli_token`` string (``forgeo web --token TOKEN``) is
+      persisted to ``web.toml`` and used.
+    * Otherwise a token already saved in ``web.toml`` is reused.
+    * Otherwise, when ``cli_token`` is the :data:`AUTOGENERATE_TOKEN`
+      sentinel (``forgeo web --token`` with no value) or ``web.toml`` exists
+      but holds no token, a fresh token is generated, persisted, and reported
+      as ``generated_now`` so the caller can print it exactly once.
+    * No flag and no token file yields ``(None, False)``: auth stays off —
+      the historical one-command local behavior.
+    """
+    path = web_token_path()
+    if isinstance(cli_token, str) and cli_token.strip():
+        save_web_token(cli_token.strip(), path)
+        return cli_token.strip(), False
+    existing = load_web_token(path)
+    if existing is not None:
+        return existing, False
+    if cli_token is AUTOGENERATE_TOKEN or path.exists():
+        generated = secrets.token_urlsafe(24)
+        save_web_token(generated, path)
+        return generated, True
+    return None, False
 
 
 class WebLockError(Exception):
@@ -318,6 +405,31 @@ def _read_tasks_or_error(config: ForgeoConfig | None) -> tuple[list[Task], str |
         return [], str(exc)
 
 
+def _task_payload(
+    task: Task,
+    tasks: list[Task],
+    config: ForgeoConfig | None = None,
+) -> dict[str, Any]:
+    """Serialize a task for the API, annotating its unsatisfied dependencies.
+
+    The extra ``unsatisfied_dependencies`` field lists every dependency id
+    that is not ``COMPLETED`` yet (with its current status, or ``missing``
+    when it does not exist), so the web console can explain why a task is
+    waiting before Forgeo may pick it. When the instance's config is
+    available, the task also carries its effective retry budget
+    (``retry_budget``, the per-task ``retries_left`` override falling back to
+    the config's ``failed_retry_max``) and ``retries_remaining`` so the
+    console can show whether a FAILED task will be retried automatically.
+    """
+    payload = task.model_dump(mode="json")
+    payload["unsatisfied_dependencies"] = unsatisfied_dependencies(tasks, task)
+    if config is not None:
+        budget = task.retries_left if task.retries_left is not None else config.failed_retry_max
+        payload["retry_budget"] = budget
+        payload["retries_remaining"] = max(0, budget - task.retry_count)
+    return payload
+
+
 def _blocker_content(config: ForgeoConfig | None) -> str | None:
     """The ``BLOCKER.md`` contents, or ``None`` when absent or unreadable."""
     if config is None:
@@ -424,10 +536,19 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
     }
 
 
-def make_handler() -> type[BaseHTTPRequestHandler]:
-    """Build the request-handler class for the central dashboard."""
+def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """Build the request-handler class for the central dashboard.
+
+    ``token`` enables optional bearer auth: when set, every ``/api/*`` route
+    requires an ``Authorization: Bearer <token>`` header and answers ``401``
+    otherwise. Static pages (including the token-prompt login flow) stay
+    reachable without a token, so a shared host never leaks backlog contents
+    to anonymous clients.
+    """
 
     class CentralRequestHandler(BaseHTTPRequestHandler):
+        _token = token
+
         def log_message(self, format: str, *args: Any) -> None:
             logger.debug("central web %s - %s", self.address_string(), format % args)
 
@@ -439,6 +560,31 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_unauthorized(self) -> None:
+            body = json_bytes({"error": "unauthorized"})
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("WWW-Authenticate", 'Bearer realm="forgeo"')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _maybe_authorize(self, path: str) -> bool:
+            """True when the request may proceed; a 401 is sent otherwise.
+
+            With bearer auth configured, every ``/api/*`` route requires an
+            ``Authorization: Bearer <token>`` header, compared in constant
+            time. Static pages and assets never need a token.
+            """
+            if self._token is None or not path.startswith("/api/"):
+                return True
+            expected = "Bearer " + self._token
+            if hmac.compare_digest(self.headers.get("Authorization", ""), expected):
+                return True
+            self._send_unauthorized()
+            return False
 
         def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -466,6 +612,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(500, {"error": "internal server error"})
 
         def do_GET(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_get)
 
         def _do_get(self) -> None:
@@ -492,6 +640,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_post)
 
         def _do_post(self) -> None:
@@ -504,6 +654,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_PATCH(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_patch)
 
         def _do_patch(self) -> None:
@@ -516,6 +668,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_DELETE(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_delete)
 
         def _do_delete(self) -> None:
@@ -528,6 +682,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             self._send_json(404, {"error": "not found"})
 
         def do_PUT(self) -> None:
+            if not self._maybe_authorize(self.path):
+                return
             self._run_safely(self._do_put)
 
         def _do_put(self) -> None:
@@ -792,16 +948,38 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                     400, {"error": "agent_command must be a non-blank string or null"}
                 )
                 return
+            run_at = payload.get("run_at")
+            run_at_dt: datetime | None = None
+            if run_at is not None:
+                if not isinstance(run_at, str):
+                    self._send_json(
+                        400,
+                        {"error": "run_at must be an ISO-8601 datetime string or null"},
+                    )
+                    return
+                try:
+                    run_at_dt = datetime.fromisoformat(run_at)
+                except ValueError:
+                    self._send_json(
+                        400,
+                        {"error": "run_at must be an ISO-8601 datetime string or null"},
+                    )
+                    return
 
             backlog = open_backlog(config)
             existing = asyncio.run(backlog.list_tasks())
-            task = Task(
-                id=web_task_id_for(existing),
-                title=title.strip(),
-                description=description.strip(),
-                acceptance_criteria=acceptance_criteria,
-                agent_command=agent_command.strip() if agent_command else None,
-            )
+            try:
+                task = Task(
+                    id=web_task_id_for(existing),
+                    title=title.strip(),
+                    description=description.strip(),
+                    acceptance_criteria=acceptance_criteria,
+                    agent_command=agent_command.strip() if agent_command else None,
+                    run_at=run_at_dt,
+                )
+            except ValidationError as exc:
+                self._send_json(400, {"error": f"invalid task field(s): {exc}"})
+                return
             try:
                 created = asyncio.run(backlog.create_task(task))
             except ValueError:
@@ -908,8 +1086,8 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
             returns. The config is validated against :class:`ForgeoConfig`
             and written to the instance's ``forgeo.yaml`` atomically; the
             response carries the reloaded config and an explicit note that
-            the daemon picks the changes up only on its next restart (a save
-            never restarts the daemon).
+            the daemon picks the change up on its next cycle without a
+            restart.
 
             ``name`` is owned by the registry and forced to the registered
             instance name (a different value is rejected); ``telegram_bot_token``
@@ -969,9 +1147,9 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 200,
                 {
                     "saved": True,
-                    "restart_required": True,
+                    "restart_required": False,
                     "message": (
-                        "Config saved. The daemon picks up changes on its next restart."
+                        "Config saved. The daemon picks up changes on its next cycle."
                     ),
                     "config": saved.model_dump(mode="json"),
                 },
@@ -1003,12 +1181,15 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 if tasks is None:
                     return
                 if len(parts) == 2:
-                    self._send_json(200, [t.model_dump(mode="json") for t in tasks])
+                    self._send_json(
+                        200,
+                        [_task_payload(t, tasks, info.config) for t in tasks],
+                    )
                     return
                 task_id = unquote(parts[2])
                 for task in tasks:
                     if task.id == task_id:
-                        self._send_json(200, task.model_dump(mode="json"))
+                        self._send_json(200, _task_payload(task, tasks, info.config))
                         return
                 self._send_json(404, {"error": "not found"})
                 return
@@ -1028,12 +1209,25 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
                 self._send_json(200, {"lines": lines})
                 return
             if endpoint == "runs":
-                n = clamp_query_int(query, "limit", DEFAULT_RUN_LIMIT, MAX_RUN_LIMIT)
+                limit = clamp_query_int(query, "limit", DEFAULT_RUN_LIMIT, MAX_RUN_LIMIT)
+                offset = clamp_query_int(query, "offset", DEFAULT_RUN_OFFSET, MAX_RUN_OFFSET)
                 if info.config is None:
-                    self._send_json(200, [])
+                    self._send_json(
+                        200,
+                        {"runs": [], "total": 0, "offset": offset, "limit": limit},
+                    )
                     return
-                records = RunRecorder(runs_path(info.config)).read(limit=n)
-                self._send_json(200, [r.model_dump(mode="json") for r in records])
+                recorder = RunRecorder(runs_path(info.config))
+                records = recorder.read(limit=limit, offset=offset)
+                self._send_json(
+                    200,
+                    {
+                        "runs": [r.model_dump(mode="json") for r in records],
+                        "total": recorder.total(),
+                        "offset": offset,
+                        "limit": limit,
+                    },
+                )
                 return
             if endpoint == "blocker":
                 self._send_json(200, {"content": _blocker_content(info.config)})
@@ -1052,9 +1246,15 @@ def make_handler() -> type[BaseHTTPRequestHandler]:
 class CentralWebServer:
     """Threading HTTP server lifecycle around the central dashboard."""
 
-    def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        token: str | None = None,
+    ) -> None:
         self.host = host
         self._port = port
+        self._token = token
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -1067,7 +1267,7 @@ class CentralWebServer:
 
     def start(self) -> bool:
         """Bind and start serving in a background thread. False on bind failure."""
-        handler = make_handler()
+        handler = make_handler(self._token)
         try:
             httpd = ThreadingHTTPServer((self.host, self._port), handler)
         except OSError as exc:
@@ -1113,15 +1313,24 @@ def _instance_count() -> int:
     return len(list_instances())
 
 
-async def _serve_forever(server: CentralWebServer, host: str) -> None:
+async def _serve_forever(
+    server: CentralWebServer, host: str, stop_requested: threading.Event
+) -> None:
     """Run the foreground server until SIGINT/SIGTERM, then stop it."""
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
+
+    def _on_signal() -> None:
+        stop_requested.set()
+        stop_event.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop_event.set)
+            loop.add_signal_handler(sig, _on_signal)
         except NotImplementedError:
             pass
+    if stop_requested.is_set():
+        stop_event.set()
     Console(stderr=True).print(
         Panel.fit(
             f"[bold]Forgeo central dashboard[/bold]\n"
@@ -1225,29 +1434,55 @@ def start_web_detached(
     )
 
 
-def run_foreground(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
+def run_foreground(
+    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, token: Any = None
+) -> int:
     """Start ``forgeo web`` in the foreground; returns the process exit code.
 
     Takes the host-global dashboard lock (refusing while another dashboard
     runs), binds the dashboard, prints the listening banner to stderr, and
     blocks until the user interrupts it with Ctrl-C or a SIGTERM arrives.
     The lock is always released on the way out — even after a failed bind.
+
+    ``token`` is the ``--token`` CLI value (or the
+    :data:`AUTOGENERATE_TOKEN` sentinel); it resolves to the effective bearer
+    token via :func:`resolve_web_token`. When a fresh token was generated it
+    is printed to stderr exactly once, with a note about where it lives.
     """
+    # Catch SIGINT/SIGTERM before the asyncio loop is up, so a stop signal
+    # arriving in the startup window still leads to a clean shutdown with the
+    # lock released — never an abrupt exit that orphans the lock file.
+    stop_requested = threading.Event()
+
+    def _request_stop(*_args: object) -> None:
+        stop_requested.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _request_stop)
+        except (ValueError, OSError):
+            pass
     lock = WebLock()
     try:
         lock.acquire(host=host, port=port)
     except WebLockError as exc:
         Console(stderr=True).print(f"[red]{exc}[/red]")
         return 1
-    server = CentralWebServer(host=host, port=port)
+    token, generated = resolve_web_token(token)
+    server = CentralWebServer(host=host, port=port, token=token)
     if not server.start():
         Console(stderr=True).print(
             f"[red]Central dashboard failed to bind {host}:{port}.[/red]"
         )
         lock.release()
         return 1
+    if generated:
+        Console(stderr=True).print(
+            f"[bold]Web token:[/bold] {token}\n"
+            f"[dim]Required on every /api/* request; saved to {web_token_path()}.[/dim]"
+        )
     try:
-        asyncio.run(_serve_forever(server, host))
+        asyncio.run(_serve_forever(server, host, stop_requested))
     except KeyboardInterrupt:
         pass
     finally:

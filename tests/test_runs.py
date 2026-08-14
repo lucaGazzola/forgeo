@@ -8,6 +8,7 @@ import pathlib
 from datetime import UTC, datetime
 
 from forgeo.models import (
+    DEFAULT_RUN_OUTPUT_LINES,
     NO_CHANGES_REASON,
     NO_CHANGES_REPORTED_REASON,
     ExecutionResult,
@@ -115,6 +116,84 @@ async def test_task_error_record(git_repo, tmp_path):
     assert record["outcome"] == "ERROR"
     assert record["agent_exit_code"] == 3
     assert record["commit_sha"] is None
+
+
+async def test_run_record_persists_bounded_output_tail(git_repo, tmp_path):
+    """The agent's stdout/stderr is persisted as the bounded tail (last lines)."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_output_lines=3)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        output_logs=[f"line {index}" for index in range(10)],
+        questions=["?"],
+        exit_code=2,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path(forgeo.config))[0]
+    assert record["output_logs"] == ["line 7", "line 8", "line 9"]
+
+
+async def test_run_record_default_output_cap_is_200(git_repo, tmp_path):
+    """Without an explicit cap a run stores at most the default tail length."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.SUCCESS,
+        output_logs=[f"line {index}" for index in range(500)],
+        exit_code=0,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path(forgeo.config))[0]
+    assert len(record["output_logs"]) == DEFAULT_RUN_OUTPUT_LINES
+    assert record["output_logs"][0] == "line 300"
+    assert record["output_logs"][-1] == "line 499"
+
+
+async def test_run_record_without_output_logs_is_null(git_repo, tmp_path):
+    """A run that captured no agent output stores output_logs as null, not []."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path(forgeo.config))[0]
+    assert record["output_logs"] is None
+
+
+async def test_run_output_lines_zero_disables_persistence(git_repo, tmp_path):
+    """run_output_lines: 0 stops persisting agent output entirely."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_output_lines=0)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        output_logs=["important"],
+        questions=["?"],
+        exit_code=2,
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = read_lines(runs_path(forgeo.config))[0]
+    assert record["output_logs"] is None
+
+
+def test_old_records_without_output_logs_field_read_fine(tmp_path):
+    """Records written before output_logs existed parse with output_logs=None."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    recorder.append(make_record("OLD"))
+    raw = json.loads(recorder.path.read_text(encoding="utf-8").strip())
+    del raw["output_logs"]
+    recorder.path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+
+    records = recorder.read()
+    assert len(records) == 1
+    assert records[0].task_id == "OLD"
+    assert records[0].output_logs is None
 
 
 async def test_refactor_record(git_repo, tmp_path):
@@ -228,6 +307,48 @@ def test_read_returns_newest_first(tmp_path):
     assert recorder.read_last().kind is RunKind.REFACTOR
 
 
+def test_read_supports_offset_pagination(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    for index in range(1, 6):
+        recorder.append(
+            RunRecord(
+                started_at=datetime(2026, 8, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 8, 1, 0, index, 10, tzinfo=UTC),
+                kind=RunKind.TASK,
+                task_id=f"T-{index}",
+                outcome=RunOutcome.SUCCESS,
+                duration_seconds=1.0,
+            )
+        )
+
+    assert [r.task_id for r in recorder.read(limit=2)] == ["T-5", "T-4"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=2)] == ["T-3", "T-2"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=4)] == ["T-1"]
+    assert [r.task_id for r in recorder.read(limit=2, offset=99)] == []
+    assert [r.task_id for r in recorder.read(offset=1)] == ["T-4", "T-3", "T-2", "T-1"]
+
+
+def test_total_counts_readable_records(tmp_path, caplog):
+    recorder = RunRecorder(tmp_path / "runs.jsonl")
+    assert recorder.total() == 0
+    recorder.append(
+        RunRecord(
+            started_at=datetime(2026, 8, 1, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 1, 0, 0, 10, tzinfo=UTC),
+            kind=RunKind.TASK,
+            task_id="GOOD",
+            outcome=RunOutcome.SUCCESS,
+            duration_seconds=1.0,
+        )
+    )
+    assert recorder.total() == 1
+    with recorder.path.open("a", encoding="utf-8") as handle:
+        handle.write("{not json\n")
+    with caplog.at_level(logging.WARNING, logger="forgeo.runs"):
+        assert recorder.total() == 1
+    assert "Skipping corrupt run record" in caplog.text
+
+
 def test_read_skips_corrupt_lines_with_warning(tmp_path, caplog):
     recorder = RunRecorder(tmp_path / "runs.jsonl")
     recorder.append(
@@ -267,3 +388,129 @@ async def test_corrupt_runs_never_break_a_cycle(git_repo, tmp_path, caplog):
     assert len(records) == 1
     assert records[0].outcome is RunOutcome.SUCCESS
     assert records[0].task_id == "TASK-001"
+
+
+def make_record(task_id: str | None = None) -> RunRecord:
+    return RunRecord(
+        started_at=datetime(2026, 8, 1, tzinfo=UTC),
+        finished_at=datetime(2026, 8, 1, 0, 0, 10, tzinfo=UTC),
+        kind=RunKind.TASK,
+        task_id=task_id,
+        outcome=RunOutcome.SUCCESS,
+        duration_seconds=1.0,
+    )
+
+
+def test_keep_trims_growing_file(tmp_path):
+    """With retention set, the file never grows past ``keep`` lines and the
+    oldest records are dropped first."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=3)
+    for index in range(10):
+        recorder.append(make_record(f"T-{index}"))
+
+    lines = read_lines(recorder.path)
+    assert len(lines) == 3
+    assert [line["task_id"] for line in lines] == ["T-7", "T-8", "T-9"]
+    assert {r.task_id for r in recorder.read()} == {"T-7", "T-8", "T-9"}
+
+
+def test_keep_below_limit_leaves_file_untouched(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=5)
+    for index in range(3):
+        recorder.append(make_record(f"T-{index}"))
+
+    assert len(read_lines(recorder.path)) == 3
+    assert [line["task_id"] for line in read_lines(recorder.path)] == ["T-0", "T-1", "T-2"]
+
+
+def test_keep_zero_disables_retention(tmp_path):
+    """``run_history_keep: 0`` keeps every record, exactly as before."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=0)
+    for index in range(5):
+        recorder.append(make_record(f"T-{index}"))
+
+    lines = read_lines(recorder.path)
+    assert len(lines) == 5
+    assert [line["task_id"] for line in lines] == ["T-0", "T-1", "T-2", "T-3", "T-4"]
+
+
+def test_keep_one_keeps_only_latest(tmp_path):
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=1)
+    for index in range(4):
+        recorder.append(make_record(f"T-{index}"))
+
+    assert [line["task_id"] for line in read_lines(recorder.path)] == ["T-3"]
+
+
+def test_trim_failure_is_logged_not_raised(tmp_path, caplog, monkeypatch):
+    """A failed trim is logged and skipped; the record still lands via the
+    plain append so retention can never break a cycle."""
+    recorder = RunRecorder(tmp_path / "runs.jsonl", keep=1)
+    recorder.append(make_record("T-0"))
+    recorder.append(make_record("T-1"))
+    assert len(read_lines(recorder.path)) == 1
+
+    def boom(*args, **kwargs):
+        raise OSError("read only")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", boom)
+    with caplog.at_level(logging.ERROR, logger="forgeo.runs"):
+        recorder.append(make_record("T-2"))
+
+    with recorder.path.open(encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    assert "Could not trim run history" in caplog.text
+    assert len(lines) == 2
+    assert lines[-1] == make_record("T-2").model_dump_json()
+
+
+async def test_cycle_applies_configured_retention(git_repo, tmp_path):
+    """The daemon's recorder trims per ``run_history_keep`` from the config."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, run_history_keep=2)
+    runs = runs_path(forgeo.config)
+    await backlog.create_task(make_task())
+
+    for _ in range(4):
+        agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+        assert await forgeo.run_cycle() == "task"
+        await backlog.update_status("TASK-001", TaskStatus.OPEN)
+
+    lines = read_lines(runs)
+    assert len(lines) == 2
+    assert all(line["task_id"] == "TASK-001" for line in lines)
+
+
+async def test_retried_run_record_carries_retry_count(git_repo, tmp_path):
+    """The run that finally succeeds after a retry records the retry count,
+    so the History tab shows it was a retry; the original failure does not."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=1)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom", exit_code=4)
+
+    assert await forgeo.run_cycle() == "task"
+
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+    assert await forgeo.run_cycle() == "task"
+
+    records = RunRecorder(runs_path(forgeo.config)).read()
+    assert [record.retry_count for record in records] == [1, None]
+    assert records[0].outcome is RunOutcome.SUCCESS
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+
+
+async def test_never_retried_run_records_have_null_retry_count(git_repo, tmp_path):
+    """A task that never retries records retry_count null on every run."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    assert await forgeo.run_cycle() == "task"
+
+    record = RunRecorder(runs_path(forgeo.config)).read_last()
+    assert record.retry_count is None

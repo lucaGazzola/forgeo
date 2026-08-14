@@ -109,9 +109,11 @@ tasks already live in another application, `backlog:` also accepts an
 forgeo start
 ```
 
-The daemon wakes up every `interval_minutes` and runs one cycle. It runs in
-the foreground — interrupt it with Ctrl-C, or stop it from another terminal
-with `forgeo stop`. It binds no ports itself; open the dashboard (which
+`forgeo start` launches the daemon **detached in the background** and exits.
+The daemon wakes up every `interval_minutes` and runs one cycle. Stop it from
+anywhere with `forgeo stop`; `forgeo status` shows whether it is running. To
+run the daemon in the foreground instead (interruptible with Ctrl-C), use
+`forgeo start -f`. It binds no ports itself; open the dashboard (which
 shows every registered instance) with `forgeo web` — see
 [Web console & HTTP API](web-console-api.md):
 
@@ -123,12 +125,20 @@ shows every registered instance) with `forgeo web` — see
 forgeo status
 ```
 
-shows the config, backlog counts, the next `OPEN` task, whether the daemon is
-running, and the last run outcome. To run exactly one cycle without leaving a
-daemon up:
+shows the config, backlog counts, the next runnable `OPEN` task (one whose
+dependencies are all `COMPLETED`), whether the daemon is running, and the last
+run outcome. To run exactly one cycle without leaving a daemon up:
 
 ```bash
 forgeo once
+```
+
+Before starting for the first time you can run a read-only dry run that
+validates the config, repository, branch/remote, backlog, agent command and
+lock state without invoking the agent or writing anything:
+
+```bash
+forgeo validate
 ```
 
 ## 6. Multiple repositories / instances
@@ -144,8 +154,9 @@ anywhere.
 # 1. Initialize a config per repository (run the wizard in each project root)
 forgeo init
 
-# 2. Start a daemon per instance; each config is registered automatically
-#    under its `name` on first start (or pre-register with `instance add`)
+# 2. Start a daemon per instance (background; each config is registered
+#    automatically under its `name` on first start — or pre-register with
+#    `instance add`)
 forgeo start --config /path/to/site-a/forgeo.yaml
 forgeo start --config /path/to/site-b/forgeo.yaml
 

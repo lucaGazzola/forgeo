@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 PYPI_PACKAGE = "forgeo-cli"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 SH = shutil.which("sh")
 assert SH, "sh must be available to run install.sh"
 
@@ -197,7 +197,8 @@ def test_binary_rerun_is_idempotent(tmp_path):
     assert second.returncode == 0, second.stderr
     assert _installed_binary(tmp_path).exists()
     curl_lines = [line for line in _calls(tmp_path) if line.startswith("curl ")]
-    assert len(curl_lines) == 2
+    assert len([l for l in curl_lines if "api.github.com" in l]) == 2
+    assert len([l for l in curl_lines if "releases/download" in l]) == 2
 
 
 def test_binary_warns_when_bin_dir_not_on_path(tmp_path):

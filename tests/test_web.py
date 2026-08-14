@@ -45,6 +45,25 @@ def _get(url: str) -> tuple[int, dict | list | str]:
             return exc.code, body
 
 
+def _get_headers(
+    url: str, headers: dict[str, str]
+) -> tuple[int, dict | list | str]:
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as resp:
+            body = resp.read().decode("utf-8")
+            ctype = resp.headers.get_content_type()
+            if ctype == "application/json":
+                return resp.status, json.loads(body)
+            return resp.status, body
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(body)
+        except json.JSONDecodeError:
+            return exc.code, body
+
+
 def _post(url: str, data: str | None) -> tuple[int, dict | list | str]:
     body = data.encode("utf-8") if data is not None else None
     request = urllib.request.Request(url, data=body, method="POST")
@@ -312,7 +331,104 @@ def test_instance_page_served(web_env):
     assert status == 200
     assert isinstance(body, str)
     assert "Backlog" in body
-    assert 'data-page="instance"' in body
+
+
+# --------------------------------------------------------------------------- #
+# Optional bearer-token auth                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _auth_server(token: str | None = None) -> CentralWebServer:
+    server = CentralWebServer(host="127.0.0.1", port=0, token=token)
+    assert server.start() is True
+    return server
+
+
+def test_auth_disabled_without_token_serves_api(registry):
+    server = _auth_server(token=None)
+    try:
+        status, data = _get(f"http://127.0.0.1:{server.port}/api/instances")
+        assert status == 200
+        assert isinstance(data, list)
+    finally:
+        server.stop()
+
+
+def test_auth_requires_token_on_api(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get(f"http://127.0.0.1:{server.port}/api/instances")
+        assert status == 401
+        assert data["error"] == "unauthorized"
+    finally:
+        server.stop()
+
+
+def test_auth_rejects_wrong_token(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get_headers(
+            f"http://127.0.0.1:{server.port}/api/instances",
+            {"Authorization": "Bearer wrong"},
+        )
+        assert status == 401
+        assert data["error"] == "unauthorized"
+    finally:
+        server.stop()
+
+
+def test_auth_accepts_valid_token(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, data = _get_headers(
+            f"http://127.0.0.1:{server.port}/api/instances",
+            {"Authorization": "Bearer secret"},
+        )
+        assert status == 200
+        assert isinstance(data, list)
+    finally:
+        server.stop()
+
+
+def test_auth_applies_to_write_endpoints(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, _data = _post(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/start", None
+        )
+        assert status == 401
+        status, _data = _put(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/config", "{}"
+        )
+        assert status == 401
+        status, _data = _patch(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001",
+            "{}",
+        )
+        assert status == 401
+        status, _data = _delete(
+            f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+        )
+        assert status == 401
+    finally:
+        server.stop()
+
+
+def test_auth_leaves_static_and_login_unprotected(registry):
+    server = _auth_server(token="secret")
+    try:
+        status, body = _get(f"http://127.0.0.1:{server.port}/")
+        assert status == 200
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/login.html")
+        assert status == 200
+        assert isinstance(body, str)
+        assert "Token required" in body
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+        assert status == 200
+        status, body = _get(f"http://127.0.0.1:{server.port}/central/central.css")
+        assert status == 200
+    finally:
+        server.stop()
 
 
 def test_instance_page_has_new_task_form(web_env):
@@ -458,6 +574,47 @@ def test_tasks_endpoints(web_env):
     assert data["error"] == "not found"
 
 
+def test_task_detail_reports_unsatisfied_dependencies(web_env):
+    server, registry = web_env
+    write_instance(
+        registry,
+        "gamma",
+        repo=str(registry / "repos" / "gamma"),
+        tasks=[
+            make_task(
+                id="T1", title="Done dep", status=TaskStatus.COMPLETED
+            ).model_dump(mode="json"),
+            make_task(
+                id="T2", title="Pending dep", status=TaskStatus.OPEN
+            ).model_dump(mode="json"),
+            make_task(
+                id="T3",
+                title="Waits",
+                status=TaskStatus.OPEN,
+                dependencies=["T1", "T2", "GHOST"],
+            ).model_dump(mode="json"),
+        ],
+    )
+    base = f"http://127.0.0.1:{server.port}/api/instances/gamma/tasks"
+
+    status, data = _get(f"{base}/T3")
+    assert status == 200
+    assert data["unsatisfied_dependencies"] == [
+        {"id": "T2", "status": "OPEN"},
+        {"id": "GHOST", "status": "missing"},
+    ]
+
+    status, data = _get(base)
+    assert status == 200
+    by_id = {task["id"]: task for task in data}
+    assert by_id["T3"]["unsatisfied_dependencies"] == [
+        {"id": "T2", "status": "OPEN"},
+        {"id": "GHOST", "status": "missing"},
+    ]
+    assert by_id["T1"]["unsatisfied_dependencies"] == []
+    assert by_id["T2"]["unsatisfied_dependencies"] == []
+
+
 def test_post_task_creates_in_backlog(web_env):
     server, _ = web_env
     base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
@@ -511,6 +668,53 @@ def test_post_task_includes_optional_fields(web_env):
     assert data["agent_command"] == 'claude -p "$FORGEO_TASK" --model haiku'
     assert data["created_at"]
     assert data["updated_at"]
+
+
+def test_post_task_accepts_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    run_at = "2026-08-20T12:30:00Z"
+    status, data = _post(
+        base,
+        json.dumps({"title": "After deploy", "description": "Run it.", "run_at": run_at}),
+    )
+    assert status == 201
+    assert data["run_at"] == run_at
+
+    status, tasks = _get(base)
+    assert status == 200
+    created = next(t for t in tasks if t["id"] == "WEB-001")
+    assert created["run_at"] == run_at
+
+    disk = json.loads(
+        (web_env[1] / "alpha" / "backlog.json").read_text(encoding="utf-8")
+    )
+    entry = next(t for t in disk["tasks"] if t["id"] == "WEB-001")
+    assert entry["run_at"] == run_at
+
+
+def test_post_task_accepts_null_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    status, data = _post(
+        base,
+        json.dumps({"title": "Plain", "description": "No schedule.", "run_at": None}),
+    )
+    assert status == 201
+    assert data["run_at"] is None
+
+
+def test_post_task_rejects_invalid_run_at(web_env):
+    server, _ = web_env
+    base = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks"
+    for payload in (
+        {"title": "x", "description": "y", "run_at": 42},
+        {"title": "x", "description": "y", "run_at": ["2026-08-20T12:30:00Z"]},
+        {"title": "x", "description": "y", "run_at": "not-a-datetime"},
+    ):
+        status, data = _post(base, json.dumps(payload))
+        assert status == 400, payload
+        assert data["error"]
 
 
 def test_post_task_validation_errors(web_env):
@@ -685,6 +889,45 @@ def test_patch_task_clears_optional_fields(web_env):
     assert status == 200
     assert data["agent_command"] is None
     assert data["agent_timeout_seconds"] is None
+
+
+def test_patch_task_sets_and_clears_run_at(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+    run_at = "2026-08-20T12:30:00Z"
+    status, data = _patch(url, json.dumps({"run_at": run_at}))
+    assert status == 200
+    assert data["run_at"] == run_at
+
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    updated = next(t for t in tasks if t["id"] == "TASK-001")
+    assert updated["run_at"] == run_at
+
+    status, data = _patch(url, json.dumps({"run_at": None}))
+    assert status == 200
+    assert data["run_at"] is None
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    updated = next(t for t in tasks if t["id"] == "TASK-001")
+    assert updated["run_at"] is None
+
+
+def test_patch_task_rejects_invalid_run_at(web_env):
+    server, _ = web_env
+    url = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-001"
+    for payload in (
+        {"run_at": 42},
+        {"run_at": ["2026-08-20T12:30:00Z"]},
+        {"run_at": "not-a-datetime"},
+    ):
+        status, data = _patch(url, json.dumps(payload))
+        assert status == 400, payload
+        assert data["error"]
+
+    status, task = _get(url)
+    assert status == 200
+    assert task["run_at"] is None
 
 
 def test_patch_task_unknown_id_404(web_env):
@@ -1071,8 +1314,44 @@ def test_runs_endpoint(web_env):
     server, _ = web_env
     status, data = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/runs")
     assert status == 200
-    assert [run["task_id"] for run in data] == ["TASK-001"]
-    assert data[0]["outcome"] == "SUCCESS"
+    assert data["runs"][0]["task_id"] == "TASK-001"
+    assert data["runs"][0]["outcome"] == "SUCCESS"
+    assert data["total"] == 1
+    assert data["offset"] == 0
+    assert data["limit"] == 10
+
+
+def test_runs_endpoint_paginates(registry, central_server):
+    """The runs endpoint pages newest-first and reports the real total."""
+    records = []
+    for index in range(1, 8):
+        record = run_record(f"TASK-{index:03d}", RunOutcome.SUCCESS)
+        record.finished_at = FINISHED.replace(second=index)
+        records.append(record)
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        runs=records,
+    )
+    base = f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs"
+
+    status, data = _get(f"{base}?limit=3&offset=0")
+    assert status == 200
+    assert data["total"] == 7
+    assert data["limit"] == 3
+    assert data["offset"] == 0
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-007", "TASK-006", "TASK-005"]
+
+    status, data = _get(f"{base}?limit=3&offset=3")
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-004", "TASK-003", "TASK-002"]
+
+    status, data = _get(f"{base}?limit=3&offset=6")
+    assert [run["task_id"] for run in data["runs"]] == ["TASK-001"]
+
+    status, data = _get(f"{base}?limit=3&offset=99")
+    assert data["runs"] == []
+    assert data["total"] == 7
 
 
 def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
@@ -1088,8 +1367,206 @@ def test_runs_endpoint_surfaces_no_changes_reason(registry, central_server):
     )
     status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
     assert status == 200
-    assert data[0]["commit_sha"] is None
-    assert data[0]["reason"] == "Agent exited 0 but produced no changes"
+    assert data["runs"][0]["commit_sha"] is None
+    assert data["runs"][0]["reason"] == "Agent exited 0 but produced no changes"
+
+
+def test_runs_endpoint_surfaces_output_logs(registry, central_server):
+    """The runs API returns the persisted bounded agent-output tail."""
+    record = run_record("TASK-001", RunOutcome.BLOCKED)
+    record.output_logs = [
+        "[stdout] Trying a heuristic",
+        "[stdout] Needs a human decision",
+    ]
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.BLOCKED)],
+        runs=[record],
+    )
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    assert data["runs"][0]["output_logs"] == [
+        "[stdout] Trying a heuristic",
+        "[stdout] Needs a human decision",
+    ]
+
+
+def test_runs_endpoint_old_record_without_output_logs_renders_null(
+    registry, central_server,
+):
+    """Records that predate the output_logs field surface null and render fine."""
+    record = run_record("TASK-001", RunOutcome.SUCCESS)
+    raw = json.loads(record.model_dump_json())
+    del raw["output_logs"]
+    runs_path = registry / "alpha" / "runs.jsonl"
+    runs_path.parent.mkdir(parents=True, exist_ok=True)
+    runs_path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    (registry / "alpha" / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {registry / 'alpha' / 'backlog.json'}\n"
+        f"blocker_file: {registry / 'alpha' / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {registry / 'alpha' / 'forgeo.log'}\n"
+        "interval_minutes: 30\n",
+        encoding="utf-8",
+    )
+    add_instance("alpha", registry / "alpha" / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    run = data["runs"][0]
+    assert run["task_id"] == "TASK-001"
+    assert run["output_logs"] is None
+
+
+def test_history_script_renders_collapsible_agent_output(web_env):
+    """The served History-tab script renders persisted output collapsibly."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "output_logs" in body
+    assert "run-output" in body
+    assert "agent output" in body
+
+
+def test_runs_endpoint_surfaces_retry_count(registry, central_server):
+    """A run record's retry_count is exposed, so the History tab can show it."""
+    record = run_record("TASK-001", RunOutcome.SUCCESS)
+    record.retry_count = 2
+    write_instance(
+        registry,
+        "alpha",
+        repo=str(registry / "repos" / "alpha"),
+        tasks=[task_json("TASK-001", "First", TaskStatus.OPEN)],
+        runs=[record],
+    )
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/runs")
+    assert status == 200
+    assert data["runs"][0]["retry_count"] == 2
+
+
+def test_tasks_endpoint_surfaces_retry_state(registry, central_server):
+    """The tasks API carries the effective retry budget and remaining retries
+    (from the per-task override falling back to the config)."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n"
+        "failed_retry_max: 2\n",
+        encoding="utf-8",
+    )
+    failed = task_json("TASK-001", "First", TaskStatus.FAILED)
+    failed["retry_count"] = 1
+    failed["failed_wait_cycles"] = 1
+    backlog.write_text(json.dumps({"tasks": [failed]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    task = data[0]
+    assert task["retry_count"] == 1
+    assert task["failed_wait_cycles"] == 1
+    assert task["retry_budget"] == 2
+    assert task["retries_remaining"] == 1
+
+
+def test_tasks_endpoint_retry_override_wins(registry, central_server):
+    """A per-task retries_left override replaces the config budget."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n"
+        "failed_retry_max: 0\n",
+        encoding="utf-8",
+    )
+    failed = task_json("TASK-001", "First", TaskStatus.FAILED)
+    failed["retries_left"] = 4
+    backlog.write_text(json.dumps({"tasks": [failed]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks")
+    assert status == 200
+    assert data[0]["retry_budget"] == 4
+    assert data[0]["retries_remaining"] == 4
+
+
+def test_history_script_renders_retry_column(web_env):
+    """The History-tab script renders the retry count and the retried badge."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert '"retry"' in body
+    assert "retry_count" in body
+    assert "badge--retry" in body
+
+
+def test_retry_config_fields_editable_in_config_tab(web_env):
+    """The Config-tab script exposes the retry policy keys."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "failed_retry_max" in body
+    assert "failed_retry_wait_cycles" in body
+
+
+def test_tasks_endpoint_surfaces_run_at(registry, central_server):
+    """The tasks API returns a task's run_at one-shot schedule."""
+    config_dir = registry / "alpha"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    backlog = config_dir / "backlog.json"
+    (config_dir / "forgeo.yaml").write_text(
+        "name: alpha\n"
+        f"repo: {registry / 'repos' / 'alpha'}\n"
+        f"backlog: {backlog}\n"
+        f"blocker_file: {config_dir / 'BLOCKER.md'}\n"
+        "agent_command: echo hi\n"
+        f"log_file: {config_dir / 'forgeo.log'}\n"
+        "interval_minutes: 30\n",
+        encoding="utf-8",
+    )
+    task = task_json("TASK-001", "First", TaskStatus.OPEN)
+    task["run_at"] = "2026-08-20T12:30:00Z"
+    backlog.write_text(json.dumps({"tasks": [task]}), encoding="utf-8")
+    add_instance("alpha", config_dir / "forgeo.yaml")
+
+    status, data = _get(
+        f"http://127.0.0.1:{central_server.port}/api/instances/alpha/tasks"
+    )
+    assert status == 200
+    assert data[0]["run_at"] == "2026-08-20T12:30:00Z"
+
+
+def test_run_at_form_inputs_in_instance_page(web_env):
+    """The instance page and script expose the run_at datetime-local input."""
+    server, _ = web_env
+    status, body = _get(f"http://127.0.0.1:{server.port}/instances/alpha/")
+    assert status == 200
+    assert 'id="task-run-at"' in body
+    assert 'type="datetime-local"' in body
+    assert 'id="task-edit-run-at"' in body
+
+    status, body = _get(f"http://127.0.0.1:{server.port}/central/central.js")
+    assert status == 200
+    assert "run_at" in body
+    assert "toLocalInputValue" in body
+    assert "task-modal-run-at" in body
 
 
 def test_blocker_endpoint(web_env):
@@ -1124,7 +1601,7 @@ def test_put_config_persists_and_returns_reloaded(web_env):
     status, data = _put(url, json.dumps(payload))
     assert status == 200
     assert data["saved"] is True
-    assert data["restart_required"] is True
+    assert data["restart_required"] is False
     assert data["message"]
     assert data["config"]["name"] == "alpha"
     assert data["config"]["interval_minutes"] == 15
@@ -1397,7 +1874,8 @@ def test_missing_data_files_render_empty(registry, central_server):
 
     status, data = _get(f"{base}/runs")
     assert status == 200
-    assert data == []
+    assert data["runs"] == []
+    assert data["total"] == 0
 
     status, data = _get(f"{base}/blocker")
     assert status == 200

@@ -55,6 +55,26 @@ async def test_not_a_repository_raises(tmp_path):
         await manager.a_ensure_branch("main")
 
 
+def test_is_git_repo_true_for_a_repository(git_repo):
+    assert GitManager(git_repo).is_git_repo()
+
+
+def test_is_git_repo_false_for_a_plain_directory(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert not GitManager(plain).is_git_repo()
+
+
+def test_is_git_repo_false_for_missing_path(tmp_path):
+    assert not GitManager(tmp_path / "nope").is_git_repo()
+
+
+def test_is_git_repo_false_without_git_executable(git_repo, monkeypatch):
+    manager = GitManager(git_repo)
+    monkeypatch.setattr("forgeo.git.shutil.which", lambda _: None)
+    assert not manager.is_git_repo()
+
+
 def test_missing_git_executable_raises(git_repo, monkeypatch):
     manager = GitManager(git_repo)
     monkeypatch.setattr("forgeo.git.shutil.which", lambda _: None)

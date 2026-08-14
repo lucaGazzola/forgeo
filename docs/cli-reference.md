@@ -1,9 +1,10 @@
 # CLI reference
 
 All commands read `forgeo.yaml` from the current directory; pass
-`--config <file>` to use a different one. `start`, `once`, `status`, `stop`
-and `restart` also accept `--name <instance>` to resolve the config from the
-**instance registry** — see [`forgeo instance`](#forgeo-instance) below.
+`--config <file>` to use a different one. `start`, `once`, `status`,
+`validate`, `stop` and `restart` also accept `--name <instance>` to resolve
+the config from the **instance registry** — see [`forgeo instance`](#forgeo-instance)
+below.
 
 ```
 forgeo --version
@@ -32,18 +33,29 @@ See [Getting Started](getting-started.md) for what the wizard asks.
 
 ## `forgeo start`
 
-Start the scheduled forgeo daemon for a repository. Runs in the foreground;
-interrupt with Ctrl-C or stop from another terminal with `forgeo stop`.
+Start the scheduled forgeo daemon for a repository. By default the daemon is
+started **detached in the background** and the command exits immediately; the
+daemon keeps running, logs to `log_file`, and is managed with `forgeo stop`
+and `forgeo restart`. Pass `-f`/`--foreground` to run the daemon in the
+foreground instead, interruptible with Ctrl-C.
 
 | Flag | Description |
 | --- | --- |
 | `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
 | `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
 | `--interval-minutes <n>` | Override the schedule interval from the config for this run. |
+| `-f`, `--foreground` | Run the daemon in the foreground instead of starting it detached. |
 
 The daemon wakes every `interval_minutes` and runs one cycle. When no config
 exists, `forgeo start` offers the guided setup. A second `start` (or `once`)
-is refused while the per-forgeo lock is held.
+is refused while the per-forgeo lock is held. Before detaching, `start` runs
+the same read-only checks as `forgeo validate` and refuses to start when it
+finds problems, so a broken config never leaves a silently dead daemon.
+
+After each cycle the daemon reads the backlog for the earliest `run_at`
+one-shot schedule among runnable `OPEN` tasks and wakes at (or just after)
+that moment instead of waiting out the full interval, so a scheduled task
+fires promptly (see [Backlog format](backlog.md#one-shot-scheduling)).
 
 When given `--config` and that config is not in the instance registry yet,
 `forgeo start` registers it automatically under the config's `name` field —
@@ -111,9 +123,62 @@ last outcome: task
 ```
 
 - `backlog` — per-status task counts.
-- `next` — the oldest `OPEN` task (the one Forgeo will pick next).
+- `next` — the oldest `OPEN` task whose dependencies are all `COMPLETED` (the
+  one Forgeo will pick next), or `(none)` when nothing is runnable. A task
+  whose `run_at` one-shot schedule is due is shown ahead of older tasks; one
+  with a future `run_at` is skipped until it fires (see
+  [Backlog format](backlog.md#one-shot-scheduling)).
+- `waiting on` — when present, names the oldest `OPEN` task that is *not* yet
+  runnable and the dependency ids keeping it waiting (with their current
+  status, or `missing`) — e.g. `waiting on: TASK-002 (needs COMPLETED:
+  TASK-001 (OPEN))`. Omitted when no `OPEN` task is blocked on a dependency.
 - `daemon` — whether the per-forgeo lock is currently held.
 - `last outcome` — the most recent run recorded in `runs.jsonl`.
+
+## `forgeo validate`
+
+Read-only **dry run**: checks that Forgeo is ready to run without starting
+anything. It never invokes the agent and makes no writes — no lock is taken,
+no backlog or snapshot is touched — so it is safe to run at any time, even
+while a daemon is active.
+
+| Flag | Description |
+| --- | --- |
+| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+
+It validates, reporting **all** problems at once:
+
+- the config file parses and matches the schema (a blank `agent_command`,
+  missing `agent_sandbox_image` in docker mode, ...);
+- the repository exists and is a git working tree (and `git` is on `PATH`);
+- the branch resolves — a missing branch is a warning (it is created on the
+  first cycle), as is a repository with no commits and a clean tree (the
+  first cycle creates the initial commit). A repository with no commits and
+  a non-clean tree is a problem: every file is untracked, so every cycle
+  would refuse as dirty — make an initial commit first
+  (`git add -A && git commit -m "Initial commit"`);
+- the remote resolves when `remote` is set (`git remote get-url`);
+- the backlog parses and every task is valid (a missing backlog is fine: it
+  is treated as empty on the first cycle);
+- the run lock state (`backlog.lock`); a held lock is a warning, since
+  `forgeo start`/`forgeo once` will refuse to run until it is released.
+
+Output on a healthy setup:
+
+```
+name: my-forgeo
+repo: /path/to/repo
+branch: main
+agent command: claude -p "$FORGEO_TASK"
+backlog: /path/to/backlog.json (2 tasks)
+lock: not held
+
+Forgeo is ready to run.
+```
+
+Exit code is `0` when no problem is found, `1` otherwise (with a summary of
+every problem found).
 
 ## `forgeo stop`
 
@@ -137,6 +202,12 @@ Like `start`, a `--config` invocation registers Forgeo under its config's
 Stop the daemon when running, then start it again **in the background**
 (detached), re-reading `forgeo.yaml`.
 
+A running daemon already re-reads `forgeo.yaml` on the next cycle when the
+file changes (or on `SIGHUP`), so a plain config edit needs no restart.
+`restart` is still the way to apply changes to the `repo`, `backlog`,
+`blocker_file` or `log_file` paths: the daemon pins those to its startup
+values while running so its lock files are never detached from the config.
+
 | Flag | Description |
 | --- | --- |
 | `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
@@ -147,10 +218,11 @@ On success it prints the new daemon PID and interval.
 
 ### `--config` vs `--name`
 
-On `start`, `once`, `status`, `stop` and `restart`, `--name` resolves the
-`forgeo.yaml` from the instance registry instead of reading `--config`. The
-two flags are mutually exclusive — passing both is an argparse error. An
-unknown instance name prints a clear error and exits non-zero.
+On `start`, `once`, `status`, `validate`, `stop` and `restart`, `--name`
+resolves the `forgeo.yaml` from the instance registry instead of reading
+`--config`. The two flags are mutually exclusive — passing both is an
+argparse error. An unknown instance name prints a clear error and exits
+non-zero.
 
 `start` and `stop` with `--config` register Forgeo under its config's
 `name` when it is not registered yet, so instances are created automatically
@@ -204,11 +276,11 @@ running.
 | `--host <address>` | Bind address (default `0.0.0.0`). |
 | `--port <port>` | Bind port (default `8790`). |
 | `-d`, `--detach` | Start the dashboard in the background and return once it binds. |
+| `--token [TOKEN]` | Require a bearer token on every `/api/*` route (see below). |
 | `--timeout <seconds>` | How long to wait for the dashboard to bind when detached (default `30`). |
 
-Without `-d` the dashboard runs in the foreground (like `forgeo start`);
-interrupt it with Ctrl-C or stop it from another terminal with
-`forgeo web stop`.
+Without `-d` the dashboard runs in the foreground; interrupt it with Ctrl-C
+or stop it from another terminal with `forgeo web stop`.
 
 The dashboard is **host-global** (one per user, not per-repo), so it cannot
 reuse a per-instance `backlog.lock`. Instead it owns a lock file at
@@ -216,6 +288,25 @@ reuse a per-instance `backlog.lock`. Instead it owns a lock file at
 the running PID plus its `host`/`port` (written atomically with `O_EXCL`).
 A second `forgeo web -d` is refused while the lock is held; a stale lock
 whose PID is dead is taken over with a warning.
+
+**Optional bearer-token auth.** By default the dashboard is open — anyone who
+can reach the port can read every instance's backlog, logs, and config, and
+can add/edit/delete tasks or start/stop/restart daemons. On a shared host,
+turn on auth so every `/api/*` route requires
+`Authorization: Bearer <token>` and answers `401` otherwise:
+
+```bash
+forgeo web --token           # generate a token: printed once, saved to web.toml
+forgeo web --token supersecret  # use your own token
+```
+
+The token is persisted to `~/.config/forgeo/web.toml` (or
+`$FORGEO_CONFIG_DIR/web.toml`, mode `0600`); once it exists, auth is enabled
+even without the flag, and the generated token is only ever printed at the
+moment it is created. The token prompt page (`/central/login.html`) is served
+without a token and stores your token in the browser; opening the console
+with `?token=YOUR_TOKEN` in the URL signs in automatically. Delete
+`web.toml` to go back to the open-by-default behavior.
 
 - `GET /` — home page listing every registered instance (daemon state, last
   outcome, next run, backlog counts).

@@ -51,15 +51,33 @@
     <button class="tab is-active" data-tab="backlog" type="button">Backlog</button>
     <button class="tab" data-tab="create" type="button">Create</button>
     <button class="tab" data-tab="logs" type="button">Logs</button>
-    <button class="tab" data-tab="runs" type="button">Runs</button>
+    <button class="tab" data-tab="history" type="button">History</button>
     <button class="tab" data-tab="blocker" type="button">Blocker</button>
     <button class="tab" data-tab="config" type="button">Config</button>
   </nav>
 
-  <main id="tab-backlog" class="tab-panel board" aria-live="polite">
-    <div class="empty-state" id="empty-state" hidden>
-      <p class="empty-title">No tasks</p>
-      <p class="empty-sub">The backlog is empty. The forgeo will run a refactoring pass until a task lands.</p>
+  <main id="tab-backlog" class="tab-panel" aria-live="polite">
+    <div class="backlog-toolbar">
+      <input type="search" class="backlog-toolbar__search" id="backlog-search"
+        placeholder="Search by id, title, description…" autocomplete="off" aria-label="Search tasks">
+      <select class="backlog-toolbar__status" id="backlog-status" aria-label="Filter by status">
+        <option value="all">All statuses</option>
+        <option value="OPEN">Open</option>
+        <option value="BLOCKED">Blocked</option>
+        <option value="COMPLETED">Completed</option>
+        <option value="FAILED">Failed</option>
+      </select>
+      <span class="backlog-toolbar__count" id="backlog-count" hidden></span>
+    </div>
+    <div class="board" id="backlog-board">
+      <div class="empty-state" id="empty-state" hidden>
+        <p class="empty-title">No tasks</p>
+        <p class="empty-sub">The backlog is empty. The forgeo will run a refactoring pass until a task lands.</p>
+      </div>
+      <div class="empty-state" id="no-matches-state" hidden>
+        <p class="empty-title">No matching tasks</p>
+        <p class="empty-sub">Nothing matches the current search and status filter. Try a different term or reset the filters.</p>
+      </div>
     </div>
   </main>
   <main id="tab-create" class="tab-panel" hidden>
@@ -85,6 +103,11 @@
           <span>Agent command (optional)</span>
           <input id="task-command" name="agent_command" type="text" placeholder="e.g. claude -p &quot;$FORGEO_TASK&quot; --model claude-3-haiku" autocomplete="off">
         </label>
+        <label class="new-task__field" for="task-run-at">
+          <span>Run at (optional)</span>
+          <input id="task-run-at" name="run_at" type="datetime-local" autocomplete="off"
+            title="Earliest moment the task may run. Left empty = picked by oldest first, as before.">
+        </label>
       </div>
       <button type="submit">Add task</button>
       <p class="new-task__error" id="new-task-error" hidden></p>
@@ -93,8 +116,8 @@
   <main id="tab-logs" class="tab-panel" hidden>
     <pre class="code-panel" id="logs-body">(loading &hellip;)</pre>
   </main>
-  <main id="tab-runs" class="tab-panel" hidden>
-    <div class="table-wrap" id="runs-body"></div>
+  <main id="tab-history" class="tab-panel" hidden>
+    <div class="table-wrap" id="history-body"></div>
   </main>
   <main id="tab-blocker" class="tab-panel" hidden>
     <pre class="code-panel" id="blocker-body">(loading &hellip;)</pre>
@@ -103,13 +126,12 @@
     <div id="config-body">
       <p class="config-panel__loading" id="config-loading">(loading &hellip;)</p>
       <div class="config-banner config-banner--error" id="config-error" role="alert" hidden></div>
-      <div class="config-banner config-banner--notice" id="config-restart-hint" hidden></div>
+      <div class="config-banner config-banner--notice" id="config-reload-hint" hidden></div>
       <form class="config-form" id="config-form" hidden>
         <p class="config-form__hint">
           Edits are written to <code>forgeo.yaml</code>. The running daemon
-          re-reads the config only on restart, so a saved change applies on the
-          daemon&rsquo;s next start &mdash; use the <strong>Restart</strong>
-          button in the header (<code>forgeo restart</code>).
+          watches the file and picks up a saved change on its next cycle
+          &mdash; no restart needed.
         </p>
         <div class="config-form__grid" id="config-fields"></div>
         <div class="config-form__actions">
@@ -150,17 +172,18 @@
           <p class="modal__desc" id="task-modal-blocker-reason"></p>
           <p class="modal__blocked-note">
             The agent's partial work was committed and preserved on
-            <code>main</code> (the <code>[partial]</code> commit is in the Runs
+            <code>main</code> (the <code>[partial]</code> commit is in the History
             tab). Edit the task to correct it, then Reopen — Forgeo retries on
             its next scheduled run, building on top of the partial work.
           </p>
         </section>
         <section class="modal__section modal__banner modal__banner--failed" id="task-modal-failure-section" hidden>
           <h3>Failed</h3>
+          <p class="modal__failed-count" id="task-modal-failed-count"></p>
           <p class="modal__desc" id="task-modal-failure-reason"></p>
           <p class="modal__blocked-note">
             The agent errored and its changes were discarded. The failure
-            reason is recorded on the task; see the Logs and Runs tabs for the
+            reason is recorded on the task; see the Logs and History tabs for the
             full output.
           </p>
         </section>
@@ -180,6 +203,15 @@
           <h3>Dependencies</h3>
           <ul class="modal__list" id="task-modal-dependencies"></ul>
         </section>
+        <section class="modal__section modal__banner modal__banner--waiting" id="task-modal-unmet-dependencies-section" hidden>
+          <h3>Waiting on dependencies</h3>
+          <ul class="modal__list" id="task-modal-unmet-dependencies"></ul>
+          <p class="modal__blocked-note">
+            Forgeo only picks this task once every dependency is COMPLETED. A
+            dependency whose id does not exist in the backlog is listed as
+            &ldquo;missing&rdquo; and never counts as done.
+          </p>
+        </section>
         <section class="modal__section" id="task-modal-files-section" hidden>
           <h3>Files to modify</h3>
           <ul class="modal__list" id="task-modal-files"></ul>
@@ -187,6 +219,14 @@
         <section class="modal__section" id="task-modal-command-section" hidden>
           <h3>Agent command</h3>
           <pre class="modal__command" id="task-modal-command"></pre>
+        </section>
+        <section class="modal__section" id="task-modal-retries-section" hidden>
+          <h3>Retry budget</h3>
+          <p class="modal__desc" id="task-modal-retries"></p>
+        </section>
+        <section class="modal__section" id="task-modal-run-at-section" hidden>
+          <h3>Run at</h3>
+          <p class="modal__desc" id="task-modal-run-at"></p>
         </section>
       </div>
       <form class="modal__edit" id="task-modal-edit-form" hidden>
@@ -217,6 +257,14 @@
         <div class="modal__edit-field">
           <label for="task-edit-timeout">Agent timeout (seconds)</label>
           <input id="task-edit-timeout" name="agent_timeout_seconds" type="text" autocomplete="off">
+        </div>
+        <div class="modal__edit-field">
+          <label for="task-edit-retries">Retries left (blank = config default)</label>
+          <input id="task-edit-retries" name="retries_left" type="text" autocomplete="off">
+        </div>
+        <div class="modal__edit-field">
+          <label for="task-edit-run-at">Run at (blank = unset)</label>
+          <input id="task-edit-run-at" name="run_at" type="datetime-local" autocomplete="off">
         </div>
         <p class="modal__error" id="task-modal-error" hidden></p>
         <div class="modal__edit-actions">

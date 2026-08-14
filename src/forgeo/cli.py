@@ -6,23 +6,32 @@ Commands:
   forgeo folder, the coding agent command, and the refactor prompt, then
   writes a ``forgeo.yaml``. Running ``forgeo`` or ``forgeo start`` without
   a config triggers it automatically.
-* ``forgeo start --config forgeo.yaml`` — run the scheduled forgeo on one
-  repository. Every ``interval_minutes`` it picks an ``OPEN`` task from the
-  backlog, or runs a refactoring pass when the backlog is empty; everything
-  is committed and pushed on the main branch. When the agent needs human
-  input, a detailed ``BLOCKER.md`` file is written with what you must do.
-  The daemon binds no ports; live state is written to ``daemon.state.json``
-  and is served to you by ``forgeo web``.
+* ``forgeo start --config forgeo.yaml`` — start the scheduled forgeo on one
+  repository detached in the background and exit. Every ``interval_minutes``
+  it picks an ``OPEN`` task from the backlog, or runs a refactoring pass when
+  the backlog is empty; everything is committed and pushed on the main
+  branch. When the agent needs human input, a detailed ``BLOCKER.md`` file is
+  written with what you must do. The daemon binds no ports; live state is
+  written to ``daemon.state.json`` and is served to you by ``forgeo web``.
+  ``forgeo start -f`` (``--foreground``) runs the daemon in the foreground
+  instead, interruptible with Ctrl-C. The daemon watches
+  ``forgeo.yaml`` and re-reads it on the next cycle boundary when it changes
+  (or on ``SIGHUP``); path changes (``repo``, ``backlog``, ``blocker_file``,
+  ``log_file``) still need a ``forgeo restart``.
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
+* ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
+   config, repository, branch and remote resolution, backlog, agent command,
+   and lock state. Reports all problems at once, never invokes the agent, and
+   exits non-zero when any problem is found.
 * ``forgeo status --config forgeo.yaml`` — print a read-only summary of the
    forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
    starts an agent.
 * ``forgeo stop --config forgeo.yaml`` — stop a running daemon gracefully
-   (SIGTERM; a cycle in progress finishes first).
+  (SIGTERM; a cycle in progress finishes first).
 * ``forgeo restart --config forgeo.yaml`` — stop the daemon when running,
-   then start it again detached in the background, re-reading the config.
+  then start it again detached in the background, re-reading the config.
 * ``forgeo instance add NAME --config PATH`` — register an existing
    ``forgeo.yaml`` under a stable instance name. Optional: ``start`` and
    ``stop`` register Forgeo automatically under its config's ``name``
@@ -32,19 +41,23 @@ Commands:
 * ``forgeo instance list`` / ``forgeo list`` — a table of every registered
    instance: config path, repository, daemon state, last outcome, and
    backlog counts.
-* ``forgeo web [--host HOST] [--port PORT]`` — serve the central
-   multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
+* ``forgeo web [--host HOST] [--port PORT] [--token [TOKEN]]`` — serve the
+   central multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
    aggregating every registered instance straight from its files. With
    ``-d``/``--detach`` it starts in the background and returns once the
    server reports it bound; ``forgeo web stop`` SIGTERMs a running
    dashboard and ``forgeo web status`` reports whether one is running.
    The dashboard is host-global (one per user): its lock lives at
    ``~/.config/forgeo/web.lock`` (or ``$FORGEO_CONFIG_DIR/web.lock``),
-   independent of any per-repo backlog lock.
+   independent of any per-repo backlog lock. ``--token`` (optional) turns on
+   bearer auth on every ``/api/*`` route: the token is persisted to
+   ``~/.config/forgeo/web.toml`` (generated and printed once when given with
+   no value), and a token already present there enables auth even without
+   the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``status``, ``stop`` and ``restart`` each accept either
-``--config PATH`` (a config file) or ``--name NAME`` (an instance resolved
-from the registry); the two options are mutually exclusive.
+``start``, ``once``, ``status``, ``validate``, ``stop`` and ``restart`` each
+accept either ``--config PATH`` (a config file) or ``--name NAME`` (an
+instance resolved from the registry); the two options are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -60,6 +73,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
@@ -72,19 +86,22 @@ from forgeo.backlog import (
     backlog_status_counts,
     oldest_open_task,
     open_backlog,
+    unsatisfied_dependencies,
 )
 from forgeo.central import (
+    AUTOGENERATE_TOKEN,
     DEFAULT_HOST,
     DEFAULT_PORT,
     WEB_START_TIMEOUT_SECONDS,
     WEB_STOP_TIMEOUT_SECONDS,
 )
 from forgeo.config import load_config
-from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held
+from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.daemon_control import (
     STOP_TIMEOUT_SECONDS,
     DaemonError,
     restart_daemon,
+    start_daemon,
     stop_daemon,
 )
 from forgeo.forgeo import Forgeo
@@ -97,11 +114,12 @@ from forgeo.instances import (
     remove_instance,
     resolve_instance,
 )
-from forgeo.models import ForgeoConfig, SandboxMode, Task
+from forgeo.models import ForgeoConfig, SandboxMode, Task, TaskStatus
 from forgeo.paths import lock_path, runs_path, update_state_path
 from forgeo.runs import RunRecorder
 from forgeo.setup import run_setup
 from forgeo.update import check_for_update
+from forgeo.validate import render_report, validate_config
 
 DEFAULT_CONFIG = Path("forgeo.yaml")
 
@@ -131,13 +149,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Overwrite an existing config file."
     )
 
-    start_parser = sub.add_parser("start", help="Start the scheduled forgeo for a repository.")
+    start_parser = sub.add_parser(
+        "start", help="Start the scheduled forgeo daemon for a repository."
+    )
     _add_config_or_name(start_parser)
     start_parser.add_argument(
         "--interval-minutes",
         type=int,
         default=None,
         help="Override the schedule interval from the config file.",
+    )
+    start_parser.add_argument(
+        "-f",
+        "--foreground",
+        action="store_true",
+        help="Run the daemon in the foreground instead of starting it "
+        "detached in the background.",
     )
 
     once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
@@ -148,6 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a read-only summary of Forgeo (never starts an agent).",
     )
     _add_config_or_name(status_parser)
+
+    validate_parser = sub.add_parser(
+        "validate",
+        help="Read-only dry run: check config, repo, branch, remote, backlog, "
+        "agent command and lock state without starting anything.",
+    )
+    _add_config_or_name(validate_parser)
 
     stop_parser = sub.add_parser(
         "stop",
@@ -226,6 +260,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--detach",
         action="store_true",
         help="Start the dashboard in the background and return once it binds.",
+    )
+    web_parser.add_argument(
+        "--token",
+        nargs="?",
+        const=AUTOGENERATE_TOKEN,
+        default=None,
+        metavar="TOKEN",
+        help="Require a bearer token on every /api/* route. With a value, "
+        "that token is persisted to ~/.config/forgeo/web.toml; without a "
+        "value a fresh token is generated, printed once, and saved. When "
+        "web.toml already holds a token, auth is on even without this flag; "
+        "with no flag and no token file the dashboard stays open (no auth).",
     )
     web_parser.add_argument(
         "--timeout",
@@ -423,11 +469,11 @@ def _prepare_worker(
 ) -> tuple[Path, ForgeoConfig, Forgeo, Any] | None:
     """Resolve the config, take the run lock, and build Forgeo.
 
-    Shared by ``start`` and ``once``. With ``register=True`` the instance is
-    added to the registry *before* the run lock is taken, so a visible lock
-    always implies a registered instance. Returns ``None`` (after printing
-    an error) when any step fails; on success the caller owns the lock and
-    must close it.
+    Shared by ``once`` and the foreground ``start``. With ``register=True``
+    the instance is added to the registry *before* the run lock is taken, so
+    a visible lock always implies a registered instance. Returns ``None``
+    (after printing an error) when any step fails; on success the caller
+    owns the lock and must close it.
     """
     config_path = _resolved_config_path(args)
     if config_path is None:
@@ -454,18 +500,102 @@ def _prepare_worker(
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    """Handle ``forgeo start``: the persistent scheduled worker."""
+    """Handle ``forgeo start``: the scheduled worker.
+
+    By default the daemon is started detached in the background and this
+    command exits; ``--foreground`` runs it in the foreground instead.
+    """
+    if getattr(args, "foreground", False):
+        return _cmd_start_foreground(args)
+    return _cmd_start_detached(args)
+
+
+def _cmd_start_detached(args: argparse.Namespace) -> int:
+    """Handle ``forgeo start`` without ``--foreground``: detach and exit.
+
+    Resolves and registers the config like the foreground path, refuses when
+    the per-forgeo lock is already held, fails fast when ``forgeo validate``
+    finds problems (so a broken config never leaves a silently dead daemon),
+    then launches the detached daemon and returns its pid.
+    """
+    config_path = _resolved_config_path(args)
+    if config_path is None:
+        return 1
+    try:
+        config = _resolve_config(args, config_path)
+    except yaml.YAMLError as exc:
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return 1
+    except ValidationError as exc:
+        console.print(
+            f"[red]Config file {config_path} is invalid:[/red]",
+            soft_wrap=True,
+        )
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error["loc"])
+            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+        return 1
+    if config is None:
+        return 1
+    _register_if_missing(args, config_path, config)
+    daemon_lock = lock_path(config)
+    if is_lock_held(daemon_lock):
+        pid = read_lock_pid(daemon_lock)
+        suffix = f" (pid {pid})" if pid is not None else ""
+        console.print(
+            f"[red]Forgeo {config.name!r} is already running{suffix}; "
+            f"stop it with `forgeo stop`.[/red]"
+        )
+        return 1
+    report = validate_config(config)
+    if not report.healthy:
+        console.print(render_report(config, report), soft_wrap=True)
+        return 1
+    extra_args = (
+        ["--interval-minutes", str(args.interval_minutes)]
+        if args.interval_minutes is not None
+        else None
+    )
+    try:
+        pid = start_daemon(config_path, config, extra_args=extra_args)
+    except DaemonError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    console.print(
+        f"[green]Forgeo {config.name!r} started in the background "
+        f"(pid {pid}, interval {config.interval_minutes} min).[/green]"
+    )
+    return 0
+
+
+def _cmd_start_foreground(args: argparse.Namespace) -> int:
+    """Handle ``forgeo start -f``: the persistent scheduled worker."""
     prepared = _prepare_worker(args, register=True)
     if prepared is None:
         return 1
     _config_path, config, forgeo, lock = prepared
 
     async def _serve() -> None:
-        daemon = ForgeoDaemon(config, forgeo)
+        daemon = ForgeoDaemon(
+            config,
+            forgeo,
+            config_path=_config_path,
+            forgeo_factory=_make_forgeo,
+            interval_override=args.interval_minutes,
+        )
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, daemon.stop)
+            except NotImplementedError:
+                pass
+        if hasattr(signal, "SIGHUP"):
+            try:
+                loop.add_signal_handler(signal.SIGHUP, daemon.request_reload)
             except NotImplementedError:
                 pass
         console.print(
@@ -556,18 +686,36 @@ def render_status(
     next_text = f"{nxt.id} — {nxt.title}" if nxt is not None else "(none)"
     daemon_text = "running" if daemon_running else "not running"
     outcome_text = last_outcome if last_outcome is not None else "(none)"
-    return "\n".join(
-        [
-            f"name: {config.name}",
-            f"repo: {config.repo}",
-            f"interval: {config.interval_minutes} min",
-            f"branch: {config.branch}",
-            f"backlog: {count_text}",
-            f"next: {next_text}",
-            f"daemon: {daemon_text}",
-            f"last outcome: {outcome_text}",
-        ]
-    )
+    lines = [
+        f"name: {config.name}",
+        f"repo: {config.repo}",
+        f"interval: {config.interval_minutes} min",
+        f"branch: {config.branch}",
+        f"backlog: {count_text}",
+        f"next: {next_text}",
+        f"daemon: {daemon_text}",
+        f"last outcome: {outcome_text}",
+    ]
+    waiting = _waiting_hint(tasks)
+    if waiting is not None:
+        lines.append(waiting)
+    return "\n".join(lines)
+
+
+def _waiting_hint(tasks: list[Task]) -> str | None:
+    """A status line naming the oldest OPEN task that is not yet runnable and
+    the dependency ids keeping it waiting, or ``None`` when there is none."""
+    open_tasks = [
+        task for task in tasks if task.status is TaskStatus.OPEN
+    ]
+    if not open_tasks:
+        return None
+    oldest = min(open_tasks, key=lambda task: task.created_at)
+    unmet = unsatisfied_dependencies(tasks, oldest)
+    if not unmet:
+        return None
+    detail = ", ".join(f"{dep['id']} ({dep['status']})" for dep in unmet)
+    return f"waiting on: {oldest.id} (needs COMPLETED: {detail})"
 
 
 def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:
@@ -618,6 +766,43 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Handle ``forgeo validate``: read-only dry run; never starts an agent.
+
+    Loads and validates the config, then checks the repository, branch and
+    remote resolution, the backlog, the agent command and the run lock state.
+    Never invokes the agent and makes no writes; exits non-zero when any
+    problem is found.
+    """
+    config_path = _resolved_config_path(args)
+    if config_path is None:
+        return 1
+    if not config_path.exists():
+        console.print(f"[red]Config file not found: {config_path}[/red]")
+        return 1
+    try:
+        config = load_config(config_path)
+    except yaml.YAMLError as exc:
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return 1
+    except ValidationError as exc:
+        console.print(
+            f"[red]Config file {config_path} is invalid:[/red]",
+            soft_wrap=True,
+        )
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error["loc"])
+            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+        return 1
+    report = validate_config(config)
+    console.print(render_report(config, report), soft_wrap=True)
+    return 0 if report.healthy else 1
 
 
 def _stop_daemon(config: ForgeoConfig, timeout: float) -> bool:
@@ -751,7 +936,8 @@ def cmd_web(args: argparse.Namespace) -> int:
 
     Runs in the foreground by default, or detached in the background with
     ``-d``; ``forgeo web stop`` and ``forgeo web status`` manage a running
-    dashboard through its host-global lock file.
+    dashboard through its host-global lock file. ``--token`` (optional)
+    turns on bearer auth on every ``/api/*`` route.
     """
     from forgeo.central import run_foreground
 
@@ -762,7 +948,7 @@ def cmd_web(args: argparse.Namespace) -> int:
         return cmd_web_status(args)
     if args.detach:
         return cmd_web_detach(args)
-    return run_foreground(host=args.host, port=args.port)
+    return run_foreground(host=args.host, port=args.port, token=args.token)
 
 
 def cmd_web_detach(args: argparse.Namespace) -> int:
@@ -770,9 +956,11 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
 
     Refuses while another live dashboard holds the host-global lock; a stale
     lock (dead recorded PID) is taken over with a warning, matching the
-    daemon's lock behavior.
+    daemon's lock behavior. The bearer token is resolved up front and
+    persisted to ``web.toml`` so the detached child picks it up; a freshly
+    generated token is printed to the console exactly once.
     """
-    from forgeo.central import WebLock, WebLockError, start_web_detached
+    from forgeo.central import WebLock, WebLockError, resolve_web_token, start_web_detached
 
     lock = WebLock()
     if lock.is_held():
@@ -786,6 +974,7 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
             f"[yellow]Stale dashboard lock {lock.lock_path} "
             f"(pid {lock.pid} is dead); taking over.[/yellow]"
         )
+    token, generated = resolve_web_token(args.token)
     try:
         pid = start_web_detached(args.host, args.port, args.timeout)
     except WebLockError as exc:
@@ -795,6 +984,11 @@ def cmd_web_detach(args: argparse.Namespace) -> int:
         f"[green]Forgeo central dashboard started in the background "
         f"(pid {pid}, http://{args.host}:{args.port}).[/green]"
     )
+    if generated:
+        console.print(
+            f"[bold]Web token:[/bold] {token}\n"
+            f"[dim]Required on every /api/* request; saved to web.toml.[/dim]"
+        )
     return 0
 
 
@@ -836,6 +1030,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "once": cmd_once,
     "init": cmd_init,
     "status": cmd_status,
+    "validate": cmd_validate,
     "stop": cmd_stop,
     "restart": cmd_restart,
     "instance": cmd_instance,

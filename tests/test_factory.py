@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from typing import Self
@@ -48,7 +49,7 @@ async def test_task_success_is_committed_on_main(git_repo, tmp_path):
     assert outcome == "task"
     assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
     assert git(git_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
-    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing (#TASK-001)"
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing"
     assert "forgeo" not in git(git_repo, "branch")
 
 
@@ -132,7 +133,7 @@ async def test_task_success_pushes_to_remote(git_repo, tmp_path):
 
     await forgeo.run_cycle()
 
-    assert git(remote, "log", "-1", "--format=%s") == "Do the thing (#TASK-001)"
+    assert git(remote, "log", "-1", "--format=%s") == "Do the thing"
 
 
 async def test_task_error_is_failed_and_work_discarded(git_repo, tmp_path):
@@ -182,7 +183,7 @@ async def test_task_blocked_persists_reason_and_renders_blocker_file(git_repo, t
     assert task.blocker_reason == ["Which retry policy should I use?"]
     assert task.blocked_count == 1
     assert not forgeo.config.blocker_file.exists()  # derived view renders next cycle
-    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing (#TASK-001) [partial]"
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing [partial]"
 
     assert await forgeo.run_cycle() == "blocked"
     blocker = forgeo.config.blocker_file.read_text(encoding="utf-8")
@@ -388,6 +389,221 @@ async def test_refactor_blocked_sends_telegram_message(git_repo, tmp_path, monke
     assert "License question?" in text
 
 
+async def test_blocked_task_sends_webhook_message(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task(description="Decide the retry policy."))
+    agent.result = ExecutionResult(
+        status=ExecutionStatus.BLOCKED,
+        questions=["Which retry policy should I use?"],
+    )
+    agent.effect = lambda: (git_repo / "wip.txt").write_text("partial\n", encoding="utf-8")
+
+    captured = {"calls": 0}
+
+    def fake_urlopen(request, **kwargs):
+        captured["calls"] += 1
+        captured["url"] = request.full_url
+        captured["method"] = request.method
+        captured["content_type"] = next(
+            value for key, value in request.headers.items() if key.lower() == "content-type"
+        )
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert captured["calls"] == 1
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert captured["url"] == "https://hooks.example.com/forgeo"
+    assert captured["method"] == "POST"
+    assert captured["content_type"] == "application/json"
+    assert captured["payload"] == {
+        "forgeo": "test-forgeo",
+        "outcome": "blocked",
+        "task_id": "TASK-001",
+        "task_title": "Do the thing",
+        "reason": "Which retry policy should I use?",
+    }
+
+
+async def test_no_webhook_message_when_not_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    calls = []
+
+    def fake_urlopen(request, **kwargs):
+        calls.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert calls == []
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+
+
+async def test_webhook_completed_sent_when_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo,
+        tmp_path,
+        notify_webhook_url="https://hooks.example.com/forgeo",
+        notify_webhook_events=["blocked", "completed", "failed"],
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text("changed\n", encoding="utf-8")
+
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+    assert captured == [
+        {
+            "forgeo": "test-forgeo",
+            "outcome": "completed",
+            "task_id": "TASK-001",
+            "task_title": "Do the thing",
+            "reason": "",
+        }
+    ]
+
+
+async def test_webhook_completed_not_sent_by_default(git_repo, tmp_path, monkeypatch):
+    """With only the URL set (default events), completed runs do not POST."""
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text("changed\n", encoding="utf-8")
+
+    calls = []
+
+    def fake_urlopen(request, **kwargs):
+        calls.append(request)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.COMPLETED
+    assert calls == []
+
+
+async def test_webhook_failed_sent_when_configured(git_repo, tmp_path, monkeypatch):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo,
+        tmp_path,
+        notify_webhook_url="https://hooks.example.com/forgeo",
+        notify_webhook_events=["blocked", "completed", "failed"],
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="agent exploded")
+
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    await forgeo.run_cycle()
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert captured == [
+        {
+            "forgeo": "test-forgeo",
+            "outcome": "failed",
+            "task_id": "TASK-001",
+            "task_title": "Do the thing",
+            "reason": "agent exploded",
+        }
+    ]
+
+
+async def test_webhook_failure_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def boom(request, **kwargs):
+        raise OSError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
+async def test_webhook_timeout_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def timeout(request, **kwargs):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", timeout)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
+async def test_webhook_non_200_logs_warning_and_keeps_outcome(
+    git_repo, tmp_path, monkeypatch, caplog
+):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, notify_webhook_url="https://hooks.example.com/forgeo"
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
+
+    def fake_urlopen(request, **kwargs):
+        return FakeErrorResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
+    assert any("Webhook notification failed" in r.message for r in caplog.records)
+
+
 async def test_refactor_pass_when_backlog_empty(git_repo, tmp_path):
     forgeo, agent, _backlog = make_forgeo(git_repo, tmp_path)
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
@@ -494,3 +710,238 @@ async def test_override_is_persisted_and_survives_reload(git_repo, tmp_path):
     )
     task = await backlog.get_task("TASK-001")
     assert task.agent_command == "claude -p \"$FORGEO_TASK\" --model cheap"
+
+
+async def test_task_run_snapshots_backlog_before_agent(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    await forgeo.run_cycle()
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [task["id"] for task in store["tasks"]] == ["TASK-001"]
+
+
+async def test_refactor_run_snapshots_backlog_before_agent(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(status=TaskStatus.COMPLETED))
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+
+    await forgeo.run_cycle()
+
+    bak = tmp_path / "backlog.json.bak"
+    assert bak.is_file()
+    store = json.loads(bak.read_text(encoding="utf-8"))
+    assert [task["id"] for task in store["tasks"]] == ["TASK-001"]
+
+
+# --------------------------------------------------------------------------- #
+# Failed-task retry policy                                                     #
+# --------------------------------------------------------------------------- #
+
+
+async def test_failed_retry_disabled_by_default(git_repo, tmp_path):
+    """With failed_retry_max left at 0 (the default), a FAILED task stays
+    FAILED forever and the engine moves on to a refactor pass: unchanged."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+
+    assert await forgeo.run_cycle() == "task"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 0
+
+    assert await forgeo.run_cycle() == "refactor"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 0
+    assert task.failure_reason == ["boom"]
+
+
+async def test_failed_task_is_retried_and_can_succeed(git_repo, tmp_path):
+    """A transient failure is retried after the wait; a retried task can
+    succeed and its retry count is recorded on the task."""
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, failed_retry_max=1, failed_retry_wait_cycles=1
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="network hiccup")
+    agent.effect = lambda: (git_repo / "app.py").write_text("garbage\n", encoding="utf-8")
+
+    assert await forgeo.run_cycle() == "task"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failure_reason == ["network hiccup"]
+    assert task.retry_count == 0
+
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+    assert await forgeo.run_cycle() == "task"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.COMPLETED
+    assert task.retry_count == 1
+    assert task.failed_wait_cycles == 0
+    assert task.failure_reason == []
+
+
+async def test_failed_task_waits_configured_cycles_before_retry(git_repo, tmp_path):
+    """failed_retry_wait_cycles is a backoff: the retry is scheduled only
+    after that many cycles of waiting."""
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, failed_retry_max=1, failed_retry_wait_cycles=2
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+    agent.effect = lambda: (git_repo / "app.py").write_text("garbage\n", encoding="utf-8")
+
+    assert await forgeo.run_cycle() == "task"
+    assert (await backlog.get_task("TASK-001")).failed_wait_cycles == 0
+
+    assert await forgeo.run_cycle() == "refactor"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.failed_wait_cycles == 1
+
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+    assert await forgeo.run_cycle() == "task"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.COMPLETED
+    assert task.retry_count == 1
+
+
+async def test_failed_task_exhausts_retries_stays_failed(git_repo, tmp_path):
+    """Once the retry budget is spent the task stays FAILED with its original
+    failure reason preserved, and the engine moves on to other work."""
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, failed_retry_max=1, failed_retry_wait_cycles=1
+    )
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+    agent.effect = lambda: (git_repo / "app.py").write_text("garbage\n", encoding="utf-8")
+
+    assert await forgeo.run_cycle() == "task"
+    assert await forgeo.run_cycle() == "task"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 1
+    assert task.failure_reason == ["boom"]
+
+    assert await forgeo.run_cycle() == "refactor"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 1
+    assert task.failure_reason == ["boom"]
+
+
+async def test_blocked_task_is_never_retried(git_repo, tmp_path):
+    """A BLOCKED task is untouched by the retry policy: it still needs a
+    human, and Forgeo keeps pausing until it is reopened."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=5)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["which policy?"])
+
+    assert await forgeo.run_cycle() == "task"
+    assert await forgeo.run_cycle() == "blocked"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.BLOCKED
+    assert task.retry_count == 0
+    assert task.failed_wait_cycles == 0
+
+
+async def test_retried_task_that_blocks_stays_blocked(git_repo, tmp_path):
+    """A retried task that then blocks still needs a human: it is never
+    auto-retried while BLOCKED, even with retries left."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=3)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+    await forgeo.run_cycle()
+
+    agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["decide?"])
+    assert await forgeo.run_cycle() == "task"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.BLOCKED
+    assert task.retry_count == 1
+
+    assert await forgeo.run_cycle() == "blocked"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.BLOCKED
+    assert task.retry_count == 1
+
+
+async def test_per_task_retries_left_override_enables_retry(git_repo, tmp_path):
+    """A per-task retries_left override enables retries even when the config
+    has failed_retry_max: 0."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(retries_left=1))
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+    agent.effect = lambda: (git_repo / "app.py").write_text("garbage\n", encoding="utf-8")
+
+    assert await forgeo.run_cycle() == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.FAILED
+
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+    assert await forgeo.run_cycle() == "task"
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.COMPLETED
+    assert task.retry_count == 1
+
+
+async def test_per_task_retries_left_zero_disables_retry(git_repo, tmp_path):
+    """A per-task retries_left: 0 opts a task out of retries even when the
+    config would retry it."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=5)
+    await backlog.create_task(make_task(retries_left=0))
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+
+    assert await forgeo.run_cycle() == "task"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.FAILED
+
+    assert await forgeo.run_cycle() == "refactor"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 0
+    assert task.failure_reason == ["boom"]
+
+
+async def test_manual_reopen_of_failed_task_resets_retry_budget(git_repo, tmp_path):
+    """A human reopening a FAILED task (setting it back to OPEN) resets the
+    retry budget, so the manual retry gets a fresh failed_retry_max."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, failed_retry_max=1)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom")
+    agent.effect = lambda: (git_repo / "app.py").write_text("garbage\n", encoding="utf-8")
+
+    assert await forgeo.run_cycle() == "task"
+    await backlog.retry_task("TASK-001")  # simulate a scheduled retry
+    assert await forgeo.run_cycle() == "task"  # retried, fails again
+
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.FAILED
+    assert task.retry_count == 1
+
+    await backlog.update_status("TASK-001", TaskStatus.OPEN)  # manual reopen
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.OPEN
+    assert task.retry_count == 0
+    assert task.failed_wait_cycles == 0

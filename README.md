@@ -17,7 +17,10 @@ a backlog, and it decides what to work on next, runs your
 agent on it, and commits the result. Progress, pending decisions, and history
 are tracked in plain files you can inspect at any time, plus a web dashboard.
 Forgeo only interrupts you when a decision is genuinely yours to
-make, everything else happens autonomously.
+make, everything else happens autonomously. Transient failures (a network
+blip, a flaky test) are retried automatically when the retry policy is
+enabled, and only a task that keeps failing or genuinely needs a human
+decision ever reaches you.
 
 All you need is basic comfort with a terminal, a git repository, and any coding
 agent CLI.
@@ -41,8 +44,9 @@ pipx install forgeo-cli
 # 2. Create your Forgeo (guided wizard, run from your project root)
 forgeo init
 
-# 3. Start Forgeo
-forgeo start   # run forever: every interval_minutes, implement the oldest OPEN task
+# 3. Start Forgeo (detached in the background; exits immediately)
+forgeo start   # every interval_minutes, implement the oldest OPEN task (dependencies first)
+forgeo stop    # stop the daemon again
 ```
 
 `forgeo init` writes `forgeo.yaml` and a `.forgeo/` folder for the backlog
@@ -52,8 +56,15 @@ it runs, Forgeo does the rest. Open the dashboard with `forgeo web` (default <ht
 
 ![Forgeo web console](docs/img/console.png)
 
+By default the dashboard is open to anyone who can reach the port. On a
+shared host, protect it with bearer-token auth: `forgeo web --token`
+generates a token (printed once, saved to `~/.config/forgeo/web.toml`) and
+requires `Authorization: Bearer <token>` on every `/api/*` route — see
+[Web console & HTTP API](docs/web-console-api.md).
+
 One-off commands: `forgeo once` (single cycle), `forgeo status` (summary),
-`forgeo stop`, `forgeo restart`, every command is in the
+`forgeo validate` (read-only dry run before starting), `forgeo stop`,
+`forgeo restart`, every command is in the
 [CLI reference](docs/cli-reference.md).
 
 You can run several factories at once, one per repository, each config is
@@ -75,7 +86,10 @@ central dashboard, `forgeo web`.
 | Web dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
 
 Everything is stored in plain files: the backlog, `forgeo.log`, and
-`BLOCKER.md` whenever a decision is pending.
+`BLOCKER.md` whenever a decision is pending. The backlog is snapshotted
+(rotating `backlog.json.bak` files) before every agent run and on daemon
+startup, and restored automatically if it is ever found corrupt — a bad write
+never loses your tasks.
 
 ## Develop
 

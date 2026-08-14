@@ -4,8 +4,8 @@ Each run does exactly one of three things:
 
 1. A ``BLOCKED`` task exists -> render the blocker file (the detailed
    explanation of what the human must do) from the backlog and pause.
-2. An ``OPEN`` task exists -> execute it with the agent, commit and push the
-   result on the main branch.
+2. A runnable ``OPEN`` task exists (its dependencies are all ``COMPLETED``) ->
+   execute it with the agent, commit and push the result on the main branch.
 3. The backlog has nothing runnable -> run the agent in refactoring mode on
    the same branch, committing and pushing whatever it improves.
 
@@ -42,7 +42,7 @@ from forgeo.models import (
     Task,
     TaskStatus,
 )
-from forgeo.notify import BlockedNotice, send_blocked_notice
+from forgeo.notify import BlockedNotice, send_blocked_notice, send_webhook_notice
 from forgeo.paths import runs_path
 from forgeo.runs import RunRecorder
 
@@ -91,7 +91,7 @@ class Forgeo:
         self.backlog = backlog
         self.agent = agent
         self.git = git
-        self.recorder = RunRecorder(runs_path(config))
+        self.recorder = RunRecorder(runs_path(config), keep=config.run_history_keep)
         self._last_task: Task | None = None
         self._last_agent_result: ExecutionResult | None = None
         self._last_commit_sha: str | None = None
@@ -128,6 +128,8 @@ class Forgeo:
             logger.info("No BLOCKED tasks remain; removing derived blocker file.")
             self.config.blocker_file.unlink(missing_ok=True)
 
+        await self._process_failed_retries(tasks)
+        tasks = await self.backlog.list_tasks()
         task = oldest_open_task(tasks)
         if task is not None:
             if not await self.git.a_is_clean():
@@ -148,6 +150,52 @@ class Forgeo:
         return "refactor"
 
     # ------------------------------------------------------------------ #
+    # Failed-task retries                                                 #
+    # ------------------------------------------------------------------ #
+
+    async def _process_failed_retries(self, tasks: list[Task]) -> None:
+        """Move retry-eligible ``FAILED`` tasks back to ``OPEN`` with backoff.
+
+        A task is retry-eligible when its retry budget is not exhausted: the
+        per-task ``retries_left`` override when set, else the config's
+        ``failed_retry_max``. Each cycle it stays ``FAILED`` and eligible its
+        ``failed_wait_cycles`` counter is bumped; once that reaches
+        ``failed_retry_wait_cycles`` the task is moved back to ``OPEN`` and
+        its ``retry_count`` is incremented. A task that exhausts its budget
+        stays ``FAILED`` with its original ``failure_reason`` preserved.
+
+        With ``failed_retry_max: 0`` (the default) and no per-task override
+        this is a no-op, so the historical behavior is unchanged. ``BLOCKED``
+        tasks are never touched — blocking always needs a human.
+        """
+        wait = self.config.failed_retry_wait_cycles
+        for task in tasks:
+            if task.status is not TaskStatus.FAILED:
+                continue
+            budget = task.retries_left
+            if budget is None:
+                budget = self.config.failed_retry_max
+            if budget <= 0 or task.retry_count >= budget:
+                continue
+            if task.failed_wait_cycles + 1 < wait:
+                await self.backlog.bump_failed_wait(task.id)
+                logger.info(
+                    "Task %s failed; retry %d/%d scheduled in %d more cycle(s).",
+                    task.id,
+                    task.retry_count + 1,
+                    budget,
+                    wait - task.failed_wait_cycles - 1,
+                )
+            else:
+                await self.backlog.retry_task(task.id)
+                logger.info(
+                    "Task %s moved back to OPEN for retry %d/%d.",
+                    task.id,
+                    task.retry_count + 1,
+                    budget,
+                )
+
+    # ------------------------------------------------------------------ #
     # Run history                                                         #
     # ------------------------------------------------------------------ #
 
@@ -166,9 +214,44 @@ class Forgeo:
                 agent_exit_code=self._run_exit_code(outcome),
                 commit_sha=self._last_commit_sha if outcome in ("task", "refactor") else None,
                 reason=self._last_run_reason if outcome in ("task", "refactor") else None,
+                output_logs=self._run_output_logs(outcome),
+                retry_count=self._run_retry_count(task, outcome),
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
             )
         )
+
+    def _run_retry_count(self, task: Task | None, outcome: str) -> int | None:
+        """The retry count to surface on a run record, if any.
+
+        Kept only for task runs whose task has actually been retried before
+        this run (``retry_count > 0``), so the History tab shows at a glance
+        that a run was a retry without cluttering never-retried runs. Refactor
+        runs and records for untouched tasks store ``None``.
+        """
+        if outcome not in ("task", "blocked"):
+            return None
+        if task is None or task.retry_count <= 0:
+            return None
+        return task.retry_count
+
+    def _run_output_logs(self, outcome: str) -> list[str] | None:
+        """The bounded agent-output tail to persist for a finished cycle.
+
+        Kept only for cycles that actually ran the agent (``task``/``refactor``)
+        and capped at ``run_output_lines`` lines so a chatty agent can never
+        blow up a run record. ``None`` (not ``[]``) when nothing was captured,
+        keeping records without output indistinguishable from pre-field ones.
+        """
+        if outcome not in ("task", "refactor"):
+            return None
+        result = self._last_agent_result
+        logs = result.output_logs if result is not None else None
+        if not logs:
+            return None
+        cap = self.config.run_output_lines
+        if cap <= 0:
+            return None
+        return logs[-cap:]
 
     def _run_kind(self, outcome: str) -> RunKind | None:
         if outcome in ("task", "blocked"):
@@ -213,8 +296,8 @@ class Forgeo:
         result, ok = await self._run_agent(
             task,
             instruction=task.instruction,
-            success_message=f"{task.title} (#{task.id})",
-            blocked_message=f"{task.title} (#{task.id}) [partial]",
+            success_message=task.title,
+            blocked_message=f"{task.title} [partial]",
             command=task.agent_command,
             timeout_seconds=task.agent_timeout_seconds,
         )
@@ -223,7 +306,9 @@ class Forgeo:
             await self.backlog.set_blocked(task.id, result.reason)
             return
         if result.status is ExecutionStatus.ERROR:
-            await self.backlog.set_failed(task.id, self._failure_reason(result))
+            reason = self._failure_reason(result)
+            await self.backlog.set_failed(task.id, reason)
+            self._notify_webhook("failed", task, "\n".join(reason))
             return
         if not ok:
             # SUCCESS whose commit (or no-change) path failed: already marked
@@ -231,6 +316,7 @@ class Forgeo:
             return
         await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
         self.config.blocker_file.unlink(missing_ok=True)
+        self._notify_webhook("completed", task, "")
         logger.info("Task %s completed.", task.id)
 
     async def _run_agent(
@@ -250,8 +336,13 @@ class Forgeo:
 
         Returns the execution result and whether the SUCCESS commit path
         succeeded, so callers can apply backlog status transitions.
+
+        The backlog is snapshotted before the agent starts, so a bad write
+        during or after the run can always be rolled back to the pre-run
+        state.
         """
         self._last_task = task
+        await self.backlog.snapshot()
         result = await self.agent.run_task(
             task,
             RepoContext(repo_path=self.config.repo, branch=self.config.branch),
@@ -347,7 +438,9 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        await self.backlog.set_failed(task.id, self._failure_reason(result))
+        reason = self._failure_reason(result)
+        await self.backlog.set_failed(task.id, reason)
+        self._notify_webhook("failed", task, "\n".join(reason))
 
     async def _fail_no_changes(self, task: Task) -> None:
         """Fail a task whose agent exited 0 without producing any changes.
@@ -389,6 +482,7 @@ class Forgeo:
             )
             if not is_refactor:
                 await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON])
+                self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(
@@ -459,7 +553,7 @@ class Forgeo:
     # ------------------------------------------------------------------ #
 
     def _notify_blocked(self, entry: BlockerEntry) -> None:
-        """Send a Telegram notification for a newly blocked task or refactor pass.
+        """Send notifications for a newly blocked task or refactor pass.
 
         The message contains Forgeo name, the task id and title, and the
         first lines of the blocker reason. Notifications are optional and never
@@ -472,6 +566,21 @@ class Forgeo:
             reason="\n".join(reason) if reason else NO_BLOCKER_REASON,
         )
         send_blocked_notice(self.config, notice)
+        send_webhook_notice(self.config, "blocked", notice)
+
+    def _notify_webhook(self, outcome: str, task: Task, reason: str) -> None:
+        """Send a generic webhook notification for one run outcome.
+
+        ``outcome`` is one of ``blocked``, ``completed`` or ``failed``; the
+        notification is skipped unless ``outcome`` is enabled in the config.
+        Notifications are optional and never change the outcome of the cycle:
+        a failure is only logged.
+        """
+        send_webhook_notice(
+            self.config,
+            outcome,
+            BlockedNotice(task_id=task.id, task_title=task.title, reason=reason),
+        )
 
     async def _render_blocker(self, blocked: list[Task]) -> None:
         """Render ``BLOCKER.md`` as a derived view of the backlog's BLOCKED tasks.

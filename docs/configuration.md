@@ -6,8 +6,12 @@ and validated on every invocation; relative paths resolve against the config
 file's own directory, so a config can live anywhere and still point at sibling
 directories.
 
-The daemon reads `forgeo.yaml` **only at startup** — after editing the config
-use `forgeo restart` so it re-reads the file.
+The daemon watches `forgeo.yaml` and re-reads it on the next cycle boundary
+when the file changes (or on `SIGHUP`): a valid change is applied from the
+next cycle, an invalid one is logged and the last valid config stays in use.
+Relocating the `repo`, `backlog`, `blocker_file` or `log_file` paths is
+deferred to a restart (the daemon's lock files stay pinned to its startup
+paths), so `forgeo restart` is still used for those.
 
 ## Keys
 
@@ -33,9 +37,15 @@ use `forgeo restart` so it re-reads the file.
 | `no_changes_exit_code` | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
 | `refactor_prompt` | default refactor prompt | Instruction used when the backlog is empty. |
 | `log_file` | `forgeo.log` | Where the daemon writes its log. |
+| `run_history_keep` | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
+| `run_output_lines` | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
+| `failed_retry_max` | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
+| `failed_retry_wait_cycles` | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
 | `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
 | `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
+| `notify_webhook_url` | — | Vendor-neutral webhook URL that receives a JSON POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when unset. |
+| `notify_webhook_events` | `["blocked"]` | Which outcomes to POST to `notify_webhook_url`; a subset of `blocked`, `completed`, `failed`. |
 
 ## Minimal example
 
@@ -189,11 +199,98 @@ When set, successful commits are pushed to `<remote> <branch>`. When omitted,
 Forgeo only commits locally. A push failure never discards the commit —
 the work stays committed locally and the error is logged.
 
+### `run_history_keep`
+
+Every finished cycle appends one line to `runs.jsonl` (next to the backlog).
+On a busy Forgeo that file would grow forever and is read fully by `forgeo
+status` and the web console, so Forgeo trims it on append: when the file
+holds `run_history_keep` lines or more, the oldest lines are dropped before
+the new record is written. Trimming is atomic (temp file + rename), so a
+reader never sees a half-trimmed file, and a failed trim is logged and
+skipped — it can never change the outcome of a cycle.
+
+Set `0` to disable retention entirely, keeping the original grow-forever
+behavior.
+
+### `run_output_lines`
+
+Every run record in `runs.jsonl` can carry the tail of what the agent printed
+(stdout and stderr), so a failed or blocked run is fully explainable later.
+To keep the file bounded, each record stores at most `run_output_lines` lines
+(the last ones) — a chatty agent can never blow up a run record. The web
+console's **History** tab shows this tail in a read-only, collapsible view.
+
+Set `0` to stop persisting agent output entirely (run records stay small and
+the History tab shows nothing for them). Old run records written before this
+field existed simply have no output.
+
+### `failed_retry_max` / `failed_retry_wait_cycles`
+
+Some failures are transient — a network blip, a flaky test, a dependency
+version hiccup — and a retry would succeed without a human. By default
+(`failed_retry_max: 0`) a `FAILED` task stays `FAILED` forever and needs a
+human to reopen it, exactly as before. Set a positive `failed_retry_max` and
+Forgeo retries a failed task automatically:
+
+- while a task is `FAILED` and retry-eligible, each cycle bumps its internal
+  wait counter; once `failed_retry_wait_cycles` cycles have passed it is
+  moved back to `OPEN` and Forgeo picks it up again (so with the default
+  `1`, the retry happens on the next cycle);
+- a task that keeps failing exhausts its budget and stays `FAILED` with its
+  original `failure_reason` preserved — a human reopens it as before;
+- the retry count is visible in `runs.jsonl` (the run record that finally
+  succeeds carries it) and in the web console (task card, task modal, and a
+  **retry** column in the History tab);
+- a `BLOCKED` task is **never** auto-retried — blocking still needs a human.
+
+A single task can override the global budget with its own `retries_left`
+field in the backlog (see [Backlog format](backlog.md)): set it to a number
+to cap or allow retries for just that task, or `0` to opt the task out of
+retries even when the config would retry it.
+
+```yaml
+failed_retry_max: 3           # retry each FAILED task up to 3 times
+failed_retry_wait_cycles: 2   # back off 2 cycles before each retry
+```
+
 ### Telegram notifications
 
 Both `telegram_bot_token` **and** `telegram_chat_id` must be set for blocked
 run notifications. A notification failure never changes the outcome of a
 cycle — it is logged as a warning.
+
+### Webhook notifications
+
+For integrations that are not Telegram (Slack, Discord, ntfy, ...), set
+`notify_webhook_url` to any HTTPS endpoint. Forgeo POSTs a small JSON payload
+with the forgeo name, the run outcome, the task id and title, and the reason:
+
+```json
+{
+  "forgeo": "my-forgeo",
+  "outcome": "blocked",
+  "task_id": "TASK-001",
+  "task_title": "Do the thing",
+  "reason": "Which retry policy should I use?"
+}
+```
+
+`outcome` is one of `blocked`, `completed` or `failed`. Blocked-run
+notifications are on whenever the URL is set; to also be notified on
+completed or failed runs, add them to `notify_webhook_events`:
+
+```yaml
+notify_webhook_url: "https://hooks.example.com/forgeo"
+notify_webhook_events:
+  - blocked
+  - completed
+  - failed
+```
+
+The payload is the JSON body of a `POST` with `Content-Type:
+application/json`; Forgeo considers any non-200 response a failure. Uses the
+stdlib only, with a 5-second timeout. A failing or unreachable webhook is
+logged as a warning and never changes the outcome of a cycle.
 
 ## Instance registry
 
@@ -241,6 +338,12 @@ The daemons bind no ports. The central dashboard (`forgeo web`, default port
 `8790`) reads every instance's data straight from its files, so it works
 whether or not each daemon is running — see
 [Web console & HTTP API](web-console-api.md).
+
+The dashboard's own settings live next to its lock, in
+`~/.config/forgeo/web.toml` (or `$FORGEO_CONFIG_DIR/web.toml`): a `token`
+key turns on bearer auth for every `/api/*` route. `forgeo web --token`
+generates one, prints it once, and saves it here; with no `web.toml` the
+dashboard stays open (no auth).
 
 ## Default refactor prompt
 

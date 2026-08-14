@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import urllib.parse
+from datetime import UTC, datetime
 from typing import Self
 
+import pytest
+
 from forgeo.backlog import JSONBacklog
+from forgeo.forgeo import TaskNotRunnableError
 from forgeo.git import GitManager
 from forgeo.models import (
     NO_CHANGES_DIRTY_REASON,
@@ -660,6 +664,84 @@ async def test_dirty_tree_skips_task(git_repo, tmp_path):
     outcome = await forgeo.run_cycle()
     assert outcome == "dirty"
     assert (await backlog.get_task("TASK-001")).status is TaskStatus.OPEN
+
+
+# --------------------------------------------------------------------------- #
+# forgeo run: one specific task                                                #
+# --------------------------------------------------------------------------- #
+
+
+async def test_run_task_id_executes_specific_task_not_oldest(git_repo, tmp_path):
+    """`forgeo run --task` picks the named task even when another OPEN task is
+    older, and leaves the older one untouched."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    older = make_task(
+        id="OLDEST-001",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    specific = make_task(
+        id="SELF-012",
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    await backlog.create_task(older)
+    await backlog.create_task(specific)
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    outcome = await forgeo.run_task_id("SELF-012")
+
+    assert outcome == "task"
+    assert (await backlog.get_task("OLDEST-001")).status is TaskStatus.OPEN
+    assert (await backlog.get_task("SELF-012")).status is TaskStatus.COMPLETED
+    assert agent.calls[0][0].id == "SELF-012"
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing"
+
+
+async def test_run_task_id_refuses_unknown_task(git_repo, tmp_path):
+    forgeo, _agent, _backlog = make_forgeo(git_repo, tmp_path)
+    with pytest.raises(TaskNotRunnableError, match="does not exist"):
+        await forgeo.run_task_id("NOPE-001")
+
+
+async def test_run_task_id_refuses_non_open_task(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(id="SELF-012", status=TaskStatus.COMPLETED))
+    with pytest.raises(TaskNotRunnableError, match="COMPLETED"):
+        await forgeo.run_task_id("SELF-012")
+
+
+async def test_run_task_id_refusal_writes_no_run_record(git_repo, tmp_path):
+    forgeo, _agent, _backlog = make_forgeo(git_repo, tmp_path)
+    with pytest.raises(TaskNotRunnableError):
+        await forgeo.run_task_id("NOPE-001")
+    assert forgeo.recorder.read() == []
+
+
+async def test_run_task_id_dirty_tree_returns_dirty(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    (git_repo / "manual.txt").write_text("wip\n", encoding="utf-8")
+
+    assert await forgeo.run_task_id("TASK-001") == "dirty"
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.OPEN
+
+
+async def test_run_task_id_records_a_run(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    await forgeo.run_task_id("TASK-001")
+
+    records = forgeo.recorder.read()
+    assert len(records) == 1
+    assert records[0].task_id == "TASK-001"
+    assert records[0].outcome.value == "SUCCESS"
 
 
 async def test_task_instruction_reaches_agent(git_repo, tmp_path):

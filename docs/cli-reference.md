@@ -1,7 +1,7 @@
 # CLI reference
 
 All commands read `forgeo.yaml` from the current directory; pass
-`--config <file>` to use a different one. `start`, `once`, `status`,
+`--config <file>` to use a different one. `start`, `once`, `run`, `status`,
 `validate`, `stop` and `restart` also accept `--name <instance>` to resolve
 the config from the **instance registry** — see [`forgeo instance`](#forgeo-instance)
 below.
@@ -99,6 +99,31 @@ Outcomes a cycle can produce:
 | `dirty` | The working tree was dirty; the task was not started. |
 | `skipped` | A previous run was still in progress (daemon only). |
 | `error` | A cycle crashed (daemon only). |
+
+## `forgeo run`
+
+Run exactly **one specific task** by id and exit — no daemon, no waiting for
+the backlog order. Use it for triage: rerun a `FAILED` task immediately
+(after reopening it), or try a risky task right now instead of letting the
+scheduler pick it later.
+
+```bash
+forgeo run --task SELF-012
+```
+
+| Flag | Description |
+| --- | --- |
+| `--task <id>` | Id of the `OPEN` task to run. **Required.** |
+| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+
+`forgeo run` shares the per-forgeo run lock with the daemon and `forgeo once`,
+so it never overlaps them — it refuses (exit `1`) while the lock is held. It
+also refuses (exit `1`) with a clear message when the task does not exist in
+the backlog or its status is not `OPEN` (a `FAILED` task must be reopened
+first, e.g. from the web console or by editing the backlog). On success it
+prints `Cycle finished: <outcome>` and records the run in `runs.jsonl` like
+any other task run.
 
 ## `forgeo status`
 
@@ -218,9 +243,9 @@ On success it prints the new daemon PID and interval.
 
 ### `--config` vs `--name`
 
-On `start`, `once`, `status`, `validate`, `stop` and `restart`, `--name`
-resolves the `forgeo.yaml` from the instance registry instead of reading
-`--config`. The two flags are mutually exclusive — passing both is an
+On `start`, `once`, `run`, `status`, `validate`, `stop` and `restart`,
+`--name` resolves the `forgeo.yaml` from the instance registry instead of
+reading `--config`. The two flags are mutually exclusive — passing both is an
 argparse error. An unknown instance name prints a clear error and exits
 non-zero.
 

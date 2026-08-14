@@ -98,6 +98,7 @@ over the codebase instead.
 ```bash
 forgeo status    # Config, backlog counts, next runnable task, daemon running?, last outcome
 forgeo once      # Run exactly one cycle in the foreground, no daemon left behind
+forgeo run --task SELF-012  # Run one specific OPEN task now (triage)
 forgeo stop      # Stop the background daemon
 forgeo restart   # Stop and start again (re-reads forgeo.yaml after edits)
 forgeo web       # Dashboard: every instance's backlog, run history and logs

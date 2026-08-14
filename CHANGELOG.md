@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `forgeo run --task <id>` runs exactly one specific `OPEN` task by id and
+  exits, instead of letting `forgeo once` pick the oldest one — for triage:
+  rerun a `FAILED` task (after reopening it) or try a risky task now. It
+  shares the same per-forgeo lock as the daemon and `forgeo once`, so it
+  never overlaps them; it refuses with a clear error when the task does not
+  exist or is not `OPEN`, and while another daemon/`once`/`run` holds the
+  lock.
+
 ## [0.6.0] - 2026-08-14
 
 ### Added

@@ -21,6 +21,12 @@ Commands:
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
+* ``forgeo run --task TASK-001 --config forgeo.yaml`` — run exactly one
+   specific ``OPEN`` task by id and exit, without waiting for the backlog
+   order or a scheduled run. For triage: rerun a ``FAILED`` task (after
+   reopening it) or try a risky task right now. Reuses the same per-forgeo
+   lock as ``once`` and the daemon, so it never overlaps them; it refuses
+   with a clear error when the task does not exist or is not ``OPEN``.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -55,9 +61,10 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``status``, ``validate``, ``stop`` and ``restart`` each
-accept either ``--config PATH`` (a config file) or ``--name NAME`` (an
-instance resolved from the registry); the two options are mutually exclusive.
+``start``, ``once``, ``run``, ``status``, ``validate``, ``stop`` and
+``restart`` each accept either ``--config PATH`` (a config file) or
+``--name NAME`` (an instance resolved from the registry); the two options
+are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -104,7 +111,7 @@ from forgeo.daemon_control import (
     start_daemon,
     stop_daemon,
 )
-from forgeo.forgeo import Forgeo
+from forgeo.forgeo import Forgeo, TaskNotRunnableError
 from forgeo.git import GitManager
 from forgeo.instances import (
     InstanceInfo,
@@ -169,6 +176,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
     _add_config_or_name(once_parser)
+
+    run_parser = sub.add_parser(
+        "run",
+        help="Run exactly one specific OPEN task by id and exit.",
+    )
+    _add_config_or_name(run_parser)
+    run_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the OPEN task to run now (triage: rerun a FAILED task "
+        "after reopening it, or try a risky task immediately).",
+    )
 
     status_parser = sub.add_parser(
         "status",
@@ -649,6 +669,48 @@ def cmd_once(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Handle ``forgeo run``: run exactly one specific task and exit.
+
+    Unlike ``forgeo once`` — which picks the oldest ``OPEN`` task — this
+    executes the task named by ``--task`` immediately, for triage: rerun a
+    ``FAILED`` task (after reopening it) or try a risky task right now. It
+    reuses the same per-forgeo lock as the daemon and ``once``, so it never
+    overlaps them; it refuses (exit 1) when the task does not exist or is
+    not ``OPEN``.
+    """
+    prepared = _prepare_worker(args)
+    if prepared is None:
+        return 1
+    _config_path, _config, forgeo, lock = prepared
+    task_id = args.task
+
+    async def _run_one() -> int:
+        check_for_update(update_state_path(_config), print_fn=console.print)
+        try:
+            outcome = await forgeo.run_task_id(task_id)
+        except TaskNotRunnableError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 1
+        console.print(f"[green]Cycle finished: {outcome}[/green]")
+        return 0
+
+    result = 1
+    try:
+        result = asyncio.run(_run_one())
+    except KeyboardInterrupt:
+        pass
+    except BacklogUnavailableError as exc:
+        # A backlog served over HTTP can simply be down; that is an
+        # operational failure to report, not a crash to trace back.
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
+        result = 1
+    finally:
+        lock.close()
+    return result
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Handle ``forgeo init``: the guided first-time setup."""
     if args.config.exists() and not args.force:
@@ -1028,6 +1090,7 @@ def cmd_web_status(args: argparse.Namespace) -> int:
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "start": cmd_start,
     "once": cmd_once,
+    "run": cmd_run,
     "init": cmd_init,
     "status": cmd_status,
     "validate": cmd_validate,

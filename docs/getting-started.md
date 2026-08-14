@@ -133,6 +133,16 @@ run outcome. To run exactly one cycle without leaving a daemon up:
 forgeo once
 ```
 
+To run one specific task immediately instead of the oldest `OPEN` one — e.g.
+to rerun a `FAILED` task after reopening it, or to try a risky task now:
+
+```bash
+forgeo run --task SELF-012
+```
+
+`forgeo run` refuses with a clear error when the task does not exist or is
+not `OPEN`, and when a daemon or another `once`/`run` is already running.
+
 Before starting for the first time you can run a read-only dry run that
 validates the config, repository, branch/remote, backlog, agent command and
 lock state without invoking the agent or writing anything:

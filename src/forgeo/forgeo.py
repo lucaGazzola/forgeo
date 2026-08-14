@@ -53,6 +53,14 @@ logger = logging.getLogger(__name__)
 _TASK_BLOCKER_MARKER = "<!-- forgeo:task-blocker:derived -->"
 
 
+class TaskNotRunnableError(RuntimeError):
+    """A task requested through ``forgeo run`` cannot be executed.
+
+    Raised when the task id does not exist in the backlog or its status is
+    not ``OPEN``; nothing runs and no run record is written.
+    """
+
+
 def _execution_outcome(status: ExecutionStatus) -> RunOutcome:
     """Map an agent execution status onto a run record outcome."""
     return {
@@ -148,6 +156,58 @@ class Forgeo:
 
         await self._refactor()
         return "refactor"
+
+    async def run_task_id(self, task_id: str) -> str:
+        """Execute exactly the task ``task_id``; returns a short outcome label.
+
+        Like :meth:`run_cycle` but runs ``task_id`` instead of the oldest
+        OPEN task, so a human can triage immediately: rerun a FAILED task
+        (after reopening it) or try a risky task now. Every finished run
+        appends exactly one run record.
+
+        Raises:
+            TaskNotRunnableError: When the task does not exist in the backlog
+                or is not ``OPEN`` — nothing runs and no record is written.
+        """
+        started_at = datetime.now(UTC)
+        outcome = await self._run_task_id(task_id)
+        self._record_run(outcome, started_at)
+        return outcome
+
+    async def _run_task_id(self, task_id: str) -> str:
+        """Run ``task_id`` without recording; returns its outcome label.
+
+        Outcome is ``task`` on a completed agent run or ``dirty`` when the
+        working tree is dirty. A missing or non-``OPEN`` task raises
+        :class:`TaskNotRunnableError`.
+        """
+        self._last_task = None
+        self._last_agent_result = None
+        self._last_commit_sha = None
+        self._last_run_reason = None
+        self._blocked_tasks = []
+        await self.git.a_ensure_branch(self.config.branch)
+        tasks = await self.backlog.list_tasks()
+        task = next((candidate for candidate in tasks if candidate.id == task_id), None)
+        if task is None:
+            raise TaskNotRunnableError(
+                f"Task {task_id!r} does not exist in the backlog at "
+                f"{self.config.backlog}."
+            )
+        if task.status is not TaskStatus.OPEN:
+            raise TaskNotRunnableError(
+                f"Task {task_id!r} is {task.status.value}; only OPEN tasks can "
+                f"be run with `forgeo run`."
+            )
+        if not await self.git.a_is_clean():
+            logger.error(
+                "Working tree of %s is dirty; refusing to run task %s.",
+                self.config.repo,
+                task.id,
+            )
+            return "dirty"
+        await self._run_task(task)
+        return "task"
 
     # ------------------------------------------------------------------ #
     # Failed-task retries                                                 #

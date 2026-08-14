@@ -26,23 +26,23 @@ Each entry in `tasks` is a task object:
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `id` | string | — | Unique task id (e.g. `TASK-001`). Duplicate ids are rejected. |
-| `title` | string | — | Short title; shown in logs, commit messages and status. |
-| `description` | string | — | Longer description handed to the agent. Must be non-blank. |
-| `status` | string | `OPEN` | One of `OPEN`, `BLOCKED`, `COMPLETED`, `FAILED`. |
-| `created_at` | ISO-8601 datetime | now (UTC) | When the task was created; used for oldest-first ordering. |
-| `updated_at` | ISO-8601 datetime | now (UTC) | Bumped whenever the status changes. |
-| `dependencies` | list[string] | `[]` | Task ids this task depends on. Forgeo only picks the task once every dependency is `COMPLETED` (missing ids and ids in any other state keep it waiting). |
-| `acceptance_criteria` | list[string] | `[]` | Rendered into the `FORGEO_TASK` instruction under an "Acceptance criteria:" heading. |
-| `files_to_modify` | list[string] | `[]` | Informational; hints for the agent. |
-| `agent_command` | string / list[string] | — | Override the configured `agent_command` for this task (e.g. route it to a different model). Validated like the global key; falls back to the config default when omitted. |
-| `agent_timeout_seconds` | number | — | Override the configured `agent_timeout_seconds` for this task (must be positive). Falls back to the config default when omitted. |
-| `blocker_reason` | list[string] | `[]` | Engine-managed: the agent's explanation (its questions, falling back to captured output) when the task becomes `BLOCKED`. Cleared on reopen; not editable via `PATCH`. |
-| `blocked_count` | integer | `0` | Engine-managed: how many times the task has transitioned into `BLOCKED`. Kept as history when the task is reopened, so you can see a task that keeps blocking needs splitting or rewriting rather than a blind retry. Not editable via `PATCH`. |
-| `failure_reason` | list[string] | `[]` | Engine-managed: the agent's error when the task becomes `FAILED` (e.g. a timeout message or a non-zero exit code). Shown in the web console's task modal so you can see why a task failed without opening the logs. Cleared when the task leaves the `FAILED` state; not editable via `PATCH`. |
-| `retries_left` | integer / `null` | `null` | Per-task override of the automatic-retry budget (`failed_retry_max` in the config): how many times this task may be retried after a failure. `null` falls back to the config; `0` disables retries for this task. Editable via `PATCH`. |
-| `retry_count` | integer | `0` | Engine-managed: how many times this task has already been retried. Shown in `runs.jsonl` and the web console; reset when a human reopens a `FAILED` task. Not editable via `PATCH`. |
-| `failed_wait_cycles` | integer | `0` | Engine-managed: how many cycles this task has been `FAILED` awaiting a retry (backed off by `failed_retry_wait_cycles`). Reset when the task leaves `FAILED`. Not editable via `PATCH`. |
+| <span style="white-space: nowrap">`id`</span> | string | — | Unique task id (e.g. `TASK-001`). Duplicate ids are rejected. |
+| <span style="white-space: nowrap">`title`</span> | string | — | Short title; shown in logs, commit messages and status. |
+| <span style="white-space: nowrap">`description`</span> | string | — | Longer description handed to the agent. Must be non-blank. |
+| <span style="white-space: nowrap">`status`</span> | string | `OPEN` | One of `OPEN`, `BLOCKED`, `COMPLETED`, `FAILED`. |
+| <span style="white-space: nowrap">`created_at`</span> | ISO-8601 datetime | now (UTC) | When the task was created; used for oldest-first ordering. |
+| <span style="white-space: nowrap">`updated_at`</span> | ISO-8601 datetime | now (UTC) | Bumped whenever the status changes. |
+| <span style="white-space: nowrap">`dependencies`</span> | list[string] | `[]` | Task ids this task depends on. Forgeo only picks the task once every dependency is `COMPLETED` (missing ids and ids in any other state keep it waiting). |
+| <span style="white-space: nowrap">`acceptance_criteria`</span> | list[string] | `[]` | Rendered into the `FORGEO_TASK` instruction under an "Acceptance criteria:" heading. |
+| <span style="white-space: nowrap">`files_to_modify`</span> | list[string] | `[]` | Informational; hints for the agent. |
+| <span style="white-space: nowrap">`agent_command`</span> | string / list[string] | — | Override the configured `agent_command` for this task (e.g. route it to a different model). Validated like the global key; falls back to the config default when omitted. |
+| <span style="white-space: nowrap">`agent_timeout_seconds`</span> | number | — | Override the configured `agent_timeout_seconds` for this task (must be positive). Falls back to the config default when omitted. |
+| <span style="white-space: nowrap">`blocker_reason`</span> | list[string] | `[]` | Engine-managed: the agent's explanation (its questions, falling back to captured output) when the task becomes `BLOCKED`. Cleared on reopen; not editable via `PATCH`. |
+| <span style="white-space: nowrap">`blocked_count`</span> | integer | `0` | Engine-managed: how many times the task has transitioned into `BLOCKED`. Kept as history when the task is reopened, so you can see a task that keeps blocking needs splitting or rewriting rather than a blind retry. Not editable via `PATCH`. |
+| <span style="white-space: nowrap">`failure_reason`</span> | list[string] | `[]` | Engine-managed: the agent's error when the task becomes `FAILED` (e.g. a timeout message or a non-zero exit code). Shown in the web console's task modal so you can see why a task failed without opening the logs. Cleared when the task leaves the `FAILED` state; not editable via `PATCH`. |
+| <span style="white-space: nowrap">`retries_left`</span> | integer / `null` | `null` | Per-task override of the automatic-retry budget (`failed_retry_max` in the config): how many times this task may be retried after a failure. `null` falls back to the config; `0` disables retries for this task. Editable via `PATCH`. |
+| <span style="white-space: nowrap">`retry_count`</span> | integer | `0` | Engine-managed: how many times this task has already been retried. Shown in `runs.jsonl` and the web console; reset when a human reopens a `FAILED` task. Not editable via `PATCH`. |
+| <span style="white-space: nowrap">`failed_wait_cycles`</span> | integer | `0` | Engine-managed: how many cycles this task has been `FAILED` awaiting a retry (backed off by `failed_retry_wait_cycles`). Reset when the task leaves `FAILED`. Not editable via `PATCH`. |
 
 Only `id`, `title`, `description`, and `status` (optionally) are required;
 every other field is optional.

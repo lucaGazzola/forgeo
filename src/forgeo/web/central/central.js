@@ -65,17 +65,18 @@
     if (node) node.textContent = text;
   }
 
-  function formatTime(iso) {
+  function formatTime(iso, short) {
     if (!iso) return "—";
     var d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      year: "numeric",
+    var opts = {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
-    });
+    };
+    if (!short) opts.year = "numeric";
+    return d.toLocaleString(undefined, opts);
   }
 
   function formatInterval(minutes) {
@@ -84,9 +85,9 @@
     return minutes + " mins";
   }
 
-  function timeEl(label, iso) {
+  function timeEl(label, iso, short) {
     var span = el("span", null, label + " ");
-    var time = el("time", null, formatTime(iso));
+    var time = el("time", null, formatTime(iso, short));
     time.dateTime = iso || "";
     span.appendChild(time);
     return span;
@@ -296,8 +297,8 @@
       card.appendChild(el("p", "task__desc", task.description));
     }
     var times = el("div", "task__times");
-    times.appendChild(timeEl("created", task.created_at));
-    times.appendChild(timeEl("updated", task.updated_at));
+    times.appendChild(timeEl("created", task.created_at, true));
+    times.appendChild(timeEl("updated", task.updated_at, true));
     card.appendChild(times);
     return card;
   }

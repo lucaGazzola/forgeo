@@ -289,60 +289,6 @@ async def test_fetch_prefers_open_over_blocked(tmp_path):
     assert fetched.id == "OPEN-1"
 
 
-async def test_fetch_next_task_waits_for_dependencies(tmp_path):
-    backlog = JSONBacklog(tmp_path / "backlog.json")
-    await backlog.create_task(
-        Task(
-            id="DEP-1", title="Dep", description="d",
-            status=TaskStatus.BLOCKED,
-            created_at=datetime.now(UTC) - timedelta(hours=3),
-        )
-    )
-    waiting = Task(
-        id="WAIT", title="Waits", description="d",
-        dependencies=["DEP-1"],
-        created_at=datetime.now(UTC) - timedelta(hours=2),
-    )
-    await backlog.create_task(waiting)
-    assert await backlog.fetch_next_task() is None
-
-    await backlog.update_status("DEP-1", TaskStatus.COMPLETED)
-    fetched = await backlog.fetch_next_task()
-    assert fetched is not None
-    assert fetched.id == "WAIT"
-
-
-async def test_fetch_next_task_none_on_cycle(tmp_path):
-    backlog = JSONBacklog(tmp_path / "backlog.json")
-    await backlog.create_task(Task(id="A", title="a", description="d", dependencies=["B"]))
-    await backlog.create_task(Task(id="B", title="b", description="d", dependencies=["A"]))
-    assert await backlog.fetch_next_task() is None
-
-
-async def test_fetch_next_task_picks_past_run_at_over_older(tmp_path):
-    backlog = JSONBacklog(tmp_path / "backlog.json")
-    now = datetime.now(UTC)
-    await backlog.create_task(
-        make_task(id="OLD", created_at=now - timedelta(hours=3))
-    )
-    await backlog.create_task(
-        make_task(id="SCHED", run_at=now - timedelta(minutes=5))
-    )
-    fetched = await backlog.fetch_next_task()
-    assert fetched.id == "SCHED"
-
-
-async def test_fetch_next_task_skips_future_run_at(tmp_path):
-    backlog = JSONBacklog(tmp_path / "backlog.json")
-    now = datetime.now(UTC)
-    await backlog.create_task(make_task(id="SCHED", run_at=now + timedelta(hours=1)))
-    assert await backlog.fetch_next_task() is None
-
-    await backlog.create_task(make_task(id="GO"))
-    fetched = await backlog.fetch_next_task()
-    assert fetched.id == "GO"
-
-
 async def test_update_status_persists_and_bumps_timestamp(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())

@@ -134,12 +134,7 @@ class Forgeo:
         tasks = await self.backlog.list_tasks()
         task = oldest_open_task(tasks)
         if task is not None:
-            if not await self.git.a_is_clean():
-                logger.error(
-                    "Working tree of %s is dirty; refusing to run task %s.",
-                    self.config.repo,
-                    task.id,
-                )
+            if not await self._tree_clean_for(task):
                 return "dirty"
             await self._run_task(task)
             return "task"
@@ -187,12 +182,7 @@ class Forgeo:
                 f"Task {task_id!r} is {task.status.value}; only OPEN tasks can "
                 f"be run with `forgeo run`."
             )
-        if not await self.git.a_is_clean():
-            logger.error(
-                "Working tree of %s is dirty; refusing to run task %s.",
-                self.config.repo,
-                task.id,
-            )
+        if not await self._tree_clean_for(task):
             return "dirty"
         await self._run_task(task)
         return "task"
@@ -206,6 +196,21 @@ class Forgeo:
         self._blocked_tasks = []
         await self.git.a_ensure_branch(self.config.branch)
         return await self.backlog.list_tasks()
+
+    async def _tree_clean_for(self, task: Task) -> bool:
+        """True when the working tree is clean enough to run ``task``.
+
+        A dirty tree logs the refusal and returns ``False``; Forgeo never
+        commits or discards uncommitted work.
+        """
+        if await self.git.a_is_clean():
+            return True
+        logger.error(
+            "Working tree of %s is dirty; refusing to run task %s.",
+            self.config.repo,
+            task.id,
+        )
+        return False
 
     # ------------------------------------------------------------------ #
     # Failed-task retries                                                 #
@@ -364,9 +369,7 @@ class Forgeo:
             await self.backlog.set_blocked(task.id, result.reason)
             return
         if result.status is ExecutionStatus.ERROR:
-            reason = self._failure_reason(result)
-            await self.backlog.set_failed(task.id, reason)
-            self._notify_webhook("failed", task, "\n".join(reason))
+            await self._mark_failed(task, self._failure_reason(result))
             return
         if not ok:
             # SUCCESS whose commit (or no-change) path failed: already marked
@@ -496,7 +499,15 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        reason = self._failure_reason(result)
+        await self._mark_failed(task, self._failure_reason(result))
+
+    async def _mark_failed(self, task: Task, reason: list[str]) -> None:
+        """Persist ``reason`` on ``task`` and send the ``failed`` webhook notice.
+
+        Shared by the direct ERROR path (the work was already discarded in
+        :meth:`_handle_execution_result`) and the FAILED transitions from
+        :meth:`_fail` and :meth:`_complete_without_changes`.
+        """
         await self.backlog.set_failed(task.id, reason)
         self._notify_webhook("failed", task, "\n".join(reason))
 
@@ -539,8 +550,7 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON])
-                self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
+                await self._mark_failed(task, [NO_CHANGES_DIRTY_REASON])
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(

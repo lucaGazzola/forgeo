@@ -228,11 +228,6 @@ class BacklogStore(ABC):
         store = await self._read()
         return [self._to_task(entry) for entry in store["tasks"]]
 
-    async def fetch_next_task(self, *, now: datetime | None = None) -> Task | None:
-        """Return the task Forgeo should run next (honoring ``run_at``
-        one-shot schedules), or ``None`` when nothing is runnable."""
-        return oldest_open_task(await self.list_tasks(), now=now)
-
     async def snapshot(self) -> None:
         """Take a rollback copy of the backlog before it is written to.
 

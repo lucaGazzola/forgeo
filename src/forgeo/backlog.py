@@ -541,15 +541,16 @@ class JSONBacklog(BacklogStore):
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            restored = await self._restore_from_snapshot()
-            if restored is not None:
-                return restored
-            self._preserve_corrupt_file()
-            return {"tasks": []}
+            data = None
         if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
             restored = await self._restore_from_snapshot()
             if restored is not None:
                 return restored
+            if data is None:
+                # Only an unparseable file is set aside; a valid JSON
+                # document of the wrong shape stays in place (a hand edit
+                # to fix, not an accident to hide).
+                self._preserve_corrupt_file()
             return {"tasks": []}
         return {"tasks": data["tasks"]}
 

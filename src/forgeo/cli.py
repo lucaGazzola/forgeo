@@ -74,7 +74,7 @@ import asyncio
 import logging
 import signal
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -629,6 +629,31 @@ def _cmd_start_foreground(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_worker_with_lock(
+    lock: Any, runner: Callable[[], Coroutine[Any, Any, int]]
+) -> int:
+    """Run an async worker to completion, closing the run lock on the way out.
+
+    A ``KeyboardInterrupt`` is swallowed (the cycle is aborted, the lock is
+    still released) and a :class:`BacklogUnavailableError` — an HTTP backlog
+    that is simply down — is reported as an operational failure rather than
+    a crash to trace back. ``runner`` runs in its own event loop and returns
+    the command's exit code.
+    """
+    result = 1
+    try:
+        result = asyncio.run(runner())
+    except KeyboardInterrupt:
+        pass
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
+        result = 1
+    finally:
+        lock.close()
+    return result
+
+
 def cmd_once(args: argparse.Namespace) -> int:
     """Handle ``forgeo once``: run exactly one cycle and exit."""
     prepared = _prepare_worker(args)
@@ -636,24 +661,13 @@ def cmd_once(args: argparse.Namespace) -> int:
         return 1
     _config_path, _config, forgeo, lock = prepared
 
-    async def _run_once() -> None:
+    async def _run_once() -> int:
         check_for_update(update_state_path(_config), print_fn=console.print)
         outcome = await forgeo.run_cycle()
         console.print(f"[green]Cycle finished: {outcome}[/green]")
+        return 0
 
-    try:
-        asyncio.run(_run_once())
-    except KeyboardInterrupt:
-        pass
-    except BacklogUnavailableError as exc:
-        # A backlog served over HTTP can simply be down; that is an
-        # operational failure to report, not a crash to trace back.
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
-        return 1
-    finally:
-        lock.close()
-    return 0
+    return _run_worker_with_lock(lock, _run_once)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -682,20 +696,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         console.print(f"[green]Cycle finished: {outcome}[/green]")
         return 0
 
-    result = 1
-    try:
-        result = asyncio.run(_run_one())
-    except KeyboardInterrupt:
-        pass
-    except BacklogUnavailableError as exc:
-        # A backlog served over HTTP can simply be down; that is an
-        # operational failure to report, not a crash to trace back.
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
-        result = 1
-    finally:
-        lock.close()
-    return result
+    return _run_worker_with_lock(lock, _run_one)
 
 
 def cmd_init(args: argparse.Namespace) -> int:

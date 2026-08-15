@@ -327,6 +327,11 @@ def web_task_id_for(tasks: list[Task]) -> str:
     return f"WEB-{highest + 1:03d}"
 
 
+def _instance_parts(path: str) -> list[str]:
+    """The path segments after the ``/api/instances/`` prefix."""
+    return path[len("/api/instances/") :].split("/")
+
+
 def _config_validation_message(exc: ValidationError) -> str:
     """A readable one-line error for a config payload that failed validation."""
     details = []
@@ -764,7 +769,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             instance is unknown, the path shape is wrong, or the instance
             config is unavailable.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -781,7 +786,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _post_instance_api(self, path: str) -> None:
             """Route a POST under ``/api/instances/`` to its handler."""
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) < 2:
                 self._send_json(404, {"error": "not found"})
                 return
@@ -812,7 +817,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             ``stopped`` / ``not_running`` / ``restarted`` — plus the resulting
             daemon state.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -1025,7 +1030,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             A dedicated endpoint rather than a generic ``status`` via PATCH,
             so the status transition stays outside the editable-fields model.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "reopen":
                 self._send_json(404, {"error": "not found"})
                 return
@@ -1078,7 +1083,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _put_instance_api(self, path: str) -> None:
             """Route a PUT under ``/api/instances/`` to its handler."""
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) != 2 or parts[1] != "config":
                 self._send_json(404, {"error": "not found"})
                 return
@@ -1102,7 +1107,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             flat config form does not render, so an omitted value keeps what
             the config already holds instead of clearing it.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -1168,7 +1173,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_static(safe_static_path(_INSTANCE_PAGE))
 
         def _handle_instance_api(self, path: str, query: dict[str, list[str]]) -> None:
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -1313,11 +1318,6 @@ class CentralWebServer:
         logger.info("Central web server stopped.")
 
 
-def _instance_count() -> int:
-    """The number of registered instances (used by the CLI banner)."""
-    return len(list_instances())
-
-
 async def _serve_forever(
     server: CentralWebServer, host: str, stop_requested: threading.Event
 ) -> None:
@@ -1340,7 +1340,7 @@ async def _serve_forever(
         Panel.fit(
             f"[bold]Forgeo central dashboard[/bold]\n"
             f"[bold]Listening:[/bold] http://{host}:{server.port}\n"
-            f"[bold]Instances:[/bold] {_instance_count()} registered "
+            f"[bold]Instances:[/bold] {len(list_instances())} registered "
             f"(registry: {registry_path()})",
             title="Forgeo Web",
             border_style="green",

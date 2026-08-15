@@ -253,9 +253,8 @@ class ForgeoDaemon:
         """True when the config file's mtime differs from the last seen one."""
         if self.config_path is None:
             return False
-        try:
-            mtime = self.config_path.stat().st_mtime_ns
-        except OSError:
+        mtime = _config_mtime_ns(self.config_path)
+        if mtime is None:
             return False
         changed = mtime != self._config_mtime_ns
         if changed:

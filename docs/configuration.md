@@ -17,35 +17,35 @@ paths), so `forgeo restart` is still used for those.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `name` | `forgeo` | Display name (logs, commit messages, Telegram notifications). |
-| `repo` | `.` | The git repository Forgeo works on. |
-| `interval_minutes` | `60` | How often Forgeo runs (≥ 1). |
-| `branch` | `main` | The single branch everything is committed to. |
-| `remote` | — | Remote to push to (e.g. `origin`); omit to only commit locally. |
-| `backlog` | `backlog.json` | The task backlog: the path of a JSON file (keep it outside the repo if you can), or an `http(s)` URL serving the same document — see [a backlog over HTTP](backlog.md#a-backlog-over-http). |
-| `state_dir` | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Only meaningful with a backlog URL, where it defaults to the directory of `forgeo.yaml`. |
-| `backlog_auth` | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). |
-| `blocker_file` | `BLOCKER.md` | Where `BLOCKER.md` is written. Keep it outside the repo so it is never committed. |
-| `agent_command` | — | The coding agent: any shell command (string) or argv list. **Required.** |
-| `agent_timeout_seconds` | — | Optional: kill the agent after this many seconds (`null` = never). |
-| `agent_env` | `{}` | Extra environment variables for the agent process. |
-| `agent_sandbox` | `none` | Agent isolation: `none` (runs on the host) or `docker` (runs in a container). |
-| `agent_sandbox_image` | — | Container image, **required when `agent_sandbox: docker`**; must contain the agent CLI and a shell. |
-| `agent_sandbox_network` | `none` | Docker `--network` for the sandboxed agent (default `none` = networking disabled). |
-| `agent_sandbox_mounts` | `[]` | Host paths mounted read-only into the sandboxed container (agent credentials/config). |
-| `blocked_exit_code` | `2` | Exit code meaning "needs human input". |
-| `no_changes_exit_code` | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
-| `refactor_prompt` | default refactor prompt | Instruction used when the backlog is empty. |
-| `log_file` | `forgeo.log` | Where the daemon writes its log. |
-| `run_history_keep` | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
-| `run_output_lines` | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
-| `failed_retry_max` | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
-| `failed_retry_wait_cycles` | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
-| `git_timeout_seconds` | `120` | Kill a git subprocess after this many seconds. |
-| `telegram_bot_token` | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
-| `telegram_chat_id` | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
-| `notify_webhook_url` | — | Vendor-neutral webhook URL that receives a JSON POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when unset. |
-| `notify_webhook_events` | `["blocked"]` | Which outcomes to POST to `notify_webhook_url`; a subset of `blocked`, `completed`, `failed`. |
+| <span style="white-space: nowrap">`name`</span> | `forgeo` | Display name (logs, commit messages, Telegram notifications). |
+| <span style="white-space: nowrap">`repo`</span> | `.` | The git repository Forgeo works on. |
+| <span style="white-space: nowrap">`interval_minutes`</span> | `60` | How often Forgeo runs (≥ 1). |
+| <span style="white-space: nowrap">`branch`</span> | `main` | The single branch everything is committed to. |
+| <span style="white-space: nowrap">`remote`</span> | — | Remote to push to (e.g. `origin`); omit to only commit locally. |
+| <span style="white-space: nowrap">`backlog`</span> | `backlog.json` | The task backlog: the path of a JSON file (keep it outside the repo if you can), or an `http(s)` URL serving the same document — see [a backlog over HTTP](backlog.md#a-backlog-over-http). |
+| <span style="white-space: nowrap">`state_dir`</span> | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Only meaningful with a backlog URL, where it defaults to the directory of `forgeo.yaml`. |
+| <span style="white-space: nowrap">`backlog_auth`</span> | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). |
+| <span style="white-space: nowrap">`blocker_file`</span> | `BLOCKER.md` | Where `BLOCKER.md` is written. Keep it outside the repo so it is never committed. |
+| <span style="white-space: nowrap">`agent_command`</span> | — | The coding agent: any shell command (string) or argv list. **Required.** |
+| <span style="white-space: nowrap">`agent_timeout_seconds`</span> | — | Optional: kill the agent after this many seconds (`null` = never). |
+| <span style="white-space: nowrap">`agent_env`</span> | `{}` | Extra environment variables for the agent process. |
+| <span style="white-space: nowrap">`agent_sandbox`</span> | `none` | Agent isolation: `none` (runs on the host) or `docker` (runs in a container). |
+| <span style="white-space: nowrap">`agent_sandbox_image`</span> | — | Container image, **required when `agent_sandbox: docker`**; must contain the agent CLI and a shell. |
+| <span style="white-space: nowrap">`agent_sandbox_network`</span> | `none` | Docker `--network` for the sandboxed agent (default `none` = networking disabled). |
+| <span style="white-space: nowrap">`agent_sandbox_mounts`</span> | `[]` | Host paths mounted read-only into the sandboxed container (agent credentials/config). |
+| <span style="white-space: nowrap">`blocked_exit_code`</span> | `2` | Exit code meaning "needs human input". |
+| <span style="white-space: nowrap">`no_changes_exit_code`</span> | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
+| <span style="white-space: nowrap">`refactor_prompt`</span> | default refactor prompt | Instruction used when the backlog is empty. |
+| <span style="white-space: nowrap">`log_file`</span> | `forgeo.log` | Where the daemon writes its log. |
+| <span style="white-space: nowrap">`run_history_keep`</span> | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
+| <span style="white-space: nowrap">`run_output_lines`</span> | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
+| <span style="white-space: nowrap">`failed_retry_max`</span> | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
+| <span style="white-space: nowrap">`failed_retry_wait_cycles`</span> | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
+| <span style="white-space: nowrap">`git_timeout_seconds`</span> | `120` | Kill a git subprocess after this many seconds. |
+| <span style="white-space: nowrap">`telegram_bot_token`</span> | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
+| <span style="white-space: nowrap">`telegram_chat_id`</span> | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
+| <span style="white-space: nowrap">`notify_webhook_url`</span> | — | Vendor-neutral webhook URL that receives a JSON POST for run outcomes (Slack, Discord, ntfy, ...). Disabled when unset. |
+| <span style="white-space: nowrap">`notify_webhook_events`</span> | `["blocked"]` | Which outcomes to POST to `notify_webhook_url`; a subset of `blocked`, `completed`, `failed`. |
 
 ## Minimal example
 
@@ -85,11 +85,11 @@ backlog_auth:
 
 | Key | Meaning |
 | --- | --- |
-| `token_url` | The provider's token endpoint. |
-| `client_id` | The confidential client requesting the token. |
-| `client_secret_env` | **Name of the environment variable** holding that client's secret. |
-| `scope` | Optional scope requested with the token. |
-| `timeout_seconds` | Timeout for the token request (default `10`). |
+| <span style="white-space: nowrap">`token_url`</span> | The provider's token endpoint. |
+| <span style="white-space: nowrap">`client_id`</span> | The confidential client requesting the token. |
+| <span style="white-space: nowrap">`client_secret_env`</span> | **Name of the environment variable** holding that client's secret. |
+| <span style="white-space: nowrap">`scope`</span> | Optional scope requested with the token. |
+| <span style="white-space: nowrap">`timeout_seconds`</span> | Timeout for the token request (default `10`). |
 
 The secret itself is never a config value: `client_secret_env` names the
 environment variable the daemon reads it from, so the secret stays out of

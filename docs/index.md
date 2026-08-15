@@ -33,72 +33,6 @@ Forgeo is deliberately single-purpose:
   working is skipped, never killed;
 - no PRs, no merge strategies, no branch juggling.
 
-## Architecture overview
-
-```
-forgeo.yaml ──► forgeo start (daemon)
-                     │
-                     ├── wakes every interval_minutes
-                     ▼
-                 Forgeo.run_cycle()
-                     │
-                     ├── BLOCKED task exists ──► render BLOCKER.md from backlog, pause
-                     │
-                     ├── oldest OPEN task with all deps COMPLETED ──► run agent ──► commit & push ──► COMPLETED
-                     │
-                     └── backlog empty ──► run agent (refactor) ──► commit & push
-                                                │
-            exit 0                              │            exit blocked_exit_code
-        commit & push ──────── ShellAgent ──────┴─────► partial work committed,
-            task COMPLETED   (FORGEO_TASK env)          reason persisted on task,
-                                                         BLOCKER.md rendered next cycle
-                                                         task BLOCKED
-```
-
-### Components
-
-| Component | Source | Responsibility |
-| --- | --- | --- |
-| `forgeo.cli` | `src/forgeo/cli.py` | `init`, `start`, `once`, `status`, `validate`, `stop`, `restart` commands. |
-| `forgeo.daemon` | `src/forgeo/daemon.py` | The scheduled worker: wakes every `interval_minutes`, holds the run locks, records `last_outcome`. |
-| `forgeo.daemon_control` | `src/forgeo/daemon_control.py` | Daemon lifecycle shared by the CLI and web console: SIGTERM + wait, detached start/restart. |
-| `forgeo.forgeo` | `src/forgeo/forgeo.py` | One cycle of work: task run, refactor pass, blocker handling, git side effects. |
-| `forgeo.backlog` | `src/forgeo/backlog.py` | JSON backlog read/write; picks the oldest `OPEN` task whose dependencies are all `COMPLETED`. |
-| `forgeo.agent` | `src/forgeo/agent.py` | `ShellAgent`: runs your command, maps exit codes to outcomes, delivers `FORGEO_TASK`. |
-| `forgeo.git` | `src/forgeo/git.py` | Single-branch git operations: ensure branch, commit all, push, hard reset. |
-| `forgeo.config` | `src/forgeo/config.py` | Loads and validates `forgeo.yaml`. |
-| `forgeo.validate` | `src/forgeo/validate.py` | Read-only dry run for `forgeo validate`: config, repo, branch, remote, backlog, agent command and lock state. |
-| `forgeo.central` | `src/forgeo/central.py` | The `forgeo web` dashboard: one HTTP API + UI for every registered instance. |
-| `forgeo.setup` | `src/forgeo/setup.py` | The guided `forgeo init` wizard. |
-| `forgeo.notify` | `src/forgeo/notify.py` | Optional run notifications: Telegram and a vendor-neutral webhook, both never-raising. |
-| `forgeo.models` | `src/forgeo/models.py` | The data contracts: `Task`, `ForgeoConfig`, `ExecutionResult`, statuses. |
-
-### One cycle, in detail
-
-1. The daemon takes the per-forgeo lock (`backlog.lock`); a second `start` or
-   `once` is refused while it is held.
-2. `Forgeo.run_cycle()` ensures the configured branch exists and is checked
-   out.
-3. If any task is `BLOCKED`, Forgeo re-renders `BLOCKER.md` from the backlog
-   (real per-task reasons, never generic text) and pauses (`blocked` outcome)
-   — it will not start new work until the block is resolved. Once the last
-   `BLOCKED` task is reopened, the file disappears automatically on the next
-   cycle.
-4. Otherwise it takes the oldest `OPEN` task whose dependencies are all
-   `COMPLETED` — a task still waiting on an uncompleted dependency is skipped
-   (see [Backlog format](backlog.md) for how dependencies are enforced), and a
-   task with a due `run_at` one-shot schedule fires ahead of older tasks. If
-   the working tree is dirty the cycle aborts (`dirty`) rather than running
-   over manual changes.
-5. The agent runs with the repository as its working directory and the task in
-   `FORGEO_TASK`. The exit code decides what happens to the work — see
-   [Agent contract](agent-contract.md) for the exact mapping.
-6. With no `OPEN` task and no blocker file, the agent runs in refactoring mode
-   and its changes are committed the same way.
-7. The daemon sleeps until the next interval — or, when a runnable `OPEN` task
-   carries a `run_at` sooner (or already due), until that moment instead. A
-   wake-up that finds a run still in progress is skipped, never killed.
-
 ## Where state lives
 
 - `forgeo.yaml` — the config (see [Configuration](configuration.md)).
@@ -111,6 +45,10 @@ forgeo.yaml ──► forgeo start (daemon)
 - `BLOCKER.md` (configurable) — written when a human decision is needed; keep
   it outside the repo so it is never committed.
 - `forgeo.log` — rotating daemon log (5 MB × 3), also served over HTTP.
+- `backlog.state.json` — the daemon's live state (pid, started at, last
+  outcome, next run), rewritten after every cycle (also called
+  `daemon.state.json`).
+- `runs.jsonl` — the durable run history, one JSON record per finished cycle.
 - `backlog.lock` — per-forgeo lock holding the daemon PID; released
   automatically on exit, even on a crash.
 - `backlog.run` — per-iteration lock that prevents two agents running at once.
@@ -120,9 +58,8 @@ forgeo.yaml ──► forgeo start (daemon)
   token (`forgeo web --token`): when present, every `/api/*` route requires
   `Authorization: Bearer <token>`; with no file the dashboard stays open.
 
-The three runtime files above (and `runs.jsonl`) sit next to the backlog file;
-with a backlog URL they go in `state_dir`, which defaults to the directory
-holding `forgeo.yaml`.
+The runtime files above sit next to the backlog file; with a backlog URL they
+go in `state_dir`, which defaults to the directory holding `forgeo.yaml`.
 
 ## Next steps
 

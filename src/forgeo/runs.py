@@ -20,13 +20,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from forgeo.io import atomic_write_text
-from forgeo.models import RunRecord
+from forgeo.models import DEFAULT_RUN_HISTORY_KEEP, RunRecord
 
 logger = logging.getLogger(__name__)
-
-#: Default number of finished runs kept in ``runs.jsonl``; overridden by the
-#: ``run_history_keep`` config key. ``0`` disables retention.
-DEFAULT_RUN_HISTORY_KEEP = 2000
 
 
 class RunRecorder:

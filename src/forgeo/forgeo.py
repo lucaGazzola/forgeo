@@ -119,13 +119,7 @@ class Forgeo:
 
     async def _run_cycle(self) -> str:
         """Execute one cycle without recording; returns its outcome label."""
-        self._last_task = None
-        self._last_agent_result = None
-        self._last_commit_sha = None
-        self._last_run_reason = None
-        self._blocked_tasks = []
-        await self.git.a_ensure_branch(self.config.branch)
-        tasks = await self.backlog.list_tasks()
+        tasks = await self._begin_run()
         blocked = [t for t in tasks if t.status is TaskStatus.BLOCKED]
         if blocked:
             self._blocked_tasks = blocked
@@ -181,13 +175,7 @@ class Forgeo:
         working tree is dirty. A missing or non-``OPEN`` task raises
         :class:`TaskNotRunnableError`.
         """
-        self._last_task = None
-        self._last_agent_result = None
-        self._last_commit_sha = None
-        self._last_run_reason = None
-        self._blocked_tasks = []
-        await self.git.a_ensure_branch(self.config.branch)
-        tasks = await self.backlog.list_tasks()
+        tasks = await self._begin_run()
         task = next((candidate for candidate in tasks if candidate.id == task_id), None)
         if task is None:
             raise TaskNotRunnableError(
@@ -208,6 +196,16 @@ class Forgeo:
             return "dirty"
         await self._run_task(task)
         return "task"
+
+    async def _begin_run(self) -> list[Task]:
+        """Reset the run state and load the tasks for a new cycle."""
+        self._last_task = None
+        self._last_agent_result = None
+        self._last_commit_sha = None
+        self._last_run_reason = None
+        self._blocked_tasks = []
+        await self.git.a_ensure_branch(self.config.branch)
+        return await self.backlog.list_tasks()
 
     # ------------------------------------------------------------------ #
     # Failed-task retries                                                 #

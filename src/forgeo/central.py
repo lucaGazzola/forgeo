@@ -552,24 +552,29 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:
             logger.debug("central web %s - %s", self.address_string(), format % args)
 
-        def _send_json(self, status: int, payload: Any) -> None:
+        def _send_json(
+            self,
+            status: int,
+            payload: Any,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             body = json_bytes(payload)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if extra_headers:
+                for key, value in extra_headers.items():
+                    self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
         def _send_unauthorized(self) -> None:
-            body = json_bytes({"error": "unauthorized"})
-            self.send_response(401)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("WWW-Authenticate", 'Bearer realm="forgeo"')
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(
+                401,
+                {"error": "unauthorized"},
+                {"WWW-Authenticate": 'Bearer realm="forgeo"'},
+            )
 
         def _maybe_authorize(self, path: str) -> bool:
             """True when the request may proceed; a 401 is sent otherwise.

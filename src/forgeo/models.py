@@ -48,6 +48,10 @@ NO_CHANGES_DIRTY_REASON = "Agent reported no changes but left uncommitted change
 #: persisting agent output entirely.
 DEFAULT_RUN_OUTPUT_LINES = 200
 
+#: Default number of finished runs kept in ``runs.jsonl``; overridden by the
+#: ``run_history_keep`` config key. ``0`` disables retention.
+DEFAULT_RUN_HISTORY_KEEP = 2000
+
 
 #: URL schemes a ``backlog`` value may use to point at a remote endpoint.
 #: Anything else is treated as a filesystem path.
@@ -436,7 +440,7 @@ class ForgeoConfig(BaseModel):
     git_timeout_seconds: float = Field(default=120, gt=0)
     refactor_prompt: str = DEFAULT_REFACTOR_PROMPT
     log_file: str = "forgeo.log"
-    run_history_keep: int = Field(default=2000, ge=0)
+    run_history_keep: int = Field(default=DEFAULT_RUN_HISTORY_KEEP, ge=0)
     run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
     failed_retry_max: int = Field(default=0, ge=0)
     failed_retry_wait_cycles: int = Field(default=1, ge=1)

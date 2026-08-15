@@ -543,21 +543,8 @@ def _cmd_start_detached(args: argparse.Namespace) -> int:
         return 1
     try:
         config = _resolve_config(args, config_path)
-    except yaml.YAMLError as exc:
-        console.print(
-            f"[red]Config file {config_path} is not valid YAML:[/red]",
-            soft_wrap=True,
-        )
-        console.print(str(exc), soft_wrap=True)
-        return 1
-    except ValidationError as exc:
-        console.print(
-            f"[red]Config file {config_path} is invalid:[/red]",
-            soft_wrap=True,
-        )
-        for error in exc.errors():
-            loc = ".".join(str(part) for part in error["loc"])
-            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
         return 1
     if config is None:
         return 1
@@ -780,6 +767,26 @@ def _waiting_hint(tasks: list[Task]) -> str | None:
     return f"waiting on: {oldest.id} (needs COMPLETED: {detail})"
 
 
+def _print_config_load_error(
+    config_path: Path, exc: yaml.YAMLError | ValidationError
+) -> None:
+    """Print a user-facing error for a config that failed to load or validate."""
+    if isinstance(exc, yaml.YAMLError):
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return
+    console.print(
+        f"[red]Config file {config_path} is invalid:[/red]",
+        soft_wrap=True,
+    )
+    for error in exc.errors():
+        loc = ".".join(str(part) for part in error["loc"])
+        console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+
+
 def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:
     """Load an existing config; prints an error and returns None when missing."""
     if not config_path.exists():
@@ -846,21 +853,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
         return 1
     try:
         config = load_config(config_path)
-    except yaml.YAMLError as exc:
-        console.print(
-            f"[red]Config file {config_path} is not valid YAML:[/red]",
-            soft_wrap=True,
-        )
-        console.print(str(exc), soft_wrap=True)
-        return 1
-    except ValidationError as exc:
-        console.print(
-            f"[red]Config file {config_path} is invalid:[/red]",
-            soft_wrap=True,
-        )
-        for error in exc.errors():
-            loc = ".".join(str(part) for part in error["loc"])
-            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
         return 1
     report = validate_config(config)
     console.print(render_report(config, report), soft_wrap=True)

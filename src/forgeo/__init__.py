@@ -7,4 +7,4 @@ try:
 
     __version__ = _pkg_version("forgeo-cli")
 except PackageNotFoundError:  # standalone binary: no installed package metadata
-    __version__ = "0.6.0"
+    __version__ = "0.7.0"

@@ -33,7 +33,7 @@ Routes:
   ``restart``).
 * ``PATCH /api/instances/<name>/tasks/<id>`` — update an existing task's
   editable fields (title, description, acceptance criteria, dependencies,
-  files to modify, agent command, agent timeout).
+  files to modify, agent command, agent timeout, retries_left, run_at).
 * ``DELETE /api/instances/<name>/tasks/<id>`` — delete an ``OPEN`` or
   ``BLOCKED`` task from that instance's backlog.
 
@@ -63,7 +63,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import tomllib
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -115,7 +114,6 @@ DEFAULT_PORT = 8790
 
 WEB_START_TIMEOUT_SECONDS = 30.0
 WEB_STOP_TIMEOUT_SECONDS = 30.0
-_POLL_SECONDS = 0.5
 
 DEFAULT_FORGEO_CONFIG_DIR = Path.home() / ".config" / "forgeo"
 
@@ -581,6 +579,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 {"WWW-Authenticate": 'Bearer realm="forgeo"'},
             )
 
+        def _send_not_found(self) -> None:
+            """Send the shared 404 response for an unknown route."""
+            self._send_json(404, {"error": "not found"})
+
         def _maybe_authorize(self, path: str) -> bool:
             """True when the request may proceed; a 401 is sent otherwise.
 
@@ -605,7 +607,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _send_static(self, static: Path | None) -> None:
             if static is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._send_bytes(200, static.read_bytes(), guess_content_type(static))
 
@@ -647,7 +649,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if static is not None:
                 self._send_static(static)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_POST(self) -> None:
             if not self._maybe_authorize(self.path):
@@ -661,7 +663,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._post_instance_api(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_PATCH(self) -> None:
             if not self._maybe_authorize(self.path):
@@ -675,7 +677,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._patch_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_DELETE(self) -> None:
             if not self._maybe_authorize(self.path):
@@ -689,7 +691,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._delete_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_PUT(self) -> None:
             if not self._maybe_authorize(self.path):
@@ -703,7 +705,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._put_instance_api(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def _resolve_instance(self, name: str) -> InstanceInfo | None:
             """The registered instance, or ``None`` after sending a 404."""
@@ -776,7 +778,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return None
             expected = 3 if with_task_id else 2
             if len(parts) != expected or parts[1] != "tasks":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return None
             config = self._instance_config(info)
             if config is None:
@@ -788,16 +790,16 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """Route a POST under ``/api/instances/`` to its handler."""
             parts = _instance_parts(path)
             if len(parts) < 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if parts[1] in ("start", "stop", "restart"):
                 if len(parts) != 2:
-                    self._send_json(404, {"error": "not found"})
+                    self._send_not_found()
                     return
                 self._post_instance_daemon_action(path, parts[1])
                 return
             if parts[1] != "tasks":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if len(parts) == 2:
                 self._post_instance_task(path)
@@ -805,7 +807,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 4 and parts[3] == "reopen":
                 self._reopen_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def _post_instance_daemon_action(self, path: str, action: str) -> None:
             """Start, stop, or restart an instance's daemon from the console.
@@ -1020,7 +1022,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_json(400, {"error": str(exc)})
                 return
             if updated is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._send_json(200, updated.model_dump(mode="json"))
 
@@ -1032,7 +1034,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """
             parts = _instance_parts(path)
             if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "reopen":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             name = unquote(parts[0])
             info = self._resolve_instance(name)
@@ -1046,7 +1048,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if task.status is not TaskStatus.BLOCKED:
                 self._send_json(
@@ -1069,7 +1071,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if task.status not in (TaskStatus.OPEN, TaskStatus.BLOCKED):
                 self._send_json(
@@ -1085,7 +1087,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """Route a PUT under ``/api/instances/`` to its handler."""
             parts = _instance_parts(path)
             if len(parts) != 2 or parts[1] != "config":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._put_instance_config(path)
 
@@ -1179,13 +1181,13 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if info is None:
                 return
             if len(parts) < 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             endpoint = parts[1]
 
             if endpoint == "tasks":
                 if len(parts) not in (2, 3):
-                    self._send_json(404, {"error": "not found"})
+                    self._send_not_found()
                     return
                 tasks = self._instance_tasks(info)
                 if tasks is None:
@@ -1201,10 +1203,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     if task.id == task_id:
                         self._send_json(200, _task_payload(task, tasks, info.config))
                         return
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if len(parts) > 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
 
             if endpoint == "status":
@@ -1248,7 +1250,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(200, info.config.model_dump(mode="json"))
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
     return CentralRequestHandler
 
@@ -1424,19 +1426,16 @@ def start_web_detached(
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if lock.is_held():
-            pid = lock.pid or proc.pid
-            logger.info("Central web server started (pid %s).", pid)
-            return pid
-        if proc.poll() is not None:
-            break
-        time.sleep(_POLL_SECONDS)
-    raise WebLockError(
-        f"Central dashboard did not start within {timeout:.0f}s; "
-        f"check the process output for bind errors."
+    pid = daemon_control.wait_for_process_ready(
+        proc, timeout, is_ready=lock.is_held, ready_pid=lambda: lock.pid
     )
+    if pid is None:
+        raise WebLockError(
+            f"Central dashboard did not start within {timeout:.0f}s; "
+            f"check the process output for bind errors."
+        )
+    logger.info("Central web server started (pid %s).", pid)
+    return pid
 
 
 def run_foreground(

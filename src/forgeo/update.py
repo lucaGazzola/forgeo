@@ -50,12 +50,6 @@ def update_check_enabled() -> bool:
     return value not in ("0", "false", "no", "off")
 
 
-def installed_version() -> str:
-    """The installed version: package metadata when available, else the
-    fallback constant bundled into the standalone binary."""
-    return __version__
-
-
 def fetch_latest_version(url: str = PYPI_JSON_URL) -> str | None:
     """Return the latest ``forgeo-cli`` version from PyPI, or ``None``.
 
@@ -156,7 +150,7 @@ def check_for_update(
     latest = fetch_latest_version()
     if latest is None:
         return None
-    installed = installed_version()
+    installed = __version__
     if not version_is_newer(latest, installed):
         logger.debug("forgeo-cli is up to date (installed %s).", installed)
         return None

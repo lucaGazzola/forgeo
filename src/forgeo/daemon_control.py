@@ -23,6 +23,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from forgeo.daemon import is_lock_held, read_lock_pid
 from forgeo.models import ForgeoConfig
@@ -37,6 +38,31 @@ _POLL_SECONDS = 0.5
 
 class DaemonError(Exception):
     """A daemon lifecycle action failed; the message is user-facing."""
+
+
+def wait_for_process_ready(
+    proc: subprocess.Popen[Any],
+    timeout: float,
+    *,
+    is_ready: Callable[[], bool],
+    ready_pid: Callable[[], int | None] | None = None,
+) -> int | None:
+    """Wait for a just-launched detached process to report readiness.
+
+    ``is_ready`` says the process is up (typically its lock file is held);
+    ``ready_pid`` returns the pid it recorded, preferred over ``proc.pid``.
+    Returns the running pid, or ``None`` when the process exits or the
+    timeout elapses before it reports ready.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if is_ready():
+            recorded = ready_pid() if ready_pid is not None else None
+            return recorded if recorded is not None else proc.pid
+        if proc.poll() is not None:
+            return None
+        time.sleep(_POLL_SECONDS)
+    return None
 
 
 def wait_for_lock_release(
@@ -132,18 +158,18 @@ def start_daemon(
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    deadline = time.monotonic() + START_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if is_lock_held(lock_path):
-            pid = read_lock_pid(lock_path) or proc.pid
-            logger.info("Forgeo %r started (pid %s).", config.name, pid)
-            return pid
-        if proc.poll() is not None:
-            break
-        time.sleep(_POLL_SECONDS)
-    raise DaemonError(
-        f"Forgeo daemon did not start; see {config.log_file} for details."
+    pid = wait_for_process_ready(
+        proc,
+        START_TIMEOUT_SECONDS,
+        is_ready=lambda: is_lock_held(lock_path),
+        ready_pid=lambda: read_lock_pid(lock_path),
     )
+    if pid is None:
+        raise DaemonError(
+            f"Forgeo daemon did not start; see {config.log_file} for details."
+        )
+    logger.info("Forgeo %r started (pid %s).", config.name, pid)
+    return pid
 
 
 def restart_daemon(

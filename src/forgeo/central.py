@@ -623,10 +623,21 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 logger.exception("Web request failed: %s", urlparse(self.path).path)
                 self._send_json(500, {"error": "internal server error"})
 
-        def do_GET(self) -> None:
+        def _dispatch(self, handler: Callable[[], None]) -> None:
+            """Authorize, then run one request handler safely.
+
+            Shared by the five HTTP verbs: a request is authorized first (a
+            missing or wrong bearer token answers ``401`` without reaching the
+            handler), then the handler runs under :meth:`_run_safely` so a
+            failure is answered with a JSON 500 instead of crashing the
+            server thread.
+            """
             if not self._maybe_authorize(self.path):
                 return
-            self._run_safely(self._do_get)
+            self._run_safely(handler)
+
+        def do_GET(self) -> None:
+            self._dispatch(self._do_get)
 
         def _do_get(self) -> None:
             parsed = urlparse(self.path)
@@ -652,9 +663,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_not_found()
 
         def do_POST(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_post)
+            self._dispatch(self._do_post)
 
         def _do_post(self) -> None:
             parsed = urlparse(self.path)
@@ -666,9 +675,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_not_found()
 
         def do_PATCH(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_patch)
+            self._dispatch(self._do_patch)
 
         def _do_patch(self) -> None:
             parsed = urlparse(self.path)
@@ -680,9 +687,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_not_found()
 
         def do_DELETE(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_delete)
+            self._dispatch(self._do_delete)
 
         def _do_delete(self) -> None:
             parsed = urlparse(self.path)
@@ -694,9 +699,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_not_found()
 
         def do_PUT(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_put)
+            self._dispatch(self._do_put)
 
         def _do_put(self) -> None:
             parsed = urlparse(self.path)

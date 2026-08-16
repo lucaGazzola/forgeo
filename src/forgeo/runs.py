@@ -87,12 +87,8 @@ class RunRecorder:
         warning. ``limit=None`` returns every readable record after ``offset``
         (``offset=0`` starts at the newest).
         """
-        records, _ = self._read_all()
-        if offset > 0:
-            records = records[offset:]
-        if limit is None:
-            return records
-        return records[: max(0, limit)]
+        records, _ = self.read_with_total(limit, offset)
+        return records
 
     def read_with_total(
         self, limit: int | None = None, offset: int = 0

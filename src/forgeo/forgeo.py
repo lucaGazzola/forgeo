@@ -82,7 +82,6 @@ class BlockerEntry:
     task: Task
     result: ExecutionResult
     instruction: str
-    is_refactor: bool = False
 
 
 class Forgeo:
@@ -502,7 +501,6 @@ class Forgeo:
                     task=task,
                     result=result,
                     instruction=instruction,
-                    is_refactor=is_refactor,
                 )
                 if is_refactor:
                     await self._write_blocker([entry])

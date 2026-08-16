@@ -317,9 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_config_or_name(
-    parser: argparse.ArgumentParser, *, default_config: Path = DEFAULT_CONFIG
-) -> None:
+def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
     """Add a mutually-exclusive ``--config``/``--name`` option pair.
 
     ``--config`` keeps its default so plain ``forgeo start`` (etc.) keeps
@@ -330,7 +328,7 @@ def _add_config_or_name(
     group.add_argument(
         "--config",
         type=Path,
-        default=default_config,
+        default=DEFAULT_CONFIG,
         help="Forgeo YAML file (default: forgeo.yaml).",
     )
     group.add_argument(

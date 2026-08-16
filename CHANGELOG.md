@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `task_context` config key: a path to a file (e.g. `CONTEXT.md`) whose
+  contents are prepended to every agent instruction — tasks and refactoring
+  runs alike — before the task description. The agent gets the high-level
+  project overview instead of only the isolated task; the file is re-read on
+  every run, so the agent's own updates are picked up on the next cycle. A
+  missing or unreadable file never fails a cycle: it is logged, `forgeo
+  validate` reports it as a warning, and the run proceeds with the bare
+  instruction.
+- The default agent prompt (used by `forgeo init`) now tells the agent to
+  read `AGENTS.md` (and `CONTEXT.md` if present) at the start of the session
+  and to keep them updated when a change materially affects the project
+  overview.
+
 - `forgeo run --task <id>` runs exactly one specific `OPEN` task by id and
   exits, instead of letting `forgeo once` pick the oldest one — for triage:
   rerun a `FAILED` task (after reopening it) or try a risky task now. It

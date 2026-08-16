@@ -73,6 +73,7 @@ class FakeAgent(BaseAgent):
         self.effect: Callable[[], None] | None = None
         self.calls: list[tuple[Task, RepoContext]] = []
         self.overrides: list[tuple[str | list[str] | None, float | None]] = []
+        self.instructions: list[str | None] = []
 
     async def run_task(
         self,
@@ -81,9 +82,11 @@ class FakeAgent(BaseAgent):
         *,
         command: str | list[str] | None = None,
         timeout_seconds: float | None = None,
+        instruction: str | None = None,
     ) -> ExecutionResult:
         self.calls.append((task, context))
         self.overrides.append((command, timeout_seconds))
+        self.instructions.append(instruction)
         if self.effect is not None:
             self.effect()
         return self.result

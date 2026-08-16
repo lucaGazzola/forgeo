@@ -81,6 +81,14 @@ agent_env: {}                 # Extra environment variables for the agent proces
 blocked_exit_code: 2
 no_changes_exit_code: 3
 
+# Optional: path to a file whose contents are prepended to every agent
+# instruction (tasks and refactoring runs alike). This gives the agent the
+# high-level project overview (e.g. CONTEXT.md) before the task, instead of
+# only the isolated task description. The file is re-read on every run, so
+# the agent's own updates to it are picked up on the next cycle; a missing or
+# unreadable file is a `forgeo validate` warning and the cycle runs without it.
+# task_context: CONTEXT.md
+
 # Optional: isolate the agent in a Docker sandbox instead of running it on the
 # host with the user's full privileges. The default `none` runs the agent
 # exactly as before. Set `docker` to run it inside `docker run --rm` with the

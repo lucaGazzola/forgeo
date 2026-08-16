@@ -36,6 +36,7 @@ paths), so `forgeo restart` is still used for those.
 | <span style="white-space: nowrap">`blocked_exit_code`</span> | `2` | Exit code meaning "needs human input". |
 | <span style="white-space: nowrap">`no_changes_exit_code`</span> | `3` | Exit code meaning "this task needs no code change". Exiting `0` with an unchanged tree fails the task instead. |
 | <span style="white-space: nowrap">`refactor_prompt`</span> | default refactor prompt | Instruction used when the backlog is empty. |
+| <span style="white-space: nowrap">`task_context`</span> | — | Optional path to a file (e.g. `CONTEXT.md`) whose contents are prepended to every agent instruction. |
 | <span style="white-space: nowrap">`log_file`</span> | `forgeo.log` | Where the daemon writes its log. |
 | <span style="white-space: nowrap">`run_history_keep`</span> | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
 | <span style="white-space: nowrap">`run_output_lines`</span> | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
@@ -291,6 +292,25 @@ The payload is the JSON body of a `POST` with `Content-Type:
 application/json`; Forgeo considers any non-200 response a failure. Uses the
 stdlib only, with a 5-second timeout. A failing or unreachable webhook is
 logged as a warning and never changes the outcome of a cycle.
+
+### `task_context`
+
+Optional path to a file whose contents are prepended to **every** agent
+instruction — tasks and refactoring runs alike — before the task description:
+
+```yaml
+task_context: CONTEXT.md
+```
+
+The agent receives the file's contents as the first part of `FORGEO_TASK`,
+with the task appended after a `# Task` heading, so it always has the
+high-level project overview instead of only the isolated task description.
+The file is re-read on every run, so updates made by an earlier agent (e.g.
+the agent keeping `CONTEXT.md` accurate) are picked up on the next cycle.
+
+A missing or unreadable file never fails a cycle: it is logged as a warning,
+the run proceeds with the bare task instruction, and `forgeo validate`
+surfaces it as a warning too.
 
 ## Instance registry
 

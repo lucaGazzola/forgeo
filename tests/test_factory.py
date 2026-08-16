@@ -753,6 +753,60 @@ async def test_task_instruction_reaches_agent(git_repo, tmp_path):
     assert called_task.id == "TASK-001"
 
 
+async def test_task_context_prepended_to_instruction(git_repo, tmp_path):
+    context_file = tmp_path / "CONTEXT.md"
+    context_file.write_text(
+        "# Project overview\n\nThe forgeo does things.\n", encoding="utf-8"
+    )
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, task_context=context_file)
+    task = make_task(acceptance_criteria=["tests pass"])
+    await backlog.create_task(task)
+    await forgeo.run_cycle()
+
+    (instruction,) = agent.instructions
+    assert instruction.startswith(f"# Project context (from {context_file.resolve()}")
+    assert "# Project overview\n\nThe forgeo does things." in instruction
+    assert instruction.endswith(task.instruction)
+
+
+async def test_task_context_prepended_to_refactor_instruction(git_repo, tmp_path):
+    context_file = tmp_path / "CONTEXT.md"
+    context_file.write_text("Refactoring context here.\n", encoding="utf-8")
+    forgeo, agent, _backlog = make_forgeo(git_repo, tmp_path, task_context=context_file)
+    await forgeo.run_cycle()
+
+    (instruction,) = agent.instructions
+    assert instruction.startswith(f"# Project context (from {context_file.resolve()}")
+    assert "Refactoring context here." in instruction
+    assert instruction.endswith(forgeo.config.refactor_prompt)
+
+
+async def test_task_context_missing_file_runs_without_it(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(
+        git_repo, tmp_path, task_context=tmp_path / "nope.md"
+    )
+    task = make_task()
+    await backlog.create_task(task)
+    await forgeo.run_cycle()
+
+    (instruction,) = agent.instructions
+    assert instruction == task.instruction
+
+
+async def test_task_context_refreshed_each_run(git_repo, tmp_path):
+    context_file = tmp_path / "CONTEXT.md"
+    context_file.write_text("Version one.\n", encoding="utf-8")
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, task_context=context_file)
+    await backlog.create_task(make_task())
+    await forgeo.run_cycle()
+    context_file.write_text("Version two.\n", encoding="utf-8")
+    await backlog.create_task(make_task(id="TASK-002", description="Build it again."))
+    await forgeo.run_cycle()
+
+    assert "Version one." in agent.instructions[0]
+    assert "Version two." in agent.instructions[1]
+
+
 async def test_task_agent_command_override_reaches_agent(git_repo, tmp_path):
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(

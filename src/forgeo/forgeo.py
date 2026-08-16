@@ -409,6 +409,7 @@ class Forgeo:
             RepoContext(repo_path=self.config.repo, branch=self.config.branch),
             command=command,
             timeout_seconds=timeout_seconds,
+            instruction=self._full_instruction(instruction),
         )
         self._last_agent_result = result
         ok = await self._handle_execution_result(
@@ -420,6 +421,35 @@ class Forgeo:
             is_refactor=is_refactor,
         )
         return result, ok
+
+    def _full_instruction(self, instruction: str) -> str:
+        """The instruction handed to the agent, with the project context
+        prepended when ``task_context`` is configured.
+
+        The context file is re-read on every run, so the agent's own updates
+        to it are picked up on the next cycle. An unreadable or empty context
+        file is logged and the run proceeds with the bare instruction: a
+        cycle must never fail because a documentation file is missing.
+        """
+        path = self.config.task_context
+        if path is None:
+            return instruction
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "task_context %s unreadable (%s); running without it.", path, exc
+            )
+            return instruction
+        text = text.strip()
+        if not text:
+            logger.warning("task_context %s is empty; running without it.", path)
+            return instruction
+        return (
+            f"# Project context (from {path})\n\n"
+            f"{text}\n\n"
+            f"# Task\n\n{instruction}"
+        )
 
     async def _handle_execution_result(
         self,

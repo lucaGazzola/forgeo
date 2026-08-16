@@ -475,11 +475,12 @@ a restart (via the **Restart** button or `POST .../restart`). Errors:
 `forgeo.yaml`) and is forced to the registered name — sending a different value
 is rejected. `telegram_bot_token` is not editable through the web console: an
 explicit change is rejected with `400`, and the current value is preserved when
-the field is omitted, so a partial payload never wipes it. `backlog_auth` and
-`state_dir` are likewise preserved when the payload omits them — the config
-form does not render them, and a save must not drop what it never showed.
-Everything else `GET .../config` returns (including `agent_env`, which can
-carry credentials the agent needs) is editable.
+the field is omitted, so a partial payload never wipes it. `backlog_auth`,
+`state_dir` and `task_context` are likewise preserved when the payload omits
+them — a save must not drop what it never showed (the console renders
+`task_context` as a plain text field; the other two are nested settings it
+does not render). Everything else `GET .../config` returns (including
+`agent_env`, which can carry credentials the agent needs) is editable.
 
 ### `POST /api/instances/<name>/start`, `/stop`, `/restart`
 

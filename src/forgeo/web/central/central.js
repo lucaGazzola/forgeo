@@ -1206,6 +1206,7 @@
     { key: "no_changes_exit_code", label: "No-changes exit code", type: "number", min: 1, step: 1, hint: "Exit code the agent uses to signal a task needs no code change. Exiting 0 with an unchanged tree fails the task instead." },
     { key: "git_timeout_seconds", label: "Git timeout (seconds)", type: "number", min: 0.1, step: "any" },
     { key: "refactor_prompt", label: "Refactor prompt", type: "textarea", rows: 4, hint: "Instruction used for the refactoring run when the backlog is empty." },
+    { key: "task_context", label: "Task context file", type: "text", optional: true, hint: "Path to a file (e.g. CONTEXT.md) whose contents are prepended to every agent instruction, so the agent gets the high-level project overview before the task." },
     { key: "backlog", label: "Backlog file or URL", type: "text", hint: "Path of the JSON backlog file (created on first use), or an http(s) endpoint serving the same document (GET to read, POST to write)." },
     { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
     { key: "log_file", label: "Log file", type: "text" },

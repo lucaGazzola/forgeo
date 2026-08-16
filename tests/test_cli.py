@@ -625,6 +625,33 @@ def test_validate_healthy_without_backlog(git_repo, tmp_path, capsys):
     assert "Forgeo is ready to run." in capsys.readouterr().out
 
 
+def test_validate_missing_task_context_is_a_warning(git_repo, tmp_path, capsys):
+    """A configured context file that is gone warns but does not block."""
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(
+        config_path, repo=git_repo, task_context=tmp_path / "CONTEXT.md"
+    )
+    assert not (tmp_path / "CONTEXT.md").exists()
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "Forgeo is ready to run." in out
+    assert "task_context not found" in out
+
+
+def test_validate_present_task_context_raises_no_warning(git_repo, tmp_path, capsys):
+    (tmp_path / "CONTEXT.md").write_text("# overview\n", encoding="utf-8")
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(
+        config_path, repo=git_repo, task_context=tmp_path / "CONTEXT.md"
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "Forgeo is ready to run." in out
+    assert "task_context" not in out
+
+
 def test_validate_missing_config(tmp_path, capsys):
     assert cmd_validate(validate_args(tmp_path / "missing.yaml")) == 1
     assert "not found" in capsys.readouterr().out

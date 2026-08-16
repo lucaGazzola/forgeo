@@ -19,7 +19,7 @@ the process environment is augmented as follows:
 
 | Variable | Meaning |
 | --- | --- |
-| <span style="white-space: nowrap">`FORGEO_TASK`</span> | The full instruction for this run: title, blank line, description, and an "Acceptance criteria:" list when present. |
+| <span style="white-space: nowrap">`FORGEO_TASK`</span> | The full instruction for this run: the project context when `task_context` is configured, then title, blank line, description, and an "Acceptance criteria:" list when present. |
 | <span style="white-space: nowrap">`FORGEO_REPO`</span> | The absolute path of the repository. |
 | <span style="white-space: nowrap">`FORGEO_BRANCH`</span> | The branch everything is committed to (default `main`). |
 | <span style="white-space: nowrap">*every `agent_env` key*</span> | Any extra variables from `agent_env` in the config. |
@@ -28,9 +28,19 @@ the process environment is augmented as follows:
 `FORGEO_*` variables are set unconditionally and take precedence over both the
 inherited environment and `agent_env`.
 
+### The task is not the whole picture
+
+A task description is isolated by design: it describes one unit of work, not
+the project. When `task_context` is set (see
+[Configuration](configuration.md#task_context)), Forgeo prepends the contents
+of that file — the high-level project overview — to `FORGEO_TASK` before the
+task, under a `# Project context` heading, followed by the task under a
+`# Task` heading. The file is re-read on every run, so an agent's own updates
+to it are seen by the next cycle.
+
 For a refactoring run (empty backlog) the same contract applies: the refactor
-prompt arrives as `FORGEO_TASK` with the task id `REFACTOR` and title
-"Refactoring pass".
+prompt arrives as `FORGEO_TASK` (with the context prepended when configured),
+with the task id `REFACTOR` and title "Refactoring pass".
 
 ## Exit codes
 
@@ -125,6 +135,8 @@ agent_command: >
   Make the code changes requested below and nothing else. Do NOT run
   git commit, git push, or git add -A — Forgeo commits your work.
   Verify with the test suite where applicable.
+  Read AGENTS.md (and CONTEXT.md if present) at the start of the session;
+  if your change materially affects the project overview, keep them updated.
   $FORGEO_TASK"
 ```
 

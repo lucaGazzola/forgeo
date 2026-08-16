@@ -1105,9 +1105,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             instance name (a different value is rejected); ``telegram_bot_token``
             is not editable through the web console — an explicit change is
             rejected and the current value is preserved when the field is
-            omitted. ``backlog_auth`` and ``state_dir`` are nested settings the
-            flat config form does not render, so an omitted value keeps what
-            the config already holds instead of clearing it.
+            omitted. ``backlog_auth``, ``state_dir`` and ``task_context`` are
+            nested settings the flat config form does not render, so an omitted
+            value keeps what the config already holds instead of clearing it.
             """
             parts = _instance_parts(path)
             name = unquote(parts[0])
@@ -1144,7 +1144,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 payload["telegram_bot_token"] = config.telegram_bot_token
             # The config form is flat, so it carries neither of these nested
             # settings; a save must not drop what it never showed.
-            for preserved in ("backlog_auth", "state_dir"):
+            for preserved in ("backlog_auth", "state_dir", "task_context"):
                 if preserved not in payload:
                     payload[preserved] = getattr(config, preserved)
 

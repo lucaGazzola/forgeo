@@ -87,10 +87,40 @@ class RunRecorder:
         warning. ``limit=None`` returns every readable record after ``offset``
         (``offset=0`` starts at the newest).
         """
+        records, _ = self._read_all()
+        if offset > 0:
+            records = records[offset:]
+        if limit is None:
+            return records
+        return records[: max(0, limit)]
+
+    def read_with_total(
+        self, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[RunRecord], int]:
+        """Return ``(records, total)`` from a single pass over the history.
+
+        ``records`` are the newest ``limit`` records after skipping ``offset``
+        (same shape as :meth:`read`); ``total`` is the count of every readable
+        record, independent of the pagination. This is the pair the web API
+        needs, computed without reading and parsing the file twice.
+        """
+        records, total = self._read_all()
+        if offset > 0:
+            records = records[offset:]
+        if limit is None:
+            return records, total
+        return records[: max(0, limit)], total
+
+    def _read_all(self) -> tuple[list[RunRecord], int]:
+        """Parse the whole history once; returns records (newest first) and count.
+
+        A missing file yields ``([], 0)``; corrupt lines are skipped with a
+        warning, so they never count as records.
+        """
         try:
             text = self.path.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return []
+            return [], 0
         records: list[RunRecord] = []
         for line_no, line in enumerate(text.splitlines(), start=1):
             if not line.strip():
@@ -102,11 +132,7 @@ class RunRecorder:
                     "Skipping corrupt run record in %s on line %s", self.path, line_no
                 )
         records.sort(key=lambda record: record.finished_at, reverse=True)
-        if offset > 0:
-            records = records[offset:]
-        if limit is None:
-            return records
-        return records[: max(0, limit)]
+        return records, len(records)
 
     def total(self) -> int:
         """The number of readable records in the run history, or ``0``.
@@ -114,7 +140,8 @@ class RunRecorder:
         A missing, empty, or corrupt-only file counts as zero; corrupt lines
         are skipped with a warning, matching :meth:`read`.
         """
-        return len(self.read())
+        _, total = self._read_all()
+        return total
 
     def read_last(self) -> RunRecord | None:
         """Return the most recent record, or ``None`` when none exists."""

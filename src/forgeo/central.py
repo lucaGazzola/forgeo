@@ -1230,12 +1230,12 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 recorder = RunRecorder(runs_path(info.config))
-                records = recorder.read(limit=limit, offset=offset)
+                records, total = recorder.read_with_total(limit=limit, offset=offset)
                 self._send_json(
                     200,
                     {
                         "runs": [r.model_dump(mode="json") for r in records],
-                        "total": recorder.total(),
+                        "total": total,
                         "offset": offset,
                         "limit": limit,
                     },
@@ -1367,26 +1367,14 @@ def stop_web(timeout: float = WEB_STOP_TIMEOUT_SECONDS) -> None:
             f"The lock file {lock.lock_path} records no PID; find the dashboard "
             f"with `pgrep -af forgeo` and stop it manually."
         )
-    logger.info("Stopping central dashboard (pid %s)...", pid)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        if not lock.is_held():
-            logger.info("Central dashboard stopped.")
-            return
-        raise WebLockError(
-            f"Recorded pid {pid} is gone but the lock file is still held; "
-            f"check with `pgrep -af forgeo`."
-        )
-    except PermissionError:
-        raise WebLockError(f"No permission to stop process {pid}.")
-    if daemon_control.wait_for_lock_release(lock.lock_path, timeout, is_held=lock.is_held):
-        lock.release()
-        logger.info("Central dashboard stopped.")
-        return
-    raise WebLockError(
-        f"Central dashboard is still shutting down after {timeout:.0f}s; giving up."
+    daemon_control.signal_and_wait_for_release(
+        pid,
+        name="central dashboard",
+        is_held=lock.is_held,
+        timeout=timeout,
+        error_cls=WebLockError,
     )
+    lock.release()
 
 
 def start_web_detached(

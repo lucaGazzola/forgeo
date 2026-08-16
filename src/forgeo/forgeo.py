@@ -62,12 +62,12 @@ class TaskNotRunnableError(RuntimeError):
 
 
 def _execution_outcome(status: ExecutionStatus) -> RunOutcome:
-    """Map an agent execution status onto a run record outcome."""
-    return {
-        ExecutionStatus.SUCCESS: RunOutcome.SUCCESS,
-        ExecutionStatus.BLOCKED: RunOutcome.BLOCKED,
-        ExecutionStatus.ERROR: RunOutcome.ERROR,
-    }[status]
+    """Map an agent execution status onto a run record outcome.
+
+    The two enums share member names for the agent outcomes (SUCCESS, BLOCKED,
+    ERROR), so the mapping is a plain name lookup.
+    """
+    return RunOutcome[status.name]
 
 
 def _subject_label(task: Task, *, is_refactor: bool) -> str:
@@ -134,10 +134,7 @@ class Forgeo:
         tasks = await self.backlog.list_tasks()
         task = oldest_open_task(tasks)
         if task is not None:
-            if not await self._tree_clean_for(task):
-                return "dirty"
-            await self._run_task(task)
-            return "task"
+            return await self._run_task_clean(task)
 
         if self.config.blocker_file.exists():
             logger.info("Blocker file present; forgeo paused until it is resolved.")
@@ -182,10 +179,7 @@ class Forgeo:
                 f"Task {task_id!r} is {task.status.value}; only OPEN tasks can "
                 f"be run with `forgeo run`."
             )
-        if not await self._tree_clean_for(task):
-            return "dirty"
-        await self._run_task(task)
-        return "task"
+        return await self._run_task_clean(task)
 
     async def _begin_run(self) -> list[Task]:
         """Reset the run state and load the tasks for a new cycle."""
@@ -211,6 +205,18 @@ class Forgeo:
             task.id,
         )
         return False
+
+    async def _run_task_clean(self, task: Task) -> str:
+        """Run ``task`` when the working tree is clean; returns the outcome label.
+
+        Shared by the scheduled pick (:meth:`_run_cycle`) and the explicit
+        ``forgeo run`` (:meth:`_run_task_id`): a dirty tree is refused with a
+        ``dirty`` outcome, otherwise the task runs and the outcome is ``task``.
+        """
+        if not await self._tree_clean_for(task):
+            return "dirty"
+        await self._run_task(task)
+        return "task"
 
     # ------------------------------------------------------------------ #
     # Failed-task retries                                                 #

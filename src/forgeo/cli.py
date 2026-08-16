@@ -654,20 +654,37 @@ def _run_worker_with_lock(
     return result
 
 
-def cmd_once(args: argparse.Namespace) -> int:
-    """Handle ``forgeo once``: run exactly one cycle and exit."""
+def _run_worker_once(
+    args: argparse.Namespace,
+    runner: Callable[[Forgeo], Coroutine[Any, Any, int]],
+) -> int:
+    """Prepare the worker and run one cycle through ``runner``.
+
+    Shared plumbing of ``forgeo once`` and ``forgeo run``: resolve the config,
+    take the per-forgeo lock, run the optional update check, execute exactly
+    one cycle via ``runner``, and release the lock on the way out.
+    """
     prepared = _prepare_worker(args)
     if prepared is None:
         return 1
     _config_path, _config, forgeo, lock = prepared
 
-    async def _run_once() -> int:
+    async def _execute() -> int:
         check_for_update(update_state_path(_config), print_fn=console.print)
+        return await runner(forgeo)
+
+    return _run_worker_with_lock(lock, _execute)
+
+
+def cmd_once(args: argparse.Namespace) -> int:
+    """Handle ``forgeo once``: run exactly one cycle and exit."""
+
+    async def _cycle(forgeo: Forgeo) -> int:
         outcome = await forgeo.run_cycle()
         console.print(f"[green]Cycle finished: {outcome}[/green]")
         return 0
 
-    return _run_worker_with_lock(lock, _run_once)
+    return _run_worker_once(args, _cycle)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -680,14 +697,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     overlaps them; it refuses (exit 1) when the task does not exist or is
     not ``OPEN``.
     """
-    prepared = _prepare_worker(args)
-    if prepared is None:
-        return 1
-    _config_path, _config, forgeo, lock = prepared
     task_id = args.task
 
-    async def _run_one() -> int:
-        check_for_update(update_state_path(_config), print_fn=console.print)
+    async def _one(forgeo: Forgeo) -> int:
         try:
             outcome = await forgeo.run_task_id(task_id)
         except TaskNotRunnableError as exc:
@@ -696,7 +708,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         console.print(f"[green]Cycle finished: {outcome}[/green]")
         return 0
 
-    return _run_worker_with_lock(lock, _run_one)
+    return _run_worker_once(args, _one)
 
 
 def cmd_init(args: argparse.Namespace) -> int:

@@ -14,7 +14,6 @@ Everything here is lock-file driven and never touches the config-save flow.
 
 from __future__ import annotations
 
-import functools
 import logging
 import os
 import signal
@@ -65,26 +64,49 @@ def wait_for_process_ready(
     return None
 
 
-def wait_for_lock_release(
-    lock_path: Path,
-    timeout: float,
+def signal_and_wait_for_release(
+    pid: int,
     *,
-    is_held: Callable[[], bool] | None = None,
-) -> bool:
-    """Poll until the lock is released; False on timeout.
+    name: str,
+    is_held: Callable[[], bool],
+    timeout: float,
+    error_cls: type[Exception],
+    timeout_hint: str = "",
+) -> None:
+    """SIGTERM ``pid`` and wait for the lock it holds to be released.
 
-    ``is_held`` defaults to the flock-based :func:`is_lock_held`; pass a
-    custom predicate (e.g. a PID-alive check for the web-dashboard lock) to
-    reuse the same wait loop for other lock kinds.
+    Shared by the daemon and the central-dashboard stop commands: SIGTERM the
+    recorded PID, tolerate a process that already exited (as long as its lock
+    is gone too), refuse without permission, and wait for the lock to drop
+    within ``timeout`` (a cycle in progress finishes first). Any failure
+    raises ``error_cls`` — each caller's own error type — with a user-facing
+    message; on success ``name`` is logged as stopped.
     """
-    if is_held is None:
-        is_held = functools.partial(is_lock_held, lock_path)
+    logger.info("Stopping %s (pid %s)...", name, pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        if not is_held():
+            logger.info("%s stopped.", name)
+            return
+        raise error_cls(
+            f"Recorded pid {pid} is gone but the lock is still held; "
+            f"check with `pgrep -af forgeo`."
+        ) from None
+    except PermissionError:
+        raise error_cls(f"No permission to stop process {pid}.") from None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not is_held():
-            return True
+            logger.info("%s stopped.", name)
+            return
         time.sleep(_POLL_SECONDS)
-    return not is_held()
+    if not is_held():
+        logger.info("%s stopped.", name)
+        return
+    raise error_cls(
+        f"{name} is still shutting down after {timeout:.0f}s{timeout_hint}; giving up."
+    )
 
 
 def stop_daemon(
@@ -103,25 +125,13 @@ def stop_daemon(
             f"The lock file {lock_path} records no PID; find the daemon "
             f"with `pgrep -af forgeo` and stop it manually."
         )
-    logger.info("Stopping forgeo %r (pid %s)...", config.name, pid)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        if not is_lock_held(lock_path):
-            logger.info("Forgeo %r stopped.", config.name)
-            return
-        raise DaemonError(
-            f"Recorded pid {pid} is gone but the lock is still held; "
-            f"check with `pgrep -af forgeo`."
-        )
-    except PermissionError:
-        raise DaemonError(f"No permission to stop process {pid}.")
-    if wait_for_lock_release(lock_path, timeout):
-        logger.info("Forgeo %r stopped.", config.name)
-        return
-    raise DaemonError(
-        f"Forgeo is still shutting down after {timeout:.0f}s "
-        f"(a cycle in progress finishes first); giving up."
+    signal_and_wait_for_release(
+        pid,
+        name=f"forgeo {config.name!r}",
+        is_held=lambda: is_lock_held(lock_path),
+        timeout=timeout,
+        error_cls=DaemonError,
+        timeout_hint=" (a cycle in progress finishes first)",
     )
 
 

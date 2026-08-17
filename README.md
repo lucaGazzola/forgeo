@@ -10,6 +10,10 @@
 [![CI](https://github.com/lucaGazzola/forgeo/actions/workflows/ci.yml/badge.svg)](https://github.com/lucaGazzola/forgeo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+<div align="center">
+  <img src="docs/img/demo.gif" alt="Forgeo running a backlog task end to end" width="720">
+</div>
+
 **Forgeo is a software factory for your coding-agent.**
 You're already working with an AI coding agent, prompting it task by task
 or giving it a goal. Forgeo organizes your work in a structured way with

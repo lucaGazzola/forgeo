@@ -57,9 +57,10 @@ DEFAULT_AGENT_PROMPT = (
     "Make the code changes requested below and nothing else. Do NOT run\n"
     "git commit, git push, or git add -A — the forgeo commits your work\n"
     "itself. Verify with the test suite where applicable and, if needed,\n"
-    "update readme, docs and landing page. Read AGENTS.md (and CONTEXT.md\n"
-    "if present) at the start of the session; if your change materially\n"
-    "affects the project overview, keep them updated.\n"
+    "update readme, docs and landing page. Read AGENTS.md at the start of\n"
+    "the session, and CONTEXT.md if present; if your change materially\n"
+    "affects the project overview or conventions, update AGENTS.md and\n"
+    "CONTEXT.md accordingly.\n"
     "$FORGEO_TASK"
 )
 

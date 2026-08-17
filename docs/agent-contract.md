@@ -135,8 +135,9 @@ agent_command: >
   Make the code changes requested below and nothing else. Do NOT run
   git commit, git push, or git add -A — Forgeo commits your work.
   Verify with the test suite where applicable.
-  Read AGENTS.md (and CONTEXT.md if present) at the start of the session;
-  if your change materially affects the project overview, keep them updated.
+  Read AGENTS.md at the start of the session, and CONTEXT.md if present;
+  if your change materially affects the project overview or conventions,
+  update AGENTS.md and CONTEXT.md accordingly.
   $FORGEO_TASK"
 ```
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The default agent prompt (used by `forgeo init`) now names `AGENTS.md` and
+  `CONTEXT.md` explicitly when telling the agent to keep project overview and
+  conventions up to date.
+
 ## [0.7.0] - 2026-08-16
 
 ### Added

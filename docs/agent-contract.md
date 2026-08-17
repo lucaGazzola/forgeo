@@ -19,18 +19,28 @@ the process environment is augmented as follows:
 
 | Variable | Meaning |
 | --- | --- |
-| `FORGEO_TASK` | The full instruction for this run: title, blank line, description, and an "Acceptance criteria:" list when present. |
-| `FORGEO_REPO` | The absolute path of the repository. |
-| `FORGEO_BRANCH` | The branch everything is committed to (default `main`). |
-| *every `agent_env` key* | Any extra variables from `agent_env` in the config. |
-| *inherited environment* | The daemon's own environment. |
+| <span style="white-space: nowrap">`FORGEO_TASK`</span> | The full instruction for this run: the project context when `task_context` is configured, then title, blank line, description, and an "Acceptance criteria:" list when present. |
+| <span style="white-space: nowrap">`FORGEO_REPO`</span> | The absolute path of the repository. |
+| <span style="white-space: nowrap">`FORGEO_BRANCH`</span> | The branch everything is committed to (default `main`). |
+| <span style="white-space: nowrap">*every `agent_env` key*</span> | Any extra variables from `agent_env` in the config. |
+| <span style="white-space: nowrap">*inherited environment*</span> | The daemon's own environment. |
 
 `FORGEO_*` variables are set unconditionally and take precedence over both the
 inherited environment and `agent_env`.
 
+### The task is not the whole picture
+
+A task description is isolated by design: it describes one unit of work, not
+the project. When `task_context` is set (see
+[Configuration](configuration.md#task_context)), Forgeo prepends the contents
+of that file — the high-level project overview — to `FORGEO_TASK` before the
+task, under a `# Project context` heading, followed by the task under a
+`# Task` heading. The file is re-read on every run, so an agent's own updates
+to it are seen by the next cycle.
+
 For a refactoring run (empty backlog) the same contract applies: the refactor
-prompt arrives as `FORGEO_TASK` with the task id `REFACTOR` and title
-"Refactoring pass".
+prompt arrives as `FORGEO_TASK` (with the context prepended when configured),
+with the task id `REFACTOR` and title "Refactoring pass".
 
 ## Exit codes
 
@@ -38,10 +48,10 @@ The exit code decides the outcome of the run:
 
 | Exit code | Outcome | What happens |
 | --- | --- | --- |
-| `0` | **SUCCESS** | Everything is committed (`git add -A && git commit`) with the message `<title> (#<id>)`, pushed when a remote is set, and the task is marked `COMPLETED`. |
-| `no_changes_exit_code` (default `3`) | **SUCCESS, no changes** | The agent explicitly reports the task needs **no code change**: the task is marked `COMPLETED` without a commit (and the run record notes why). Only accepted when the working tree is clean. |
-| `blocked_exit_code` (default `2`) | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> [partial]`, the agent's reason is persisted on the task (`blocker_reason`), optional Telegram and/or webhook notifications are sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
-| anything else | **ERROR** | Changes are discarded (`git reset --hard` + `git clean -fd`), the failure is logged, and the task is marked `FAILED`. |
+| <span style="white-space: nowrap">`0`</span> | **SUCCESS** | Everything is committed (`git add -A && git commit`) with the message `<title> (#<id>)`, pushed when a remote is set, and the task is marked `COMPLETED`. |
+| <span style="white-space: nowrap">`no_changes_exit_code` (default `3`)</span> | **SUCCESS, no changes** | The agent explicitly reports the task needs **no code change**: the task is marked `COMPLETED` without a commit (and the run record notes why). Only accepted when the working tree is clean. |
+| <span style="white-space: nowrap">`blocked_exit_code` (default `2`)</span> | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> [partial]`, the agent's reason is persisted on the task (`blocker_reason`), optional Telegram and/or webhook notifications are sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
+| <span style="white-space: nowrap">anything else</span> | **ERROR** | Changes are discarded (`git reset --hard` + `git clean -fd`), the failure is logged, and the task is marked `FAILED`. |
 
 The blocked exit code is configurable via `blocked_exit_code` in
 [forgeo.yaml](configuration.md), and the no-change exit code via
@@ -125,6 +135,9 @@ agent_command: >
   Make the code changes requested below and nothing else. Do NOT run
   git commit, git push, or git add -A — Forgeo commits your work.
   Verify with the test suite where applicable.
+  Read AGENTS.md at the start of the session, and CONTEXT.md if present;
+  if your change materially affects the project overview or conventions,
+  update AGENTS.md and CONTEXT.md accordingly.
   $FORGEO_TASK"
 ```
 

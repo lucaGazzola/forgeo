@@ -53,13 +53,21 @@ logger = logging.getLogger(__name__)
 _TASK_BLOCKER_MARKER = "<!-- forgeo:task-blocker:derived -->"
 
 
+class TaskNotRunnableError(RuntimeError):
+    """A task requested through ``forgeo run`` cannot be executed.
+
+    Raised when the task id does not exist in the backlog or its status is
+    not ``OPEN``; nothing runs and no run record is written.
+    """
+
+
 def _execution_outcome(status: ExecutionStatus) -> RunOutcome:
-    """Map an agent execution status onto a run record outcome."""
-    return {
-        ExecutionStatus.SUCCESS: RunOutcome.SUCCESS,
-        ExecutionStatus.BLOCKED: RunOutcome.BLOCKED,
-        ExecutionStatus.ERROR: RunOutcome.ERROR,
-    }[status]
+    """Map an agent execution status onto a run record outcome.
+
+    The two enums share member names for the agent outcomes (SUCCESS, BLOCKED,
+    ERROR), so the mapping is a plain name lookup.
+    """
+    return RunOutcome[status.name]
 
 
 def _subject_label(task: Task, *, is_refactor: bool) -> str:
@@ -74,7 +82,6 @@ class BlockerEntry:
     task: Task
     result: ExecutionResult
     instruction: str
-    is_refactor: bool = False
 
 
 class Forgeo:
@@ -111,13 +118,7 @@ class Forgeo:
 
     async def _run_cycle(self) -> str:
         """Execute one cycle without recording; returns its outcome label."""
-        self._last_task = None
-        self._last_agent_result = None
-        self._last_commit_sha = None
-        self._last_run_reason = None
-        self._blocked_tasks = []
-        await self.git.a_ensure_branch(self.config.branch)
-        tasks = await self.backlog.list_tasks()
+        tasks = await self._begin_run()
         blocked = [t for t in tasks if t.status is TaskStatus.BLOCKED]
         if blocked:
             self._blocked_tasks = blocked
@@ -132,15 +133,7 @@ class Forgeo:
         tasks = await self.backlog.list_tasks()
         task = oldest_open_task(tasks)
         if task is not None:
-            if not await self.git.a_is_clean():
-                logger.error(
-                    "Working tree of %s is dirty; refusing to run task %s.",
-                    self.config.repo,
-                    task.id,
-                )
-                return "dirty"
-            await self._run_task(task)
-            return "task"
+            return await self._run_task_clean(task)
 
         if self.config.blocker_file.exists():
             logger.info("Blocker file present; forgeo paused until it is resolved.")
@@ -148,6 +141,81 @@ class Forgeo:
 
         await self._refactor()
         return "refactor"
+
+    async def run_task_id(self, task_id: str) -> str:
+        """Execute exactly the task ``task_id``; returns a short outcome label.
+
+        Like :meth:`run_cycle` but runs ``task_id`` instead of the oldest
+        OPEN task, so a human can triage immediately: rerun a FAILED task
+        (after reopening it) or try a risky task now. Every finished run
+        appends exactly one run record.
+
+        Raises:
+            TaskNotRunnableError: When the task does not exist in the backlog
+                or is not ``OPEN`` — nothing runs and no record is written.
+        """
+        started_at = datetime.now(UTC)
+        outcome = await self._run_task_id(task_id)
+        self._record_run(outcome, started_at)
+        return outcome
+
+    async def _run_task_id(self, task_id: str) -> str:
+        """Run ``task_id`` without recording; returns its outcome label.
+
+        Outcome is ``task`` on a completed agent run or ``dirty`` when the
+        working tree is dirty. A missing or non-``OPEN`` task raises
+        :class:`TaskNotRunnableError`.
+        """
+        tasks = await self._begin_run()
+        task = next((candidate for candidate in tasks if candidate.id == task_id), None)
+        if task is None:
+            raise TaskNotRunnableError(
+                f"Task {task_id!r} does not exist in the backlog at "
+                f"{self.config.backlog}."
+            )
+        if task.status is not TaskStatus.OPEN:
+            raise TaskNotRunnableError(
+                f"Task {task_id!r} is {task.status.value}; only OPEN tasks can "
+                f"be run with `forgeo run`."
+            )
+        return await self._run_task_clean(task)
+
+    async def _begin_run(self) -> list[Task]:
+        """Reset the run state and load the tasks for a new cycle."""
+        self._last_task = None
+        self._last_agent_result = None
+        self._last_commit_sha = None
+        self._last_run_reason = None
+        self._blocked_tasks = []
+        await self.git.a_ensure_branch(self.config.branch)
+        return await self.backlog.list_tasks()
+
+    async def _tree_clean_for(self, task: Task) -> bool:
+        """True when the working tree is clean enough to run ``task``.
+
+        A dirty tree logs the refusal and returns ``False``; Forgeo never
+        commits or discards uncommitted work.
+        """
+        if await self.git.a_is_clean():
+            return True
+        logger.error(
+            "Working tree of %s is dirty; refusing to run task %s.",
+            self.config.repo,
+            task.id,
+        )
+        return False
+
+    async def _run_task_clean(self, task: Task) -> str:
+        """Run ``task`` when the working tree is clean; returns the outcome label.
+
+        Shared by the scheduled pick (:meth:`_run_cycle`) and the explicit
+        ``forgeo run`` (:meth:`_run_task_id`): a dirty tree is refused with a
+        ``dirty`` outcome, otherwise the task runs and the outcome is ``task``.
+        """
+        if not await self._tree_clean_for(task):
+            return "dirty"
+        await self._run_task(task)
+        return "task"
 
     # ------------------------------------------------------------------ #
     # Failed-task retries                                                 #
@@ -306,9 +374,7 @@ class Forgeo:
             await self.backlog.set_blocked(task.id, result.reason, result)
             return
         if result.status is ExecutionStatus.ERROR:
-            reason = self._failure_reason(result)
-            await self.backlog.set_failed(task.id, reason, result)
-            self._notify_webhook("failed", task, "\n".join(reason))
+            await self._mark_failed(task, self._failure_reason(result), result)
             return
         if not ok:
             # SUCCESS whose commit (or no-change) path failed: already marked
@@ -348,6 +414,7 @@ class Forgeo:
             RepoContext(repo_path=self.config.repo, branch=self.config.branch),
             command=command,
             timeout_seconds=timeout_seconds,
+            instruction=self._full_instruction(instruction),
         )
         self._last_agent_result = result
         ok = await self._handle_execution_result(
@@ -359,6 +426,35 @@ class Forgeo:
             is_refactor=is_refactor,
         )
         return result, ok
+
+    def _full_instruction(self, instruction: str) -> str:
+        """The instruction handed to the agent, with the project context
+        prepended when ``task_context`` is configured.
+
+        The context file is re-read on every run, so the agent's own updates
+        to it are picked up on the next cycle. An unreadable or empty context
+        file is logged and the run proceeds with the bare instruction: a
+        cycle must never fail because a documentation file is missing.
+        """
+        path = self.config.task_context
+        if path is None:
+            return instruction
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "task_context %s unreadable (%s); running without it.", path, exc
+            )
+            return instruction
+        text = text.strip()
+        if not text:
+            logger.warning("task_context %s is empty; running without it.", path)
+            return instruction
+        return (
+            f"# Project context (from {path})\n\n"
+            f"{text}\n\n"
+            f"# Task\n\n{instruction}"
+        )
 
     async def _handle_execution_result(
         self,
@@ -405,7 +501,6 @@ class Forgeo:
                     task=task,
                     result=result,
                     instruction=instruction,
-                    is_refactor=is_refactor,
                 )
                 if is_refactor:
                     await self._write_blocker([entry])
@@ -438,7 +533,15 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        reason = self._failure_reason(result)
+        await self._mark_failed(task, self._failure_reason(result))
+
+    async def _mark_failed(self, task: Task, reason: list[str], result: ExecutionResult) -> None:
+        """Persist ``reason`` on ``task`` and send the ``failed`` webhook notice.
+
+        Shared by the direct ERROR path (the work was already discarded in
+        :meth:`_handle_execution_result`) and the FAILED transitions from
+        :meth:`_fail` and :meth:`_complete_without_changes`.
+        """
         await self.backlog.set_failed(task.id, reason, result)
         self._notify_webhook("failed", task, "\n".join(reason))
 
@@ -486,13 +589,8 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self.backlog.set_failed(
-                    task.id,
-                    [NO_CHANGES_DIRTY_REASON],
-                    self._last_agent_result
-                    or ExecutionResult(status=ExecutionStatus.ERROR),
-                )
-                self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
+                await self._mark_failed(task, [NO_CHANGES_DIRTY_REASON],self._last_agent_result
+                    or ExecutionResult(status=ExecutionStatus.ERROR))
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(

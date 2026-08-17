@@ -75,12 +75,15 @@ class BaseAgent(ABC):
         *,
         command: str | list[str] | None = None,
         timeout_seconds: float | None = None,
+        instruction: str | None = None,
     ) -> ExecutionResult:
         """Execute one task and return its result.
 
         ``command`` and ``timeout_seconds`` optionally override the agent's
         configured values for this single task; ``None`` means "use the
-        configured default".
+        configured default". ``instruction`` optionally replaces the task's
+        own instruction (e.g. a project-context preamble wrapped around it);
+        ``None`` means "use ``task.instruction``".
 
         Implementations must never raise for expected agent failures — they
         should encode them as ``ExecutionResult(status=ERROR)``.
@@ -161,12 +164,14 @@ class ShellAgent(BaseAgent):
         *,
         command: str | list[str] | None = None,
         timeout_seconds: float | None = None,
+        instruction: str | None = None,
     ) -> ExecutionResult:
         """Run the configured command once for the task.
 
         ``command`` and ``timeout_seconds`` override this agent's configured
         values for this run when given; otherwise the configured defaults are
-        used.
+        used. ``instruction`` replaces ``task.instruction`` (e.g. a
+        project-context preamble wrapped around it) when given.
         """
         command = command if command is not None else self.command
         timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
@@ -174,7 +179,7 @@ class ShellAgent(BaseAgent):
         env = {
             **os.environ,
             **self.env,
-            "FORGEO_TASK": task.instruction,
+            "FORGEO_TASK": instruction if instruction is not None else task.instruction,
             "FORGEO_REPO": str(context.repo_path),
             "FORGEO_BRANCH": context.branch,
         }

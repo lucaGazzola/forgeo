@@ -47,12 +47,14 @@ def load_config(path: str | Path) -> ForgeoConfig:
         updates["state_dir"] = base / config.state_dir
     if not config.blocker_file.is_absolute():
         updates["blocker_file"] = base / config.blocker_file
+    if config.task_context is not None and not config.task_context.is_absolute():
+        updates["task_context"] = base / config.task_context
     if not Path(config.log_file).is_absolute():
         updates["log_file"] = str(base / config.log_file)
     return config if not updates else config.model_copy(update=updates)
 
 
-_PATH_FIELDS = ("repo", "backlog", "blocker_file", "log_file", "state_dir")
+_PATH_FIELDS = ("repo", "backlog", "blocker_file", "log_file", "state_dir", "task_context")
 
 
 def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:

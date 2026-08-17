@@ -160,6 +160,22 @@ async def test_task_instruction_via_env(tmp_path):
     assert "Implement retry logic." in output
 
 
+async def test_instruction_override_replaces_task_instruction(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "out.txt").write_text("", encoding="utf-8")
+    agent = ShellAgent('echo "$FORGEO_TASK" > out.txt')
+    await agent.run_task(
+        TASK,
+        RepoContext(repo_path=repo, branch="main"),
+        instruction="# Project context\n\nSome overview.\n\n# Task\n\nAdd retries",
+    )
+    output = (repo / "out.txt").read_text(encoding="utf-8")
+    assert "Project context" in output
+    assert "Add retries" in output
+    assert "Implement retry logic." not in output
+
+
 async def test_per_task_command_override(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

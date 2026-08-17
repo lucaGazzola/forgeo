@@ -21,6 +21,12 @@ Commands:
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
+* ``forgeo run --task TASK-001 --config forgeo.yaml`` — run exactly one
+   specific ``OPEN`` task by id and exit, without waiting for the backlog
+   order or a scheduled run. For triage: rerun a ``FAILED`` task (after
+   reopening it) or try a risky task right now. Reuses the same per-forgeo
+   lock as ``once`` and the daemon, so it never overlaps them; it refuses
+   with a clear error when the task does not exist or is not ``OPEN``.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -55,9 +61,10 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``status``, ``validate``, ``stop`` and ``restart`` each
-accept either ``--config PATH`` (a config file) or ``--name NAME`` (an
-instance resolved from the registry); the two options are mutually exclusive.
+``start``, ``once``, ``run``, ``status``, ``validate``, ``stop`` and
+``restart`` each accept either ``--config PATH`` (a config file) or
+``--name NAME`` (an instance resolved from the registry); the two options
+are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -67,7 +74,7 @@ import asyncio
 import logging
 import signal
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -104,7 +111,7 @@ from forgeo.daemon_control import (
     start_daemon,
     stop_daemon,
 )
-from forgeo.forgeo import Forgeo
+from forgeo.forgeo import Forgeo, TaskNotRunnableError
 from forgeo.git import GitManager
 from forgeo.instances import (
     InstanceInfo,
@@ -169,6 +176,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
     _add_config_or_name(once_parser)
+
+    run_parser = sub.add_parser(
+        "run",
+        help="Run exactly one specific OPEN task by id and exit.",
+    )
+    _add_config_or_name(run_parser)
+    run_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the OPEN task to run now (triage: rerun a FAILED task "
+        "after reopening it, or try a risky task immediately).",
+    )
 
     status_parser = sub.add_parser(
         "status",
@@ -297,9 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_config_or_name(
-    parser: argparse.ArgumentParser, *, default_config: Path = DEFAULT_CONFIG
-) -> None:
+def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
     """Add a mutually-exclusive ``--config``/``--name`` option pair.
 
     ``--config`` keeps its default so plain ``forgeo start`` (etc.) keeps
@@ -310,7 +328,7 @@ def _add_config_or_name(
     group.add_argument(
         "--config",
         type=Path,
-        default=default_config,
+        default=DEFAULT_CONFIG,
         help="Forgeo YAML file (default: forgeo.yaml).",
     )
     group.add_argument(
@@ -523,21 +541,8 @@ def _cmd_start_detached(args: argparse.Namespace) -> int:
         return 1
     try:
         config = _resolve_config(args, config_path)
-    except yaml.YAMLError as exc:
-        console.print(
-            f"[red]Config file {config_path} is not valid YAML:[/red]",
-            soft_wrap=True,
-        )
-        console.print(str(exc), soft_wrap=True)
-        return 1
-    except ValidationError as exc:
-        console.print(
-            f"[red]Config file {config_path} is invalid:[/red]",
-            soft_wrap=True,
-        )
-        for error in exc.errors():
-            loc = ".".join(str(part) for part in error["loc"])
-            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
         return 1
     if config is None:
         return 1
@@ -622,31 +627,86 @@ def _cmd_start_foreground(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_once(args: argparse.Namespace) -> int:
-    """Handle ``forgeo once``: run exactly one cycle and exit."""
+def _run_worker_with_lock(
+    lock: Any, runner: Callable[[], Coroutine[Any, Any, int]]
+) -> int:
+    """Run an async worker to completion, closing the run lock on the way out.
+
+    A ``KeyboardInterrupt`` is swallowed (the cycle is aborted, the lock is
+    still released) and a :class:`BacklogUnavailableError` — an HTTP backlog
+    that is simply down — is reported as an operational failure rather than
+    a crash to trace back. ``runner`` runs in its own event loop and returns
+    the command's exit code.
+    """
+    result = 1
+    try:
+        result = asyncio.run(runner())
+    except KeyboardInterrupt:
+        pass
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
+        result = 1
+    finally:
+        lock.close()
+    return result
+
+
+def _run_worker_once(
+    args: argparse.Namespace,
+    runner: Callable[[Forgeo], Coroutine[Any, Any, int]],
+) -> int:
+    """Prepare the worker and run one cycle through ``runner``.
+
+    Shared plumbing of ``forgeo once`` and ``forgeo run``: resolve the config,
+    take the per-forgeo lock, run the optional update check, execute exactly
+    one cycle via ``runner``, and release the lock on the way out.
+    """
     prepared = _prepare_worker(args)
     if prepared is None:
         return 1
     _config_path, _config, forgeo, lock = prepared
 
-    async def _run_once() -> None:
+    async def _execute() -> int:
         check_for_update(update_state_path(_config), print_fn=console.print)
+        return await runner(forgeo)
+
+    return _run_worker_with_lock(lock, _execute)
+
+
+def cmd_once(args: argparse.Namespace) -> int:
+    """Handle ``forgeo once``: run exactly one cycle and exit."""
+
+    async def _cycle(forgeo: Forgeo) -> int:
         outcome = await forgeo.run_cycle()
         console.print(f"[green]Cycle finished: {outcome}[/green]")
+        return 0
 
-    try:
-        asyncio.run(_run_once())
-    except KeyboardInterrupt:
-        pass
-    except BacklogUnavailableError as exc:
-        # A backlog served over HTTP can simply be down; that is an
-        # operational failure to report, not a crash to trace back.
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
-        return 1
-    finally:
-        lock.close()
-    return 0
+    return _run_worker_once(args, _cycle)
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Handle ``forgeo run``: run exactly one specific task and exit.
+
+    Unlike ``forgeo once`` — which picks the oldest ``OPEN`` task — this
+    executes the task named by ``--task`` immediately, for triage: rerun a
+    ``FAILED`` task (after reopening it) or try a risky task right now. It
+    reuses the same per-forgeo lock as the daemon and ``once``, so it never
+    overlaps them; it refuses (exit 1) when the task does not exist or is
+    not ``OPEN``.
+    """
+    task_id = args.task
+
+    async def _one(forgeo: Forgeo) -> int:
+        try:
+            outcome = await forgeo.run_task_id(task_id)
+        except TaskNotRunnableError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 1
+        console.print(f"[green]Cycle finished: {outcome}[/green]")
+        return 0
+
+    return _run_worker_once(args, _one)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -718,6 +778,26 @@ def _waiting_hint(tasks: list[Task]) -> str | None:
     return f"waiting on: {oldest.id} (needs COMPLETED: {detail})"
 
 
+def _print_config_load_error(
+    config_path: Path, exc: yaml.YAMLError | ValidationError
+) -> None:
+    """Print a user-facing error for a config that failed to load or validate."""
+    if isinstance(exc, yaml.YAMLError):
+        console.print(
+            f"[red]Config file {config_path} is not valid YAML:[/red]",
+            soft_wrap=True,
+        )
+        console.print(str(exc), soft_wrap=True)
+        return
+    console.print(
+        f"[red]Config file {config_path} is invalid:[/red]",
+        soft_wrap=True,
+    )
+    for error in exc.errors():
+        loc = ".".join(str(part) for part in error["loc"])
+        console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+
+
 def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:
     """Load an existing config; prints an error and returns None when missing."""
     if not config_path.exists():
@@ -784,21 +864,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
         return 1
     try:
         config = load_config(config_path)
-    except yaml.YAMLError as exc:
-        console.print(
-            f"[red]Config file {config_path} is not valid YAML:[/red]",
-            soft_wrap=True,
-        )
-        console.print(str(exc), soft_wrap=True)
-        return 1
-    except ValidationError as exc:
-        console.print(
-            f"[red]Config file {config_path} is invalid:[/red]",
-            soft_wrap=True,
-        )
-        for error in exc.errors():
-            loc = ".".join(str(part) for part in error["loc"])
-            console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
         return 1
     report = validate_config(config)
     console.print(render_report(config, report), soft_wrap=True)
@@ -1028,6 +1095,7 @@ def cmd_web_status(args: argparse.Namespace) -> int:
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "start": cmd_start,
     "once": cmd_once,
+    "run": cmd_run,
     "init": cmd_init,
     "status": cmd_status,
     "validate": cmd_validate,

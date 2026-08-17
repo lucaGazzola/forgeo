@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The default agent prompt (used by `forgeo init`) now names `AGENTS.md` and
+  `CONTEXT.md` explicitly when telling the agent to keep project overview and
+  conventions up to date.
+
+## [0.7.0] - 2026-08-16
+
+### Added
+
+- `task_context` config key: a path to a file (e.g. `CONTEXT.md`) whose
+  contents are prepended to every agent instruction — tasks and refactoring
+  runs alike — before the task description. The agent gets the high-level
+  project overview instead of only the isolated task; the file is re-read on
+  every run, so the agent's own updates are picked up on the next cycle. A
+  missing or unreadable file never fails a cycle: it is logged, `forgeo
+  validate` reports it as a warning, and the run proceeds with the bare
+  instruction.
+- The default agent prompt (used by `forgeo init`) now tells the agent to
+  read `AGENTS.md` (and `CONTEXT.md` if present) at the start of the session
+  and to keep them updated when a change materially affects the project
+  overview.
+
+- `forgeo run --task <id>` runs exactly one specific `OPEN` task by id and
+  exits, instead of letting `forgeo once` pick the oldest one — for triage:
+  rerun a `FAILED` task (after reopening it) or try a risky task now. It
+  shares the same per-forgeo lock as the daemon and `forgeo once`, so it
+  never overlaps them; it refuses with a clear error when the task does not
+  exist or is not `OPEN`, and while another daemon/`once`/`run` holds the
+  lock.
+
+## [0.6.0] - 2026-08-14
+
 ### Added
 
 - The backlog can now live in another application instead of a file: set
@@ -281,7 +314,9 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/lucaGazzola/forgeo/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/lucaGazzola/forgeo/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lucaGazzola/forgeo/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lucaGazzola/forgeo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lucaGazzola/forgeo/compare/v0.2.0...v0.3.0

@@ -80,10 +80,10 @@ cheap/fast model and hard ones to a frontier model:
 
 | Status | Meaning |
 | --- | --- |
-| `OPEN` | To be picked by Forgeo. |
-| `BLOCKED` | Waiting on a human decision; Forgeo pauses while any task is blocked. |
-| `COMPLETED` | The agent finished and the work was committed (and pushed). |
-| `FAILED` | The agent errored; changes were discarded and the reason is recorded in `failure_reason`. |
+| <span style="white-space: nowrap">`OPEN`</span> | To be picked by Forgeo. |
+| <span style="white-space: nowrap">`BLOCKED`</span> | Waiting on a human decision; Forgeo pauses while any task is blocked. |
+| <span style="white-space: nowrap">`COMPLETED`</span> | The agent finished and the work was committed (and pushed). |
+| <span style="white-space: nowrap">`FAILED`</span> | The agent errored; changes were discarded and the reason is recorded in `failure_reason`. |
 
 ## Retrying a failed task
 
@@ -298,8 +298,8 @@ then treats that endpoint exactly like the file:
 
 | When | Request |
 | --- | --- |
-| Every read | `GET <url>` returns the whole document |
-| Every write | `POST <url>` sends the whole document back |
+| <span style="white-space: nowrap">Every read</span> | `GET <url>` returns the whole document |
+| <span style="white-space: nowrap">Every write</span> | `POST <url>` sends the whole document back |
 
 ```yaml
 backlog: https://api.example.com/api/forgeo/backlog

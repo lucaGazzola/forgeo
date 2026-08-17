@@ -73,6 +73,7 @@ class FakeAgent(BaseAgent):
         self.effect: Callable[[], None] | None = None
         self.calls: list[tuple[Task, RepoContext]] = []
         self.overrides: list[tuple[str | list[str] | None, float | None]] = []
+        self.instructions: list[str | None] = []
 
     async def run_task(
         self,
@@ -81,9 +82,11 @@ class FakeAgent(BaseAgent):
         *,
         command: str | list[str] | None = None,
         timeout_seconds: float | None = None,
+        instruction: str | None = None,
     ) -> ExecutionResult:
         self.calls.append((task, context))
         self.overrides.append((command, timeout_seconds))
+        self.instructions.append(instruction)
         if self.effect is not None:
             self.effect()
         return self.result
@@ -96,6 +99,7 @@ class FakeForgeo:
         self.cycles = 0
         self.crash = False
         self.block = False
+        self.run_task_ids: list[str] = []
 
     async def run_cycle(self) -> str:
         if self.block:
@@ -105,6 +109,17 @@ class FakeForgeo:
         if self.crash:
             raise RuntimeError("boom")
         self.cycles += 1
+        return "task"
+
+    async def run_task_id(self, task_id: str) -> str:
+        if self.block:
+            import asyncio
+
+            await asyncio.sleep(3600)
+        if self.crash:
+            raise RuntimeError("boom")
+        self.cycles += 1
+        self.run_task_ids.append(task_id)
         return "task"
 
 

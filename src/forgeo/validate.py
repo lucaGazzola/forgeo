@@ -71,6 +71,7 @@ def validate_config(config: ForgeoConfig) -> ValidationReport:
         _check_branch(config, git, report)
     _check_remote(config, git, report)
     _check_backlog(config, report)
+    _check_task_context(config, report)
     _check_lock(lock_path(config), report)
     return report
 
@@ -204,6 +205,26 @@ def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
         report.problems.append(f"backlog endpoint could not be read: {exc}")
         return
     report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
+
+
+def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:
+    """A configured context file that is missing or unreadable is a warning.
+
+    The cycle still runs without the context (never a hard failure), but the
+    user probably wants to know why the agent is not seeing it.
+    """
+    path = config.task_context
+    if path is None:
+        return
+    if not path.exists():
+        report.warnings.append(
+            f"task_context not found: {path} (cycles run without it)"
+        )
+        return
+    try:
+        path.read_text(encoding="utf-8")
+    except OSError as exc:
+        report.warnings.append(f"task_context could not be read: {exc}")
 
 
 def _check_lock(path: Path, report: ValidationReport) -> None:

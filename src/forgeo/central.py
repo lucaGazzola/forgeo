@@ -33,7 +33,7 @@ Routes:
   ``restart``).
 * ``PATCH /api/instances/<name>/tasks/<id>`` — update an existing task's
   editable fields (title, description, acceptance criteria, dependencies,
-  files to modify, agent command, agent timeout).
+  files to modify, agent command, agent timeout, retries_left, run_at).
 * ``DELETE /api/instances/<name>/tasks/<id>`` — delete an ``OPEN`` or
   ``BLOCKED`` task from that instance's backlog.
 
@@ -63,7 +63,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import tomllib
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -115,7 +114,6 @@ DEFAULT_PORT = 8790
 
 WEB_START_TIMEOUT_SECONDS = 30.0
 WEB_STOP_TIMEOUT_SECONDS = 30.0
-_POLL_SECONDS = 0.5
 
 DEFAULT_FORGEO_CONFIG_DIR = Path.home() / ".config" / "forgeo"
 
@@ -325,6 +323,11 @@ def web_task_id_for(tasks: list[Task]) -> str:
         if match:
             highest = max(highest, int(match.group(1)))
     return f"WEB-{highest + 1:03d}"
+
+
+def _instance_parts(path: str) -> list[str]:
+    """The path segments after the ``/api/instances/`` prefix."""
+    return path[len("/api/instances/") :].split("/")
 
 
 def _config_validation_message(exc: ValidationError) -> str:
@@ -552,24 +555,33 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:
             logger.debug("central web %s - %s", self.address_string(), format % args)
 
-        def _send_json(self, status: int, payload: Any) -> None:
+        def _send_json(
+            self,
+            status: int,
+            payload: Any,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             body = json_bytes(payload)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if extra_headers:
+                for key, value in extra_headers.items():
+                    self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
         def _send_unauthorized(self) -> None:
-            body = json_bytes({"error": "unauthorized"})
-            self.send_response(401)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("WWW-Authenticate", 'Bearer realm="forgeo"')
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(
+                401,
+                {"error": "unauthorized"},
+                {"WWW-Authenticate": 'Bearer realm="forgeo"'},
+            )
+
+        def _send_not_found(self) -> None:
+            """Send the shared 404 response for an unknown route."""
+            self._send_json(404, {"error": "not found"})
 
         def _maybe_authorize(self, path: str) -> bool:
             """True when the request may proceed; a 401 is sent otherwise.
@@ -595,7 +607,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _send_static(self, static: Path | None) -> None:
             if static is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._send_bytes(200, static.read_bytes(), guess_content_type(static))
 
@@ -611,10 +623,21 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 logger.exception("Web request failed: %s", urlparse(self.path).path)
                 self._send_json(500, {"error": "internal server error"})
 
-        def do_GET(self) -> None:
+        def _dispatch(self, handler: Callable[[], None]) -> None:
+            """Authorize, then run one request handler safely.
+
+            Shared by the five HTTP verbs: a request is authorized first (a
+            missing or wrong bearer token answers ``401`` without reaching the
+            handler), then the handler runs under :meth:`_run_safely` so a
+            failure is answered with a JSON 500 instead of crashing the
+            server thread.
+            """
             if not self._maybe_authorize(self.path):
                 return
-            self._run_safely(self._do_get)
+            self._run_safely(handler)
+
+        def do_GET(self) -> None:
+            self._dispatch(self._do_get)
 
         def _do_get(self) -> None:
             parsed = urlparse(self.path)
@@ -637,12 +660,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if static is not None:
                 self._send_static(static)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_POST(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_post)
+            self._dispatch(self._do_post)
 
         def _do_post(self) -> None:
             parsed = urlparse(self.path)
@@ -651,12 +672,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._post_instance_api(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_PATCH(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_patch)
+            self._dispatch(self._do_patch)
 
         def _do_patch(self) -> None:
             parsed = urlparse(self.path)
@@ -665,12 +684,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._patch_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_DELETE(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_delete)
+            self._dispatch(self._do_delete)
 
         def _do_delete(self) -> None:
             parsed = urlparse(self.path)
@@ -679,12 +696,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._delete_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def do_PUT(self) -> None:
-            if not self._maybe_authorize(self.path):
-                return
-            self._run_safely(self._do_put)
+            self._dispatch(self._do_put)
 
         def _do_put(self) -> None:
             parsed = urlparse(self.path)
@@ -693,7 +708,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/api/instances/"):
                 self._put_instance_api(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def _resolve_instance(self, name: str) -> InstanceInfo | None:
             """The registered instance, or ``None`` after sending a 404."""
@@ -759,14 +774,14 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             instance is unknown, the path shape is wrong, or the instance
             config is unavailable.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
                 return None
             expected = 3 if with_task_id else 2
             if len(parts) != expected or parts[1] != "tasks":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return None
             config = self._instance_config(info)
             if config is None:
@@ -776,18 +791,18 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _post_instance_api(self, path: str) -> None:
             """Route a POST under ``/api/instances/`` to its handler."""
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) < 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if parts[1] in ("start", "stop", "restart"):
                 if len(parts) != 2:
-                    self._send_json(404, {"error": "not found"})
+                    self._send_not_found()
                     return
                 self._post_instance_daemon_action(path, parts[1])
                 return
             if parts[1] != "tasks":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if len(parts) == 2:
                 self._post_instance_task(path)
@@ -795,7 +810,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 4 and parts[3] == "reopen":
                 self._reopen_instance_task(path)
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
         def _post_instance_daemon_action(self, path: str, action: str) -> None:
             """Start, stop, or restart an instance's daemon from the console.
@@ -807,7 +822,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             ``stopped`` / ``not_running`` / ``restarted`` — plus the resulting
             daemon state.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -1010,7 +1025,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_json(400, {"error": str(exc)})
                 return
             if updated is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._send_json(200, updated.model_dump(mode="json"))
 
@@ -1020,9 +1035,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             A dedicated endpoint rather than a generic ``status`` via PATCH,
             so the status transition stays outside the editable-fields model.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "reopen":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             name = unquote(parts[0])
             info = self._resolve_instance(name)
@@ -1036,7 +1051,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if task.status is not TaskStatus.BLOCKED:
                 self._send_json(
@@ -1059,7 +1074,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if task.status not in (TaskStatus.OPEN, TaskStatus.BLOCKED):
                 self._send_json(
@@ -1073,9 +1088,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _put_instance_api(self, path: str) -> None:
             """Route a PUT under ``/api/instances/`` to its handler."""
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             if len(parts) != 2 or parts[1] != "config":
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             self._put_instance_config(path)
 
@@ -1093,11 +1108,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             instance name (a different value is rejected); ``telegram_bot_token``
             is not editable through the web console — an explicit change is
             rejected and the current value is preserved when the field is
-            omitted. ``backlog_auth`` and ``state_dir`` are nested settings the
-            flat config form does not render, so an omitted value keeps what
-            the config already holds instead of clearing it.
+            omitted. ``backlog_auth``, ``state_dir`` and ``task_context`` are
+            nested settings the flat config form does not render, so an omitted
+            value keeps what the config already holds instead of clearing it.
             """
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
@@ -1132,7 +1147,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 payload["telegram_bot_token"] = config.telegram_bot_token
             # The config form is flat, so it carries neither of these nested
             # settings; a save must not drop what it never showed.
-            for preserved in ("backlog_auth", "state_dir"):
+            for preserved in ("backlog_auth", "state_dir", "task_context"):
                 if preserved not in payload:
                     payload[preserved] = getattr(config, preserved)
 
@@ -1163,19 +1178,19 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_static(safe_static_path(_INSTANCE_PAGE))
 
         def _handle_instance_api(self, path: str, query: dict[str, list[str]]) -> None:
-            parts = path[len("/api/instances/") :].split("/")
+            parts = _instance_parts(path)
             name = unquote(parts[0])
             info = self._resolve_instance(name)
             if info is None:
                 return
             if len(parts) < 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             endpoint = parts[1]
 
             if endpoint == "tasks":
                 if len(parts) not in (2, 3):
-                    self._send_json(404, {"error": "not found"})
+                    self._send_not_found()
                     return
                 tasks = self._instance_tasks(info)
                 if tasks is None:
@@ -1191,10 +1206,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     if task.id == task_id:
                         self._send_json(200, _task_payload(task, tasks, info.config))
                         return
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
             if len(parts) > 2:
-                self._send_json(404, {"error": "not found"})
+                self._send_not_found()
                 return
 
             if endpoint == "status":
@@ -1218,12 +1233,12 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 recorder = RunRecorder(runs_path(info.config))
-                records = recorder.read(limit=limit, offset=offset)
+                records, total = recorder.read_with_total(limit=limit, offset=offset)
                 self._send_json(
                     200,
                     {
                         "runs": [r.model_dump(mode="json") for r in records],
-                        "total": recorder.total(),
+                        "total": total,
                         "offset": offset,
                         "limit": limit,
                     },
@@ -1238,7 +1253,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     return
                 self._send_json(200, info.config.model_dump(mode="json"))
                 return
-            self._send_json(404, {"error": "not found"})
+            self._send_not_found()
 
     return CentralRequestHandler
 
@@ -1308,11 +1323,6 @@ class CentralWebServer:
         logger.info("Central web server stopped.")
 
 
-def _instance_count() -> int:
-    """The number of registered instances (used by the CLI banner)."""
-    return len(list_instances())
-
-
 async def _serve_forever(
     server: CentralWebServer, host: str, stop_requested: threading.Event
 ) -> None:
@@ -1335,7 +1345,7 @@ async def _serve_forever(
         Panel.fit(
             f"[bold]Forgeo central dashboard[/bold]\n"
             f"[bold]Listening:[/bold] http://{host}:{server.port}\n"
-            f"[bold]Instances:[/bold] {_instance_count()} registered "
+            f"[bold]Instances:[/bold] {len(list_instances())} registered "
             f"(registry: {registry_path()})",
             title="Forgeo Web",
             border_style="green",
@@ -1360,26 +1370,14 @@ def stop_web(timeout: float = WEB_STOP_TIMEOUT_SECONDS) -> None:
             f"The lock file {lock.lock_path} records no PID; find the dashboard "
             f"with `pgrep -af forgeo` and stop it manually."
         )
-    logger.info("Stopping central dashboard (pid %s)...", pid)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        if not lock.is_held():
-            logger.info("Central dashboard stopped.")
-            return
-        raise WebLockError(
-            f"Recorded pid {pid} is gone but the lock file is still held; "
-            f"check with `pgrep -af forgeo`."
-        )
-    except PermissionError:
-        raise WebLockError(f"No permission to stop process {pid}.")
-    if daemon_control.wait_for_lock_release(lock.lock_path, timeout, is_held=lock.is_held):
-        lock.release()
-        logger.info("Central dashboard stopped.")
-        return
-    raise WebLockError(
-        f"Central dashboard is still shutting down after {timeout:.0f}s; giving up."
+    daemon_control.signal_and_wait_for_release(
+        pid,
+        name="central dashboard",
+        is_held=lock.is_held,
+        timeout=timeout,
+        error_cls=WebLockError,
     )
+    lock.release()
 
 
 def start_web_detached(
@@ -1419,19 +1417,16 @@ def start_web_detached(
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if lock.is_held():
-            pid = lock.pid or proc.pid
-            logger.info("Central web server started (pid %s).", pid)
-            return pid
-        if proc.poll() is not None:
-            break
-        time.sleep(_POLL_SECONDS)
-    raise WebLockError(
-        f"Central dashboard did not start within {timeout:.0f}s; "
-        f"check the process output for bind errors."
+    pid = daemon_control.wait_for_process_ready(
+        proc, timeout, is_ready=lock.is_held, ready_pid=lambda: lock.pid
     )
+    if pid is None:
+        raise WebLockError(
+            f"Central dashboard did not start within {timeout:.0f}s; "
+            f"check the process output for bind errors."
+        )
+    logger.info("Central web server started (pid %s).", pid)
+    return pid
 
 
 def run_foreground(

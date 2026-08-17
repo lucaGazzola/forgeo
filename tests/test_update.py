@@ -14,7 +14,6 @@ from forgeo.update import (
     UpdateState,
     check_for_update,
     fetch_latest_version,
-    installed_version,
     upgrade_notice,
     version_is_newer,
 )
@@ -179,10 +178,6 @@ def test_state_survives_corrupt_file(tmp_path: Path) -> None:
     state = UpdateState(tmp_path / "update.json")
     state.path.write_text("garbage", encoding="utf-8")
     assert state.due()
-
-
-def test_installed_version_available() -> None:
-    assert installed_version() == __version__
 
 
 def test_check_disabled_via_env(

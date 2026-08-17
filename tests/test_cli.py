@@ -24,6 +24,7 @@ from forgeo.cli import (
     cmd_instance_rm,
     cmd_once,
     cmd_restart,
+    cmd_run,
     cmd_start,
     cmd_status,
     cmd_stop,
@@ -78,6 +79,10 @@ def write_config_in(dir_path: Path, git_repo: Path, tmp_path: Path, **overrides)
 
 def once_args(config_path: Path) -> argparse.Namespace:
     return argparse.Namespace(config=config_path)
+
+
+def run_args(config_path: Path, task_id: str = "TASK-001") -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, task=task_id)
 
 
 def status_args(config_path: Path) -> argparse.Namespace:
@@ -199,6 +204,126 @@ def test_once_missing_config_offers_setup(monkeypatch, tmp_path):
 def test_parser_help_lists_once(capsys):
     build_parser().print_help()
     assert "once" in capsys.readouterr().out
+
+
+def test_parser_help_lists_run(capsys):
+    build_parser().print_help()
+    assert "run" in capsys.readouterr().out
+
+
+def test_parser_requires_task_for_run():
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["run", "--config", "forgeo.yaml"])
+    assert excinfo.value.code == 2
+
+
+def test_parser_parses_task_for_run():
+    args = build_parser().parse_args(["run", "--task", "SELF-012"])
+    assert args.action == "run"
+    assert args.task == "SELF-012"
+
+
+def test_run_executes_specific_task_not_oldest(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    assert cmd_run(run_args(config_path, "SELF-012")) == 0
+    assert fake.cycles == 1
+    assert fake.run_task_ids == ["SELF-012"]
+    assert "Cycle finished: task" in capsys.readouterr().out
+
+
+def test_run_triggers_update_check(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    checked_paths: list[Path] = []
+
+    def fake_check(state_path, *, print_fn):
+        checked_paths.append(state_path)
+        print_fn("A newer forgeo-cli version is available: 0.4.0 -> 0.5.0. "
+                 "Upgrade with `pipx upgrade forgeo-cli`.")
+
+    monkeypatch.setattr("forgeo.cli.check_for_update", fake_check)
+
+    assert cmd_run(run_args(config_path, "SELF-012")) == 0
+    assert fake.cycles == 1
+    assert checked_paths == [tmp_path / "backlog.update.json"]
+    assert "0.5.0" in capsys.readouterr().out
+
+
+def test_run_refuses_unknown_task(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    class RefusingForgeo:
+        cycles = 0
+
+        async def run_task_id(self, task_id: str) -> str:
+            from forgeo.forgeo import TaskNotRunnableError
+
+            self.cycles += 1
+            raise TaskNotRunnableError(
+                f"Task {task_id!r} does not exist in the backlog."
+            )
+
+    refusing = RefusingForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: refusing)
+
+    assert cmd_run(run_args(config_path, "SELF-999")) == 1
+    assert refusing.cycles == 1
+    out = capsys.readouterr().out
+    assert "does not exist" in out
+
+
+def test_run_refuses_non_open_task(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    backlog = tmp_path / "backlog.json"
+    backlog.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "SELF-012",
+                        "title": "Already done",
+                        "description": "Do the thing.",
+                        "status": "COMPLETED",
+                        "created_at": "2026-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cmd_run(run_args(config_path, "SELF-012")) == 1
+    out = capsys.readouterr().out
+    assert "COMPLETED" in out
+    assert "only OPEN tasks" in out
+
+
+def test_run_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    lock = acquire_run_lock(tmp_path / "backlog.lock")
+    assert lock is not None
+
+    assert cmd_run(run_args(config_path, "SELF-012")) == 1
+    assert fake.cycles == 0
+    assert "already running" in capsys.readouterr().out
+
+    lock.close()
+
+
+def test_run_does_not_register_instance(git_repo, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    assert cmd_run(run_args(config_path, "SELF-012")) == 0
+    assert load_registry() == {}
 
 
 def test_parser_help_lists_status(capsys):
@@ -498,6 +623,33 @@ def test_validate_healthy_without_backlog(git_repo, tmp_path, capsys):
 
     assert cmd_validate(validate_args(config_path)) == 0
     assert "Forgeo is ready to run." in capsys.readouterr().out
+
+
+def test_validate_missing_task_context_is_a_warning(git_repo, tmp_path, capsys):
+    """A configured context file that is gone warns but does not block."""
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(
+        config_path, repo=git_repo, task_context=tmp_path / "CONTEXT.md"
+    )
+    assert not (tmp_path / "CONTEXT.md").exists()
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "Forgeo is ready to run." in out
+    assert "task_context not found" in out
+
+
+def test_validate_present_task_context_raises_no_warning(git_repo, tmp_path, capsys):
+    (tmp_path / "CONTEXT.md").write_text("# overview\n", encoding="utf-8")
+    config_path = tmp_path / "forgeo.yaml"
+    write_validate_config(
+        config_path, repo=git_repo, task_context=tmp_path / "CONTEXT.md"
+    )
+
+    assert cmd_validate(validate_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "Forgeo is ready to run." in out
+    assert "task_context" not in out
 
 
 def test_validate_missing_config(tmp_path, capsys):
@@ -894,19 +1046,25 @@ def test_restart_replaces_running_daemon(git_repo, tmp_path, monkeypatch, capsys
 
 
 @pytest.mark.parametrize(
-    "command", ["start", "once", "status", "validate", "stop", "restart"]
+    "command", ["start", "once", "run", "status", "validate", "stop", "restart"]
 )
 def test_parser_accepts_name_for_commands(command):
-    args = build_parser().parse_args([command, "--name", "my-repo"])
+    argv = [command, "--name", "my-repo"]
+    if command == "run":
+        argv += ["--task", "SELF-012"]
+    args = build_parser().parse_args(argv)
     assert getattr(args, "name", None) == "my-repo"
 
 
 @pytest.mark.parametrize(
-    "command", ["start", "once", "status", "validate", "stop", "restart"]
+    "command", ["start", "once", "run", "status", "validate", "stop", "restart"]
 )
 def test_parser_rejects_name_with_config(command):
+    argv = [command, "--name", "x", "--config", "forgeo.yaml"]
+    if command == "run":
+        argv += ["--task", "SELF-012"]
     with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args([command, "--name", "x", "--config", "forgeo.yaml"])
+        build_parser().parse_args(argv)
     assert excinfo.value.code == 2
 
 
@@ -1090,6 +1248,31 @@ def test_once_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsy
 def test_once_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     assert cmd_once(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
+    assert "Unknown instance" in capsys.readouterr().out
+
+
+def test_run_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    config_path = write_config(git_repo, tmp_path)
+    assert cmd_instance_add(argparse.Namespace(name="my-repo", config=config_path)) == 0
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    assert (
+        cmd_run(argparse.Namespace(config=DEFAULT_CONFIG, name="my-repo", task="SELF-012"))
+        == 0
+    )
+    assert fake.cycles == 1
+    assert fake.run_task_ids == ["SELF-012"]
+    assert "Cycle finished: task" in capsys.readouterr().out
+
+
+def test_run_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    assert (
+        cmd_run(argparse.Namespace(config=DEFAULT_CONFIG, name="nope", task="SELF-012"))
+        == 1
+    )
     assert "Unknown instance" in capsys.readouterr().out
 
 

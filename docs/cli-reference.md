@@ -1,7 +1,7 @@
 # CLI reference
 
 All commands read `forgeo.yaml` from the current directory; pass
-`--config <file>` to use a different one. `start`, `once`, `status`,
+`--config <file>` to use a different one. `start`, `once`, `run`, `status`,
 `validate`, `stop` and `restart` also accept `--name <instance>` to resolve
 the config from the **instance registry** — see [`forgeo instance`](#forgeo-instance)
 below.
@@ -20,8 +20,8 @@ Guided first-time setup: interactively write a `forgeo.yaml`.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Where to write the config (default `forgeo.yaml`). |
-| `--force` | Overwrite an existing config file. |
+| <span style="white-space: nowrap">`--config <file>`</span> | Where to write the config (default `forgeo.yaml`). |
+| <span style="white-space: nowrap">`--force`</span> | Overwrite an existing config file. |
 
 Exit codes:
 
@@ -41,10 +41,10 @@ foreground instead, interruptible with Ctrl-C.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
-| `--interval-minutes <n>` | Override the schedule interval from the config for this run. |
-| `-f`, `--foreground` | Run the daemon in the foreground instead of starting it detached. |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--interval-minutes <n>`</span> | Override the schedule interval from the config for this run. |
+| <span style="white-space: nowrap">`-f`, `--foreground`</span> | Run the daemon in the foreground instead of starting it detached. |
 
 The daemon wakes every `interval_minutes` and runs one cycle. When no config
 exists, `forgeo start` offers the guided setup. A second `start` (or `once`)
@@ -81,8 +81,8 @@ Run exactly **one cycle** and exit; no daemon needed.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
 
 `forgeo once` shares the run lock with the daemon, so it never overlaps a
 running `forgeo start` — useful to test a config or process a backlog without
@@ -92,13 +92,38 @@ Outcomes a cycle can produce:
 
 | Outcome | Meaning |
 | --- | --- |
-| `task` | A task ran and finished. |
-| `refactor` | A refactoring pass ran (backlog was empty). |
-| `blocked` | A `BLOCKED` task exists; `BLOCKER.md` re-rendered from the backlog; paused. |
-| `paused` | A blocker file exists; nothing ran. |
-| `dirty` | The working tree was dirty; the task was not started. |
-| `skipped` | A previous run was still in progress (daemon only). |
-| `error` | A cycle crashed (daemon only). |
+| <span style="white-space: nowrap">`task`</span> | A task ran and finished. |
+| <span style="white-space: nowrap">`refactor`</span> | A refactoring pass ran (backlog was empty). |
+| <span style="white-space: nowrap">`blocked`</span> | A `BLOCKED` task exists; `BLOCKER.md` re-rendered from the backlog; paused. |
+| <span style="white-space: nowrap">`paused`</span> | A blocker file exists; nothing ran. |
+| <span style="white-space: nowrap">`dirty`</span> | The working tree was dirty; the task was not started. |
+| <span style="white-space: nowrap">`skipped`</span> | A previous run was still in progress (daemon only). |
+| <span style="white-space: nowrap">`error`</span> | A cycle crashed (daemon only). |
+
+## `forgeo run`
+
+Run exactly **one specific task** by id and exit — no daemon, no waiting for
+the backlog order. Use it for triage: rerun a `FAILED` task immediately
+(after reopening it), or try a risky task right now instead of letting the
+scheduler pick it later.
+
+```bash
+forgeo run --task SELF-012
+```
+
+| Flag | Description |
+| --- | --- |
+| <span style="white-space: nowrap">`--task <id>`</span> | Id of the `OPEN` task to run. **Required.** |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+
+`forgeo run` shares the per-forgeo run lock with the daemon and `forgeo once`,
+so it never overlaps them — it refuses (exit `1`) while the lock is held. It
+also refuses (exit `1`) with a clear message when the task does not exist in
+the backlog or its status is not `OPEN` (a `FAILED` task must be reopened
+first, e.g. from the web console or by editing the backlog). On success it
+prints `Cycle finished: <outcome>` and records the run in `runs.jsonl` like
+any other task run.
 
 ## `forgeo status`
 
@@ -106,8 +131,8 @@ Print a read-only summary of Forgeo. Never starts an agent.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
 
 Output:
 
@@ -144,8 +169,8 @@ while a daemon is active.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
 
 It validates, reporting **all** problems at once:
 
@@ -187,9 +212,9 @@ first).
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
-| `--timeout <seconds>` | How long to wait for the daemon to exit (default `600`). |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--timeout <seconds>`</span> | How long to wait for the daemon to exit (default `600`). |
 
 Exit code is `0` on success, `1` when Forgeo is not running, the lock
 records a dead PID, or the daemon did not exit within the timeout.
@@ -210,17 +235,17 @@ values while running so its lock files are never detached from the config.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
-| `--name <name>` | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
-| `--timeout <seconds>` | How long to wait for the old daemon to exit (default `600`). |
+| <span style="white-space: nowrap">`--config <file>`</span> | Forgeo YAML file (default `forgeo.yaml`). Mutually exclusive with `--name`. |
+| <span style="white-space: nowrap">`--name <name>`</span> | Registered instance name resolved from the registry. Mutually exclusive with `--config`. |
+| <span style="white-space: nowrap">`--timeout <seconds>`</span> | How long to wait for the old daemon to exit (default `600`). |
 
 On success it prints the new daemon PID and interval.
 
 ### `--config` vs `--name`
 
-On `start`, `once`, `status`, `validate`, `stop` and `restart`, `--name`
-resolves the `forgeo.yaml` from the instance registry instead of reading
-`--config`. The two flags are mutually exclusive — passing both is an
+On `start`, `once`, `run`, `status`, `validate`, `stop` and `restart`,
+`--name` resolves the `forgeo.yaml` from the instance registry instead of
+reading `--config`. The two flags are mutually exclusive — passing both is an
 argparse error. An unknown instance name prints a clear error and exits
 non-zero.
 
@@ -244,7 +269,7 @@ differs from `config.name`.
 
 | Flag | Description |
 | --- | --- |
-| `--config <file>` | Path to the `forgeo.yaml` to register. **Required.** |
+| <span style="white-space: nowrap">`--config <file>`</span> | Path to the `forgeo.yaml` to register. **Required.** |
 
 - The name must match `^[a-zA-Z0-9._-]+$`; invalid or duplicate names are
   rejected with a clear error (exit `1`).
@@ -273,11 +298,11 @@ running.
 
 | Flag | Description |
 | --- | --- |
-| `--host <address>` | Bind address (default `0.0.0.0`). |
-| `--port <port>` | Bind port (default `8790`). |
-| `-d`, `--detach` | Start the dashboard in the background and return once it binds. |
-| `--token [TOKEN]` | Require a bearer token on every `/api/*` route (see below). |
-| `--timeout <seconds>` | How long to wait for the dashboard to bind when detached (default `30`). |
+| <span style="white-space: nowrap">`--host <address>`</span> | Bind address (default `0.0.0.0`). |
+| <span style="white-space: nowrap">`--port <port>`</span> | Bind port (default `8790`). |
+| <span style="white-space: nowrap">`-d`, `--detach`</span> | Start the dashboard in the background and return once it binds. |
+| <span style="white-space: nowrap">`--token [TOKEN]`</span> | Require a bearer token on every `/api/*` route (see below). |
+| <span style="white-space: nowrap">`--timeout <seconds>`</span> | How long to wait for the dashboard to bind when detached (default `30`). |
 
 Without `-d` the dashboard runs in the foreground; interrupt it with Ctrl-C
 or stop it from another terminal with `forgeo web stop`.
@@ -322,7 +347,7 @@ Stop the running dashboard gracefully (SIGTERM) and wait for it to exit.
 
 | Flag | Description |
 | --- | --- |
-| `--timeout <seconds>` | How long to wait for the dashboard to exit (default `30`). |
+| <span style="white-space: nowrap">`--timeout <seconds>`</span> | How long to wait for the dashboard to exit (default `30`). |
 
 Exit code is `0` on success, `1` when the dashboard is not running, the lock
 records a dead PID, or it did not exit within the timeout. The lock file is

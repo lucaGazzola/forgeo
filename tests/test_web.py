@@ -2258,11 +2258,13 @@ def test_saving_the_config_preserves_credentials_it_never_showed(
             + "backlog_auth:\n"
             + "  token_url: https://keycloak.test/realms/dev/protocol/openid-connect/token\n"
             + "  client_id: forgeo\n"
-            + "  client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET\n",
+            + "  client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET\n"
+            + "task_context: CONTEXT.md\n",
             encoding="utf-8",
         )
         payload = load_config(config_path).model_dump(mode="json")
         payload.pop("backlog_auth")
+        payload.pop("task_context")
         payload["interval_minutes"] = 45
 
         status, _ = _put(
@@ -2274,3 +2276,5 @@ def test_saving_the_config_preserves_credentials_it_never_showed(
     assert saved.interval_minutes == 45
     assert saved.backlog_auth is not None
     assert saved.backlog_auth.client_id == "forgeo"
+    assert saved.task_context is not None
+    assert saved.task_context.name == "CONTEXT.md"

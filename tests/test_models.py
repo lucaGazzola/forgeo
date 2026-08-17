@@ -245,6 +245,23 @@ def test_load_config_missing_file(tmp_path):
         load_config(tmp_path / "nope.yaml")
 
 
+def test_task_context_path_resolves_and_round_trips(tmp_path):
+    (tmp_path / "CONTEXT.md").write_text("# overview\n", encoding="utf-8")
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text(
+        "name: demo\nrepo: .\nbacklog: tasks.json\n"
+        "task_context: CONTEXT.md\nagent_command: echo\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    assert config.task_context == tmp_path.resolve() / "CONTEXT.md"
+
+    saved = save_config(config_path, config)
+    assert saved.task_context == tmp_path.resolve() / "CONTEXT.md"
+    disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert disk["task_context"] == "CONTEXT.md"
+
+
 def test_save_config_stores_paths_relative_to_file(tmp_path):
     config_path = tmp_path / "forgeo.yaml"
     config = ForgeoConfig(

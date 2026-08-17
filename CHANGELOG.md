@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-17
+
+### Added
+
+- An animated demo GIF in the README, showing Forgeo running a backlog task
+  end to end, plus an Open Graph social-preview image for the docs site.
+
 ### Changed
 
 - The default agent prompt (used by `forgeo init`) now names `AGENTS.md` and
@@ -314,7 +321,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/lucaGazzola/forgeo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lucaGazzola/forgeo/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lucaGazzola/forgeo/compare/v0.4.0...v0.5.0

@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 PYPI_PACKAGE = "forgeo-cli"
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 SH = shutil.which("sh")
 assert SH, "sh must be available to run install.sh"
 

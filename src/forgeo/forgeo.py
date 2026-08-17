@@ -359,31 +359,54 @@ class Forgeo:
     # ------------------------------------------------------------------ #
 
     async def _run_task(self, task: Task) -> None:
-        """Execute one task: agent run, then commit/push on the main branch."""
-        logger.info("Running task %s (%s)", task.id, task.title)
-        result, ok = await self._run_agent(
-            task,
-            instruction=task.instruction,
-            success_message=task.title,
-            blocked_message=f"{task.title} [partial]",
-            command=task.agent_command,
-            timeout_seconds=task.agent_timeout_seconds,
-        )
+        """Execute one task: agent run(s), then commit/push on the main branch.
 
-        if result.status is ExecutionStatus.BLOCKED:
-            await self.backlog.set_blocked(task.id, result.reason)
+        A silent no-change SUCCESS (exit 0 with an empty tree) is re-run up to
+        ``no_changes_retry_max`` more times in the same cycle; once the retry
+        budget is spent the task is marked ``BLOCKED`` for human review — the
+        only acceptable outcome for a task that ends without code changes.
+        """
+        logger.info("Running task %s (%s)", task.id, task.title)
+        max_retries = self.config.no_changes_retry_max
+        for attempt in range(max_retries + 1):
+            self._last_run_reason = None
+            result, ok = await self._run_agent(
+                task,
+                instruction=task.instruction,
+                success_message=task.title,
+                blocked_message=f"{task.title} [partial]",
+                command=task.agent_command,
+                timeout_seconds=task.agent_timeout_seconds,
+            )
+
+            if result.status is ExecutionStatus.BLOCKED:
+                await self.backlog.set_blocked(task.id, result.reason)
+                return
+            if result.status is ExecutionStatus.ERROR:
+                await self._mark_failed(task, self._failure_reason(result))
+                return
+            if ok:
+                await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
+                self.config.blocker_file.unlink(missing_ok=True)
+                self._notify_webhook("completed", task, "")
+                logger.info("Task %s completed.", task.id)
+                return
+            # Not ok: either the commit failed (the task is already marked
+            # FAILED inside _handle_execution_result) or the agent exited 0
+            # without producing changes (only the reason distinguishes them).
+            if self._last_run_reason != NO_CHANGES_REASON:
+                return
+            if attempt < max_retries:
+                logger.warning(
+                    "Task %s exited 0 but produced no changes "
+                    "(attempt %d/%d); retrying.",
+                    task.id,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+            await self._block_no_changes(task)
             return
-        if result.status is ExecutionStatus.ERROR:
-            await self._mark_failed(task, self._failure_reason(result))
-            return
-        if not ok:
-            # SUCCESS whose commit (or no-change) path failed: already marked
-            # FAILED inside _handle_execution_result.
-            return
-        await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
-        self.config.blocker_file.unlink(missing_ok=True)
-        self._notify_webhook("completed", task, "")
-        logger.info("Task %s completed.", task.id)
 
     async def _run_agent(
         self,
@@ -491,7 +514,10 @@ class Forgeo:
                 # Exited 0 but produced no changes: not a completion. The
                 # engine cannot tell "deliberately did nothing" from "did
                 # nothing", so the agent must opt into no-ops explicitly.
-                await self._fail_no_changes(task)
+                # The caller decides between an immediate re-run
+                # (``no_changes_retry_max``) and a BLOCKED outcome.
+                self._last_run_reason = NO_CHANGES_REASON
+                logger.warning("Task %s: %s.", task.id, NO_CHANGES_REASON)
                 return False
             return ok
 
@@ -545,22 +571,43 @@ class Forgeo:
         await self.backlog.set_failed(task.id, reason)
         self._notify_webhook("failed", task, "\n".join(reason))
 
-    async def _fail_no_changes(self, task: Task) -> None:
-        """Fail a task whose agent exited 0 without producing any changes.
+    async def _block_no_changes(self, task: Task) -> None:
+        """Mark a task whose agent exited 0 without producing any changes as
+        BLOCKED: the only acceptable outcome for a no-change run is a blocked
+        task awaiting human review.
 
         A no-change SUCCESS is indistinguishable from an agent that simply did
-        nothing, so it is not a valid completion: the task is marked FAILED
-        and the run record surfaces the reason instead of a silent null
-        commit.
+        nothing, so it is not a valid completion. After the retry budget is
+        spent the task is blocked (never FAILED), so the run record surfaces
+        the reason and the human decides whether to reopen, split, or drop the
+        task.
         """
         self._last_run_reason = NO_CHANGES_REASON
         logger.warning(
-            "Task %s exited 0 but produced no changes; marking FAILED.", task.id
+            "Task %s: %s; marking BLOCKED.", task.id, NO_CHANGES_REASON
         )
-        await self._fail(
-            task,
-            ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_REASON),
+        blocked = ExecutionResult(
+            status=ExecutionStatus.BLOCKED,
+            output_logs=(
+                self._last_agent_result.output_logs
+                if self._last_agent_result is not None
+                else []
+            ),
+            questions=[NO_CHANGES_REASON],
+            exit_code=(
+                self._last_agent_result.exit_code
+                if self._last_agent_result is not None
+                else None
+            ),
         )
+        self._last_agent_result = blocked
+        await self.backlog.set_blocked(task.id, [NO_CHANGES_REASON])
+        entry = BlockerEntry(
+            task=task,
+            result=blocked,
+            instruction=task.instruction,
+        )
+        self._notify_blocked(entry)
 
     async def _complete_without_changes(
         self, task: Task, *, is_refactor: bool = False

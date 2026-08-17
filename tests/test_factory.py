@@ -57,10 +57,10 @@ async def test_task_success_is_committed_on_main(git_repo, tmp_path):
     assert "forgeo" not in git(git_repo, "branch")
 
 
-async def test_task_success_without_changes_fails_task(git_repo, tmp_path):
-    """Exit 0 with an empty tree is not a valid completion: it is FAILED, so
-    a silent no-change SUCCESS can never quietly close a task (regression:
-    SELF-033 was closed without any work)."""
+async def test_task_success_without_changes_blocks_task(git_repo, tmp_path):
+    """Exit 0 with an empty tree is not a valid completion: the task is
+    BLOCKED (needs a human), so a silent no-change SUCCESS can never quietly
+    close a task (regression: SELF-033 was closed without any work)."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
@@ -69,12 +69,12 @@ async def test_task_success_without_changes_fails_task(git_repo, tmp_path):
 
     assert outcome == "task"
     task = await backlog.get_task("TASK-001")
-    assert task.status is TaskStatus.FAILED
-    assert task.failure_reason == [NO_CHANGES_REASON]
+    assert task.status is TaskStatus.BLOCKED
+    assert task.blocker_reason == [NO_CHANGES_REASON]
     assert git(git_repo, "rev-list", "--count", "HEAD") == "1"
 
 
-async def test_no_changes_failure_logs_warning(git_repo, tmp_path, caplog):
+async def test_no_changes_blocks_logs_warning(git_repo, tmp_path, caplog):
     """The no-change SUCCESS case is surfaced as a warning, never silent."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
@@ -85,6 +85,52 @@ async def test_no_changes_failure_logs_warning(git_repo, tmp_path, caplog):
 
     assert any(NO_CHANGES_REASON in r.message for r in caplog.records)
     assert any("produced no changes" in r.message for r in caplog.records)
+
+
+async def test_task_no_changes_is_retried_and_can_succeed(git_repo, tmp_path):
+    """With no_changes_retry_max, a silent no-change SUCCESS re-runs the agent
+    in the same cycle; a later run that produces changes completes the task."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, no_changes_retry_max=2)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+
+    def produce_changes() -> None:
+        (git_repo / "app.py").write_text("def answer():\n    return 7\n", encoding="utf-8")
+
+    calls = 0
+
+    def effect() -> None:
+        nonlocal calls
+        calls += 1
+        if calls >= 3:
+            produce_changes()
+
+    agent.effect = effect
+
+    outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.COMPLETED
+    assert calls == 3
+    assert git(git_repo, "log", "-1", "--format=%s") == "Do the thing"
+
+
+async def test_task_no_changes_retries_exhausted_blocks_task(git_repo, tmp_path):
+    """Once the retry budget is spent, a silent no-change SUCCESS is marked
+    BLOCKED — never FAILED — so a human reviews the task."""
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, no_changes_retry_max=2)
+    await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+
+    outcome = await forgeo.run_cycle()
+
+    assert outcome == "task"
+    task = await backlog.get_task("TASK-001")
+    assert task.status is TaskStatus.BLOCKED
+    assert task.blocker_reason == [NO_CHANGES_REASON]
+    assert len(agent.calls) == 3
+    assert git(git_repo, "rev-list", "--count", "HEAD") == "1"
 
 
 async def test_task_explicit_no_changes_completes_task(git_repo, tmp_path):
@@ -798,6 +844,10 @@ async def test_task_context_refreshed_each_run(git_repo, tmp_path):
     context_file.write_text("Version one.\n", encoding="utf-8")
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path, task_context=context_file)
     await backlog.create_task(make_task())
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
     await forgeo.run_cycle()
     context_file.write_text("Version two.\n", encoding="utf-8")
     await backlog.create_task(make_task(id="TASK-002", description="Build it again."))

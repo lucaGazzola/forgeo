@@ -61,6 +61,12 @@ blocker_file: BLOCKER.md        # Written with a detailed explanation when the a
 # failed_retry_wait_cycles: 1   # How many cycles a retry-eligible FAILED task
                                 # waits (backoff) before it is moved back to
                                 # OPEN. Blocked tasks are never auto-retried.
+# no_changes_retry_max: 2       # How many times a task whose agent exits 0
+                                # without producing any code changes is re-run
+                                # immediately, in the same cycle, before it is
+                                # marked BLOCKED for human review. 0 (default)
+                                # = a silent no-change SUCCESS is marked
+                                # BLOCKED on the first attempt.
 
 # The coding agent: any shell command. Read $FORGEO_TASK for the task, work in the
 # repo directory, and exit with:

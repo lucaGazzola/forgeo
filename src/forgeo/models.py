@@ -415,6 +415,11 @@ class ForgeoConfig(BaseModel):
             budget per-task with ``retries_left``.
         failed_retry_wait_cycles: How many cycles a retry-eligible ``FAILED``
             task waits (backoff) before it is moved back to ``OPEN``.
+        no_changes_retry_max: How many times a task whose agent exits ``0``
+            without producing any code changes is re-run immediately, in the
+            same cycle, before the task is marked ``BLOCKED`` for human
+            review. ``0`` (default) = a silent no-change SUCCESS is marked
+            ``BLOCKED`` on the first attempt.
         telegram_bot_token: Telegram bot token for blocked-run
             notifications. Disabled unless ``telegram_chat_id`` is also set.
         telegram_chat_id: Chat ID that receives blocked-run notifications.
@@ -453,6 +458,7 @@ class ForgeoConfig(BaseModel):
     run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
     failed_retry_max: int = Field(default=0, ge=0)
     failed_retry_wait_cycles: int = Field(default=1, ge=1)
+    no_changes_retry_max: int = Field(default=0, ge=0)
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_webhook_url: str | None = None

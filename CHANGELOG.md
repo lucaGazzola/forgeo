@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `no_changes_retry_max` config key: a task whose agent exits `0` without
+  producing any code changes is re-run immediately, in the same cycle, up to
+  that many extra times before it is marked `BLOCKED` for human review.
+
+### Changed
+
+- A silent no-change SUCCESS (agent exits `0` with an unchanged working tree)
+  now marks the task `BLOCKED` instead of `FAILED`: the only acceptable
+  outcome for a run that ends without code changes is a blocked task awaiting
+  human review. An agent that needs no code change must still opt in
+  explicitly with `no_changes_exit_code` to complete the task.
+
 ## [0.7.1] - 2026-08-17
 
 ### Added

@@ -533,7 +533,7 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        await self._mark_failed(task, self._failure_reason(result))
+        await self._mark_failed(task, self._failure_reason(result), result)
 
     async def _mark_failed(self, task: Task, reason: list[str], result: ExecutionResult) -> None:
         """Persist ``reason`` on ``task`` and send the ``failed`` webhook notice.

@@ -16,7 +16,7 @@ from forgeo.models import (
     ExecutionStatus,
     TaskStatus,
 )
-from tests.conftest import git, make_forgeo, make_task
+from tests.conftest import git, make_forgeo, make_result, make_task
 
 
 class FakeResponse:
@@ -940,7 +940,7 @@ async def test_manual_reopen_of_failed_task_resets_retry_budget(git_repo, tmp_pa
     assert task.status is TaskStatus.FAILED
     assert task.retry_count == 1
 
-    await backlog.update_status("TASK-001", TaskStatus.OPEN)  # manual reopen
+    await backlog.update_status("TASK-001", TaskStatus.OPEN, make_result())  # manual reopen
     task = await backlog.get_task("TASK-001")
     assert task.status is TaskStatus.OPEN
     assert task.retry_count == 0

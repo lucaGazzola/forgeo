@@ -15,7 +15,7 @@ from forgeo.backlog import (
     unsatisfied_dependencies,
 )
 from forgeo.models import Task, TaskStatus
-from tests.conftest import make_task
+from tests.conftest import make_result, make_task
 
 
 def test_oldest_open_task_picks_oldest():
@@ -306,7 +306,7 @@ async def test_fetch_next_task_waits_for_dependencies(tmp_path):
     await backlog.create_task(waiting)
     assert await backlog.fetch_next_task() is None
 
-    await backlog.update_status("DEP-1", TaskStatus.COMPLETED)
+    await backlog.update_status("DEP-1", TaskStatus.COMPLETED, make_result())
     fetched = await backlog.fetch_next_task()
     assert fetched is not None
     assert fetched.id == "WAIT"
@@ -346,7 +346,7 @@ async def test_fetch_next_task_skips_future_run_at(tmp_path):
 async def test_update_status_persists_and_bumps_timestamp(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    updated = await backlog.update_status(task.id, TaskStatus.COMPLETED)
+    updated = await backlog.update_status(task.id, TaskStatus.COMPLETED, make_result())
     assert updated.status is TaskStatus.COMPLETED
     stored = await backlog.get_task(task.id)
     assert stored.status is TaskStatus.COMPLETED
@@ -356,18 +356,18 @@ async def test_update_status_persists_and_bumps_timestamp(tmp_path):
 async def test_update_status_unknown_id_returns_none(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     await backlog.create_task(make_task())
-    assert await backlog.update_status("MISSING", TaskStatus.COMPLETED) is None
+    assert await backlog.update_status("MISSING", TaskStatus.COMPLETED, make_result()) is None
 
 
 async def test_set_blocked_persists_reason_and_increments_count(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    blocked = await backlog.set_blocked(task.id, ["I need a decision"])
+    blocked = await backlog.set_blocked(task.id, ["I need a decision"], make_result())
     assert blocked.status is TaskStatus.BLOCKED
     assert blocked.blocker_reason == ["I need a decision"]
     assert blocked.blocked_count == 1
 
-    blocked = await backlog.set_blocked(task.id, ["Another decision"])
+    blocked = await backlog.set_blocked(task.id, ["Another decision"], make_result())
     assert blocked.blocked_count == 2
     assert blocked.blocker_reason == ["Another decision"]
 
@@ -386,17 +386,17 @@ async def test_set_blocked_persists_reason_and_increments_count(tmp_path):
 async def test_set_blocked_unknown_id_returns_none(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     await backlog.create_task(make_task())
-    assert await backlog.set_blocked("MISSING", ["?"]) is None
+    assert await backlog.set_blocked("MISSING", ["?"], make_result()) is None
 
 
 async def test_set_failed_persists_reason(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    failed = await backlog.set_failed(task.id, ["timed out after 60s"])
+    failed = await backlog.set_failed(task.id, ["timed out after 60s"], make_result())
     assert failed.status is TaskStatus.FAILED
     assert failed.failure_reason == ["timed out after 60s"]
 
-    failed = await backlog.set_failed(task.id, ["exit code 3"])
+    failed = await backlog.set_failed(task.id, ["exit code 3"], make_result())
     assert failed.status is TaskStatus.FAILED
     assert failed.failure_reason == ["exit code 3"]
 
@@ -413,14 +413,14 @@ async def test_set_failed_persists_reason(tmp_path):
 async def test_set_failed_unknown_id_returns_none(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     await backlog.create_task(make_task())
-    assert await backlog.set_failed("MISSING", ["?"]) is None
+    assert await backlog.set_failed("MISSING", ["?"], make_result()) is None
 
 
 async def test_update_status_clears_failure_reason(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["timed out after 60s"])
-    updated = await backlog.update_status(task.id, TaskStatus.OPEN)
+    await backlog.set_failed(task.id, ["timed out after 60s"], make_result())
+    updated = await backlog.update_status(task.id, TaskStatus.OPEN, make_result())
     assert updated.status is TaskStatus.OPEN
     assert updated.failure_reason == []
     stored = await backlog.get_task(task.id)
@@ -430,8 +430,8 @@ async def test_update_status_clears_failure_reason(tmp_path):
 async def test_set_blocked_clears_failure_reason(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["timed out after 60s"])
-    blocked = await backlog.set_blocked(task.id, ["I need a decision"])
+    await backlog.set_failed(task.id, ["timed out after 60s"], make_result())
+    blocked = await backlog.set_blocked(task.id, ["I need a decision"], make_result())
     assert blocked.status is TaskStatus.BLOCKED
     assert blocked.failure_reason == []
     assert blocked.blocker_reason == ["I need a decision"]
@@ -440,7 +440,7 @@ async def test_set_blocked_clears_failure_reason(tmp_path):
 async def test_reopen_task_clears_failure_reason(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["timed out after 60s"])
+    await backlog.set_failed(task.id, ["timed out after 60s"], make_result())
     reopened = await backlog.reopen_task(task.id)
     assert reopened.status is TaskStatus.OPEN
     assert reopened.failure_reason == []
@@ -449,7 +449,7 @@ async def test_reopen_task_clears_failure_reason(tmp_path):
 async def test_reopen_task_clears_reason_keeps_count(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_blocked(task.id, ["I need a decision"])
+    await backlog.set_blocked(task.id, ["I need a decision"], make_result())
     reopened = await backlog.reopen_task(task.id)
     assert reopened.status is TaskStatus.OPEN
     assert reopened.blocker_reason == []
@@ -762,11 +762,11 @@ async def test_set_failed_resets_failed_wait_cycles(tmp_path):
     """A fresh FAILED transition restarts the retry backoff."""
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["boom"])
+    await backlog.set_failed(task.id, ["boom"], make_result())
     await backlog.bump_failed_wait(task.id)
     assert (await backlog.get_task(task.id)).failed_wait_cycles == 1
 
-    refailed = await backlog.set_failed(task.id, ["boom again"])
+    refailed = await backlog.set_failed(task.id, ["boom again"], make_result())
     assert refailed.failed_wait_cycles == 0
     assert refailed.failure_reason == ["boom again"]
     stored = await backlog.get_task(task.id)
@@ -777,7 +777,7 @@ async def test_set_failed_resets_failed_wait_cycles(tmp_path):
 async def test_bump_failed_wait_increments(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["boom"])
+    await backlog.set_failed(task.id, ["boom"], make_result())
     bumped = await backlog.bump_failed_wait(task.id)
     assert bumped.status is TaskStatus.FAILED
     assert bumped.failed_wait_cycles == 1
@@ -789,7 +789,7 @@ async def test_bump_failed_wait_increments(tmp_path):
 async def test_retry_task_reopens_and_increments_retry_count(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["boom"])
+    await backlog.set_failed(task.id, ["boom"], make_result())
     retried = await backlog.retry_task(task.id)
     assert retried.status is TaskStatus.OPEN
     assert retried.retry_count == 1
@@ -818,15 +818,15 @@ async def test_update_status_leaving_failed_resets_retry_state(tmp_path):
     the human's retry gets a fresh failed_retry_max."""
     backlog = JSONBacklog(tmp_path / "backlog.json")
     task = await backlog.create_task(make_task())
-    await backlog.set_failed(task.id, ["boom"])
+    await backlog.set_failed(task.id, ["boom"], make_result())
     await backlog.retry_task(task.id)
-    await backlog.set_failed(task.id, ["boom again"])
+    await backlog.set_failed(task.id, ["boom again"], make_result())
     await backlog.bump_failed_wait(task.id)
     stored = await backlog.get_task(task.id)
     assert stored.retry_count == 1
     assert stored.failed_wait_cycles == 1
 
-    reopened = await backlog.update_status(task.id, TaskStatus.OPEN)
+    reopened = await backlog.update_status(task.id, TaskStatus.OPEN, make_result())
     assert reopened.status is TaskStatus.OPEN
     assert reopened.retry_count == 0
     assert reopened.failed_wait_cycles == 0

@@ -16,7 +16,7 @@ import pytest
 from forgeo.backlog import open_backlog
 from forgeo.backlog_http import BacklogUnavailableError, HttpBacklog
 from forgeo.models import BacklogAuth, ForgeoConfig, TaskStatus
-from tests.conftest import make_task
+from tests.conftest import make_result, make_task
 
 URL = "https://api.example.com/api/forgeo/backlog"
 SECRET_ENV = "FORGEO_TEST_CLIENT_SECRET"
@@ -104,7 +104,7 @@ async def test_status_transitions_round_trip_through_the_endpoint(
     backlog = HttpBacklog(URL)
     await backlog.create_task(make_task(id="TASK-001"))
 
-    await backlog.set_blocked("TASK-001", ["needs a decision"])
+    await backlog.set_blocked("TASK-001", ["needs a decision"], make_result())
     stored = endpoint.document["tasks"][0]
     assert stored["status"] == "BLOCKED"
     assert stored["blocker_reason"] == ["needs a decision"]

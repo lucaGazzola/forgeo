@@ -192,6 +192,19 @@ def make_task(**overrides) -> Task:
     return Task(**defaults)
 
 
+def make_result(**overrides) -> ExecutionResult:
+    """An agent result carrying no output, for transitions under test directly.
+
+    The backlog mutators require the result that drove the transition, but a
+    test exercising only the status bookkeeping has no agent run behind it.
+    This is that "nothing was captured" result: it records an empty
+    ``agent_response`` rather than standing in for real agent output.
+    """
+    defaults = {"status": ExecutionStatus.SUCCESS}
+    defaults.update(overrides)
+    return ExecutionResult(**defaults)
+
+
 def make_forgeo(
     git_repo: Path, tmp_path: Path, **overrides
 ) -> tuple[Forgeo, FakeAgent, JSONBacklog]:

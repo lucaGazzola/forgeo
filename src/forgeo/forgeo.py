@@ -454,9 +454,14 @@ class Forgeo:
         logger.warning(
             "Task %s exited 0 but produced no changes; marking FAILED.", task.id
         )
+        previous = self._last_agent_result
         await self._fail(
             task,
-            ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_REASON, output_logs=self._last_agent_result.output_logs),
+            ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                error=NO_CHANGES_REASON,
+                output_logs=previous.output_logs if previous is not None else [],
+            ),
         )
 
     async def _complete_without_changes(
@@ -481,7 +486,12 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON], self._last_agent_result)
+                await self.backlog.set_failed(
+                    task.id,
+                    [NO_CHANGES_DIRTY_REASON],
+                    self._last_agent_result
+                    or ExecutionResult(status=ExecutionStatus.ERROR),
+                )
                 self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON

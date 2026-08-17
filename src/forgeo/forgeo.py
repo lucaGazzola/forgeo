@@ -303,18 +303,18 @@ class Forgeo:
         )
 
         if result.status is ExecutionStatus.BLOCKED:
-            await self.backlog.set_blocked(task.id, result.reason)
+            await self.backlog.set_blocked(task.id, result.reason, result)
             return
         if result.status is ExecutionStatus.ERROR:
             reason = self._failure_reason(result)
-            await self.backlog.set_failed(task.id, reason)
+            await self.backlog.set_failed(task.id, reason, result)
             self._notify_webhook("failed", task, "\n".join(reason))
             return
         if not ok:
             # SUCCESS whose commit (or no-change) path failed: already marked
             # FAILED inside _handle_execution_result.
             return
-        await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
+        await self.backlog.update_status(task.id, TaskStatus.COMPLETED, result)
         self.config.blocker_file.unlink(missing_ok=True)
         self._notify_webhook("completed", task, "")
         logger.info("Task %s completed.", task.id)
@@ -439,7 +439,7 @@ class Forgeo:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
         reason = self._failure_reason(result)
-        await self.backlog.set_failed(task.id, reason)
+        await self.backlog.set_failed(task.id, reason, result)
         self._notify_webhook("failed", task, "\n".join(reason))
 
     async def _fail_no_changes(self, task: Task) -> None:
@@ -456,7 +456,7 @@ class Forgeo:
         )
         await self._fail(
             task,
-            ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_REASON),
+            ExecutionResult(status=ExecutionStatus.ERROR, error=NO_CHANGES_REASON, output_logs=self._last_agent_result.output_logs),
         )
 
     async def _complete_without_changes(
@@ -481,7 +481,7 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON])
+                await self.backlog.set_failed(task.id, [NO_CHANGES_DIRTY_REASON], self._last_agent_result)
                 self._notify_webhook("failed", task, NO_CHANGES_DIRTY_REASON)
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON

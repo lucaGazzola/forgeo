@@ -81,6 +81,7 @@ class HttpBacklog(BacklogStore):
     async def _write(self, store: dict[str, Any]) -> None:
         """POST the whole document back."""
         payload = json.dumps(store, indent=2, ensure_ascii=False).encode("utf-8")
+        logger.info("POST %s %s", self.url, payload)
         await asyncio.to_thread(self._request, "POST", payload)
 
     # ------------------------------------------------------------------ #

@@ -380,13 +380,13 @@ class Forgeo:
             )
 
             if result.status is ExecutionStatus.BLOCKED:
-                await self.backlog.set_blocked(task.id, result.reason)
+                await self.backlog.set_blocked(task.id, result.reason, result)
                 return
             if result.status is ExecutionStatus.ERROR:
                 await self._mark_failed(task, self._failure_reason(result), result)
                 return
             if ok:
-                await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
+                await self.backlog.update_status(task.id, TaskStatus.COMPLETED, result)
                 self.config.blocker_file.unlink(missing_ok=True)
                 self._notify_webhook("completed", task, "")
                 logger.info("Task %s completed.", task.id)
@@ -586,15 +586,6 @@ class Forgeo:
         logger.warning(
             "Task %s: %s; marking BLOCKED.", task.id, NO_CHANGES_REASON
         )
-<<<<<<< HEAD
-        previous = self._last_agent_result
-        await self._fail(
-            task,
-            ExecutionResult(
-                status=ExecutionStatus.ERROR,
-                error=NO_CHANGES_REASON,
-                output_logs=previous.output_logs if previous is not None else [],
-=======
         blocked = ExecutionResult(
             status=ExecutionStatus.BLOCKED,
             output_logs=(
@@ -607,11 +598,10 @@ class Forgeo:
                 self._last_agent_result.exit_code
                 if self._last_agent_result is not None
                 else None
->>>>>>> upstream/main
             ),
         )
         self._last_agent_result = blocked
-        await self.backlog.set_blocked(task.id, [NO_CHANGES_REASON])
+        await self.backlog.set_blocked(task.id, [NO_CHANGES_REASON], blocked)
         entry = BlockerEntry(
             task=task,
             result=blocked,

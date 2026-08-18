@@ -52,8 +52,8 @@ async def test_task_success_appends_run_record(git_repo, tmp_path):
 
 
 async def test_task_success_without_changes_has_reason(git_repo, tmp_path):
-    """A no-change SUCCESS is surfaced on the run record: outcome stays
-    SUCCESS (the agent did exit 0) but with an explicit reason, never a
+    """A no-change SUCCESS is surfaced on the run record: the run ends BLOCKED
+    (the only acceptable no-change outcome) with an explicit reason, never a
     silent null commit_sha."""
     forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
     await backlog.create_task(make_task())
@@ -62,10 +62,10 @@ async def test_task_success_without_changes_has_reason(git_repo, tmp_path):
     assert await forgeo.run_cycle() == "task"
 
     record = read_lines(runs_path(forgeo.config))[0]
-    assert record["outcome"] == "SUCCESS"
+    assert record["outcome"] == "BLOCKED"
     assert record["commit_sha"] is None
     assert record["reason"] == NO_CHANGES_REASON
-    assert (await backlog.get_task("TASK-001")).status is TaskStatus.FAILED
+    assert (await backlog.get_task("TASK-001")).status is TaskStatus.BLOCKED
 
 
 async def test_explicit_no_changes_record_has_reason(git_repo, tmp_path):
@@ -386,7 +386,7 @@ async def test_corrupt_runs_never_break_a_cycle(git_repo, tmp_path, caplog):
 
     records = RunRecorder(runs).read()
     assert len(records) == 1
-    assert records[0].outcome is RunOutcome.SUCCESS
+    assert records[0].outcome is RunOutcome.BLOCKED
     assert records[0].task_id == "TASK-001"
 
 

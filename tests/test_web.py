@@ -1524,6 +1524,7 @@ def test_retry_config_fields_editable_in_config_tab(web_env):
     assert status == 200
     assert "failed_retry_max" in body
     assert "failed_retry_wait_cycles" in body
+    assert "no_changes_retry_max" in body
 
 
 def test_tasks_endpoint_surfaces_run_at(registry, central_server):

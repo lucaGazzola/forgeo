@@ -1213,6 +1213,7 @@
     { key: "run_output_lines", label: "Run output lines", type: "number", min: 0, step: 1, hint: "How many agent output lines each run record keeps in runs.jsonl (bounded tail, shown in the History tab). 0 = don't persist agent output." },
     { key: "failed_retry_max", label: "Failed retry max", type: "number", min: 0, step: 1, hint: "How many times a FAILED task is retried automatically. 0 = disabled (a FAILED task stays FAILED until a human reopens it). A task can override this with its own retries_left." },
     { key: "failed_retry_wait_cycles", label: "Failed retry wait (cycles)", type: "number", min: 1, step: 1, hint: "How many cycles a FAILED task waits (backoff) before it is retried." },
+    { key: "no_changes_retry_max", label: "No-change retry max", type: "number", min: 0, step: 1, hint: "How many times a task whose agent exits 0 without producing any code changes is re-run immediately, in the same cycle, before it is marked BLOCKED for human review. 0 = block on the first attempt." },
     { key: "agent_sandbox", label: "Agent sandbox", type: "select", options: ["none", "docker"], hint: "none = run directly on the host; docker = run inside a container." },
     { key: "agent_sandbox_image", label: "Sandbox image", type: "text", optional: true, hint: "Container image used when agent_sandbox is docker. Required in that mode." },
     { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },

@@ -42,6 +42,7 @@ paths), so `forgeo restart` is still used for those.
 | <span style="white-space: nowrap">`run_output_lines`</span> | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
 | <span style="white-space: nowrap">`failed_retry_max`</span> | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
 | <span style="white-space: nowrap">`failed_retry_wait_cycles`</span> | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
+| <span style="white-space: nowrap">`no_changes_retry_max`</span> | `0` | How many times a task whose agent exits `0` without producing any code changes is re-run immediately, in the same cycle, before the task is marked `BLOCKED` for human review. `0` (default) = a silent no-change SUCCESS is marked `BLOCKED` on the first attempt. |
 | <span style="white-space: nowrap">`git_timeout_seconds`</span> | `120` | Kill a git subprocess after this many seconds. |
 | <span style="white-space: nowrap">`telegram_bot_token`</span> | — | Telegram bot token for blocked-run notifications (disabled unless `telegram_chat_id` is also set). |
 | <span style="white-space: nowrap">`telegram_chat_id`</span> | — | Chat ID that receives blocked-run notifications (disabled unless `telegram_bot_token` is also set). |
@@ -253,6 +254,28 @@ retries even when the config would retry it.
 failed_retry_max: 3           # retry each FAILED task up to 3 times
 failed_retry_wait_cycles: 2   # back off 2 cycles before each retry
 ```
+
+### `no_changes_retry_max`
+
+An agent that exits `0` while leaving the working tree unchanged has not
+completed the task — the engine cannot tell "deliberately did nothing" from
+"did nothing". By default (`no_changes_retry_max: 0`) that run is marked
+`BLOCKED` on the first attempt: the only acceptable outcome for a no-change
+run is a blocked task awaiting human review, never a silent completion and
+never a `FAILED` task.
+
+Sometimes the agent needs a second chance (a flaky model, a transient context
+issue). Set a positive `no_changes_retry_max` and Forgeo re-runs the agent
+immediately, back-to-back in the **same cycle**, that many extra times; a run
+that finally produces changes completes the task, and one that still produces
+nothing after the budget is spent is marked `BLOCKED`.
+
+```yaml
+no_changes_retry_max: 2       # re-run the agent up to 2 extra times on a silent no-change
+```
+
+`BLOCKED` tasks are never auto-retried — a human decides whether to reopen,
+split, or drop the task (see [Backlog](backlog.md)).
 
 ### Telegram notifications
 

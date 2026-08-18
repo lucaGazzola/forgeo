@@ -142,6 +142,7 @@ def test_config_defaults():
     assert config.notify_webhook_events == ["blocked"]
     assert config.failed_retry_max == 0
     assert config.failed_retry_wait_cycles == 1
+    assert config.no_changes_retry_max == 0
 
 
 def test_config_rejects_negative_retry_settings():
@@ -149,12 +150,16 @@ def test_config_rejects_negative_retry_settings():
         ForgeoConfig(agent_command="x", failed_retry_max=-1)
     with pytest.raises(ValidationError):
         ForgeoConfig(agent_command="x", failed_retry_wait_cycles=0)
+    with pytest.raises(ValidationError):
+        ForgeoConfig(agent_command="x", no_changes_retry_max=-1)
 
 
 def test_config_accepts_retry_settings():
     config = ForgeoConfig(agent_command="x", failed_retry_max=3, failed_retry_wait_cycles=2)
     assert config.failed_retry_max == 3
     assert config.failed_retry_wait_cycles == 2
+    config = ForgeoConfig(agent_command="x", no_changes_retry_max=5)
+    assert config.no_changes_retry_max == 5
 
 
 def test_config_rejects_unknown_webhook_events():

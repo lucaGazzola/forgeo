@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-18
+
+### Added
+
+- `no_changes_retry_max` config key: a task whose agent exits `0` without
+  producing any code changes is re-run immediately, in the same cycle, up to
+  that many extra times before it is marked `BLOCKED` for human review.
+
+### Changed
+
+- A silent no-change SUCCESS (agent exits `0` with an unchanged working tree)
+  now marks the task `BLOCKED` instead of `FAILED`: the only acceptable
+  outcome for a run that ends without code changes is a blocked task awaiting
+  human review. An agent that needs no code change must still opt in
+  explicitly with `no_changes_exit_code` to complete the task.
+
+## [0.7.1] - 2026-08-17
+
+### Added
+
+- An animated demo GIF in the README, showing Forgeo running a backlog task
+  end to end, plus an Open Graph social-preview image for the docs site.
+
 ### Changed
 
 - The default agent prompt (used by `forgeo init`) now names `AGENTS.md` and
@@ -314,7 +337,9 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/lucaGazzola/forgeo/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/lucaGazzola/forgeo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lucaGazzola/forgeo/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lucaGazzola/forgeo/compare/v0.4.0...v0.5.0

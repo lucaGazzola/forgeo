@@ -69,8 +69,11 @@ Forgeo cannot tell "the agent deliberately made no changes" from "the agent
 did nothing". A `SUCCESS` exit that produces **no changes is therefore not a
 valid completion for a task**:
 
-- exiting `0` while leaving the working tree **unchanged** fails the task
-  (`FAILED`, reason: *"Agent exited 0 but produced no changes"*);
+- exiting `0` while leaving the working tree **unchanged** is retried
+  immediately (`no_changes_retry_max`, see [Configuration](configuration.md))
+  and, once that budget is spent, the task is marked `BLOCKED` — never
+  `FAILED` and never silently `COMPLETED`. The only acceptable outcome for a
+  run that ends without code changes is a blocked task awaiting human review;
 - to complete a task **without touching the code**, exit
   `no_changes_exit_code` (default `3`). The working tree must be clean — an
   agent that reports "no changes" while leaving uncommitted work behind fails
@@ -121,7 +124,7 @@ that, based on the exit code. The working contract is:
 - **do not** run `git add`, `git commit`, `git push`, or reset the tree;
 - exit `0` to have your changes committed and pushed as one commit;
 - exit `no_changes_exit_code` when the task needs no code change (never exit
-  `0` with an empty tree — that fails the task);
+  `0` with an empty tree — that run is retried and then marked `BLOCKED`);
 - exit `blocked_exit_code` to have partial work preserved and a blocker
   written;
 - exit anything else to have your changes discarded.

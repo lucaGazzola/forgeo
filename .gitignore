@@ -29,6 +29,7 @@ dist/
 # AI assistant context
 AGENTS.md
 CONTEXT.md
+CLAUDE.md
 
 # Local deploy script (server-specific paths)
 scripts/deploy-docs.sh

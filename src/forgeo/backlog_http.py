@@ -69,7 +69,7 @@ class HttpBacklog(BacklogStore):
     async def _read(self) -> dict[str, Any]:
         """GET the document; anything but a usable response raises."""
         body = await asyncio.to_thread(self._request, "GET", None)
-        logger.info("GET %s returned body: %s", self.url, body)
+        logger.debug("GET %s returned body: %s", self.url, body)
         try:
             data = json.loads(body) if body.strip() else {}
         except json.JSONDecodeError as exc:
@@ -81,6 +81,7 @@ class HttpBacklog(BacklogStore):
     async def _write(self, store: dict[str, Any]) -> None:
         """POST the whole document back."""
         payload = json.dumps(store, indent=2, ensure_ascii=False).encode("utf-8")
+        logger.debug("POST %s %s", self.url, payload)
         await asyncio.to_thread(self._request, "POST", payload)
 
     # ------------------------------------------------------------------ #

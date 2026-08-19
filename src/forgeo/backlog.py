@@ -36,7 +36,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from forgeo.io import atomic_write_text
-from forgeo.models import ForgeoConfig, Task, TaskStatus
+from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,26 @@ EDITABLE_TASK_FIELDS = frozenset(
         "run_at",
     }
 )
+
+
+def _join_output_logs(result: ExecutionResult) -> str | None:
+    """The agent's output as one newline-joined string, ``None`` when it asked none.
+
+    ``BacklogStore`` persists agent output as a single string field, so the
+    agent's ``list[str]`` is flattened here; an empty list means "nothing to
+    record" and must stay ``None`` rather than becoming an empty string, which
+    the store would write over any previous value.
+    """
+
+    prefixes = ("[stdout]", "[stderr]")
+    out = [
+        line[len(prefix) + 1 :]
+        for line in result.output_logs or []
+        for prefix in prefixes
+        if line.startswith(prefix)
+    ]
+    return "\n".join(out) if out else None
+
 
 
 def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
@@ -253,7 +273,9 @@ class BacklogStore(ABC):
             await self._write(store)
         return task
 
-    async def update_status(self, task_id: str, status: TaskStatus) -> Task | None:
+    async def update_status(
+        self, task_id: str, status: TaskStatus, result: ExecutionResult
+    ) -> Task | None:
         """Transition a task's status, bumping its ``updated_at`` timestamp.
 
         Any transition away from ``FAILED`` clears the persisted
@@ -270,6 +292,7 @@ class BacklogStore(ABC):
                 and status is not TaskStatus.FAILED
             )
             entry["status"] = status.value
+            entry["agent_response"] = _join_output_logs(result)
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
                 if leaving_failed:
@@ -278,7 +301,9 @@ class BacklogStore(ABC):
 
         return await self._update_entry(task_id, mutate)
 
-    async def set_blocked(self, task_id: str, reason: list[str]) -> Task | None:
+    async def set_blocked(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
         """Mark a task ``BLOCKED``, persisting the agent's blocker reason.
 
         ``reason`` is stored on the task as ``blocker_reason`` (the source
@@ -291,10 +316,13 @@ class BacklogStore(ABC):
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
             entry["failure_reason"] = []
+            entry["agent_response"] = _join_output_logs(result)
 
         return await self._update_entry(task_id, mutate)
 
-    async def set_failed(self, task_id: str, reason: list[str]) -> Task | None:
+    async def set_failed(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
         """Mark a task ``FAILED``, persisting the failure reason.
 
         ``reason`` is stored on the task as ``failure_reason`` (shown in the
@@ -307,6 +335,7 @@ class BacklogStore(ABC):
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
             entry["failed_wait_cycles"] = 0
+            entry["agent_response"] = _join_output_logs(result)
 
         return await self._update_entry(task_id, mutate)
 

@@ -380,13 +380,13 @@ class Forgeo:
             )
 
             if result.status is ExecutionStatus.BLOCKED:
-                await self.backlog.set_blocked(task.id, result.reason)
+                await self.backlog.set_blocked(task.id, result.reason, result)
                 return
             if result.status is ExecutionStatus.ERROR:
-                await self._mark_failed(task, self._failure_reason(result))
+                await self._mark_failed(task, self._failure_reason(result), result)
                 return
             if ok:
-                await self.backlog.update_status(task.id, TaskStatus.COMPLETED)
+                await self.backlog.update_status(task.id, TaskStatus.COMPLETED, result)
                 self.config.blocker_file.unlink(missing_ok=True)
                 self._notify_webhook("completed", task, "")
                 logger.info("Task %s completed.", task.id)
@@ -559,16 +559,16 @@ class Forgeo:
     async def _fail(self, task: Task, result: ExecutionResult) -> None:
         """Discard the agent's work, mark the task FAILED, and log the error."""
         await self._discard_failed_work(task, result)
-        await self._mark_failed(task, self._failure_reason(result))
+        await self._mark_failed(task, self._failure_reason(result), result)
 
-    async def _mark_failed(self, task: Task, reason: list[str]) -> None:
+    async def _mark_failed(self, task: Task, reason: list[str], result: ExecutionResult) -> None:
         """Persist ``reason`` on ``task`` and send the ``failed`` webhook notice.
 
         Shared by the direct ERROR path (the work was already discarded in
         :meth:`_handle_execution_result`) and the FAILED transitions from
         :meth:`_fail` and :meth:`_complete_without_changes`.
         """
-        await self.backlog.set_failed(task.id, reason)
+        await self.backlog.set_failed(task.id, reason, result)
         self._notify_webhook("failed", task, "\n".join(reason))
 
     async def _block_no_changes(self, task: Task) -> None:
@@ -601,7 +601,7 @@ class Forgeo:
             ),
         )
         self._last_agent_result = blocked
-        await self.backlog.set_blocked(task.id, [NO_CHANGES_REASON])
+        await self.backlog.set_blocked(task.id, [NO_CHANGES_REASON], blocked)
         entry = BlockerEntry(
             task=task,
             result=blocked,
@@ -631,7 +631,8 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self._mark_failed(task, [NO_CHANGES_DIRTY_REASON])
+                await self._mark_failed(task, [NO_CHANGES_DIRTY_REASON],self._last_agent_result
+                    or ExecutionResult(status=ExecutionStatus.ERROR))
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(

@@ -20,7 +20,7 @@ from forgeo.models import (
 )
 from forgeo.paths import runs_path
 from forgeo.runs import RunRecorder
-from tests.conftest import git, make_forgeo, make_task
+from tests.conftest import git, make_forgeo, make_result, make_task
 
 
 def read_lines(path) -> list[dict]:
@@ -221,12 +221,12 @@ async def test_every_cycle_appends_exactly_one_line(git_repo, tmp_path):
     assert await forgeo.run_cycle() == "task"
     assert len(read_lines(runs)) == 1
 
-    await backlog.update_status("TASK-001", TaskStatus.OPEN)
+    await backlog.update_status("TASK-001", TaskStatus.OPEN, make_result())
     agent.result = ExecutionResult(status=ExecutionStatus.ERROR, error="boom", exit_code=3)
     assert await forgeo.run_cycle() == "task"
     assert len(read_lines(runs)) == 2
 
-    await backlog.update_status("TASK-001", TaskStatus.OPEN)
+    await backlog.update_status("TASK-001", TaskStatus.OPEN, make_result())
     agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"], exit_code=2)
     assert await forgeo.run_cycle() == "task"
     assert len(read_lines(runs)) == 3
@@ -234,18 +234,18 @@ async def test_every_cycle_appends_exactly_one_line(git_repo, tmp_path):
     assert await forgeo.run_cycle() == "blocked"
     assert len(read_lines(runs)) == 4
 
-    await backlog.update_status("TASK-001", TaskStatus.COMPLETED)
+    await backlog.update_status("TASK-001", TaskStatus.COMPLETED, make_result())
     forgeo.config.blocker_file.write_text("stale", encoding="utf-8")
     assert await forgeo.run_cycle() == "paused"
     assert len(read_lines(runs)) == 5
 
     forgeo.config.blocker_file.unlink()
-    await backlog.update_status("TASK-001", TaskStatus.OPEN)
+    await backlog.update_status("TASK-001", TaskStatus.OPEN, make_result())
     (git_repo / "manual.txt").write_text("wip\n", encoding="utf-8")
     assert await forgeo.run_cycle() == "dirty"
     assert len(read_lines(runs)) == 6
 
-    await backlog.update_status("TASK-001", TaskStatus.COMPLETED)
+    await backlog.update_status("TASK-001", TaskStatus.COMPLETED, make_result())
     git(git_repo, "clean", "-fd")
     agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
     assert await forgeo.run_cycle() == "refactor"
@@ -473,7 +473,7 @@ async def test_cycle_applies_configured_retention(git_repo, tmp_path):
     for _ in range(4):
         agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS, exit_code=0)
         assert await forgeo.run_cycle() == "task"
-        await backlog.update_status("TASK-001", TaskStatus.OPEN)
+        await backlog.update_status("TASK-001", TaskStatus.OPEN, make_result())
 
     lines = read_lines(runs)
     assert len(lines) == 2

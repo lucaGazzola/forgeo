@@ -23,7 +23,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 PYPI_PACKAGE = "forgeo-cli"
-VERSION = "0.7.2"
+
+
+def _installer_default_version() -> str:
+    """The fallback release version install.sh downloads when the GitHub API
+    is unreachable (the stub curl returns no body, so this is what the tests
+    exercise). Derived from the script itself so a release bump can never
+    drift from the tests."""
+    for line in INSTALL_SH.read_text(encoding="utf-8").splitlines():
+        if line.startswith("DEFAULT_VERSION="):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise AssertionError("DEFAULT_VERSION not found in install.sh")
+
+
+VERSION = _installer_default_version()
 SH = shutil.which("sh")
 assert SH, "sh must be available to run install.sh"
 

@@ -59,7 +59,7 @@ EDITABLE_TASK_FIELDS = frozenset(
 )
 
 
-def _joined_questions(result: ExecutionResult) -> str | None:
+def _join_output_logs(result: ExecutionResult) -> str | None:
     """The agent's output as one newline-joined string, ``None`` when it asked none.
 
     ``BacklogStore`` persists agent output as a single string field, so the
@@ -292,7 +292,7 @@ class BacklogStore(ABC):
                 and status is not TaskStatus.FAILED
             )
             entry["status"] = status.value
-            entry["agent_response"] = _joined_questions(result)
+            entry["agent_response"] = _join_output_logs(result)
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
                 if leaving_failed:
@@ -316,7 +316,7 @@ class BacklogStore(ABC):
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
             entry["failure_reason"] = []
-            entry["agent_response"] = _joined_questions(result)
+            entry["agent_response"] = _join_output_logs(result)
 
         return await self._update_entry(task_id, mutate)
 
@@ -335,7 +335,7 @@ class BacklogStore(ABC):
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
             entry["failed_wait_cycles"] = 0
-            entry["agent_response"] = _joined_questions(result)
+            entry["agent_response"] = _join_output_logs(result)
 
         return await self._update_entry(task_id, mutate)
 

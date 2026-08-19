@@ -177,6 +177,7 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
     "blocker_reason": [],
     "blocked_count": 0,
     "failure_reason": [],
+    "agent_response": null,
     "created_at": "2026-07-31T10:00:00Z",
     "updated_at": "2026-07-31T10:00:00Z",
     "run_at": null,
@@ -258,6 +259,7 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
   "blocker_reason": [],
   "blocked_count": 0,
   "failure_reason": [],
+  "agent_response": null,
   "created_at": "2026-08-01T12:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "run_at": "2026-08-20T12:30:00Z",
@@ -300,6 +302,7 @@ curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001/reopen
   "blocker_reason": [],
   "blocked_count": 1,
   "failure_reason": [],
+  "agent_response": null,
   "created_at": "2026-07-31T10:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "dependencies": [],
@@ -329,8 +332,9 @@ budget override; a non-negative integer or `null`), and `run_at` (the
 optional one-shot schedule; an ISO-8601 datetime string or `null` to clear
 it). The request body is a JSON object; omitted fields are left unchanged
 and `id`, `status`, `blocker_reason`, `blocked_count`, `failure_reason`,
-`retry_count`, `failed_wait_cycles`, and `created_at` are always preserved
-(they are engine-managed — `PATCH` rejects them like it rejects `status`).
+`agent_response`, `retry_count`, `failed_wait_cycles`, and `created_at` are
+always preserved (they are engine-managed — `PATCH` rejects them like it
+rejects `status`).
 `agent_command` may be a string, an array, or `null` (clear the per-task
 override); `agent_timeout_seconds` may be a positive number or `null`.
 `updated_at` is bumped to the current time.
@@ -350,6 +354,7 @@ curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
   "blocker_reason": [],
   "blocked_count": 0,
   "failure_reason": [],
+  "agent_response": null,
   "created_at": "2026-07-31T10:00:00Z",
   "updated_at": "2026-08-01T12:00:00Z",
   "dependencies": [],
@@ -364,8 +369,8 @@ Errors:
 
 - `400` with `{"error": "..."}` — unparseable or non-object body, an empty
   body, an unknown field (e.g. `status`, `blocker_reason`, `blocked_count`,
-  `failure_reason`), or an invalid value (blank `title`, wrong field types, a
-  non-positive `agent_timeout_seconds`).
+  `failure_reason`, `agent_response`), or an invalid value (blank `title`,
+  wrong field types, a non-positive `agent_timeout_seconds`).
 - `404` with `{"error": "not found"}` — the task id does not exist in that
   instance's backlog.
 - `404` with `{"error": "unknown instance"}` — the instance is not

@@ -463,6 +463,7 @@ def test_instance_page_has_task_edit_modal(web_env):
     assert 'id="task-modal-reopen"' in body
     assert 'id="task-modal-blocker-section"' in body
     assert 'id="task-modal-failure-section"' in body
+    assert 'id="task-modal-agent-response-section"' in body
     assert 'id="task-modal-delete"' in body
     assert 'id="task-modal-edit-form"' in body
     assert 'id="task-modal-save"' in body
@@ -1136,6 +1137,33 @@ def test_task_json_exposes_failure_reason(web_env, registry):
     status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/failed/tasks")
     assert status == 200
     assert tasks[0]["failure_reason"] == ["timed out after 60s"]
+
+
+def agent_response_task_json(task_id: str = "TASK-005") -> dict:
+    return make_task(
+        id=task_id,
+        title="Task with agent output",
+        agent_response="line one\nline two",
+    ).model_dump(mode="json")
+
+
+def test_task_json_exposes_agent_response(web_env, registry):
+    server, registry = web_env
+    write_instance(
+        registry,
+        "withoutput",
+        repo=str(registry / "repos" / "withoutput"),
+        tasks=[agent_response_task_json("R-1")],
+    )
+    status, task = _get(
+        f"http://127.0.0.1:{server.port}/api/instances/withoutput/tasks/R-1"
+    )
+    assert status == 200
+    assert task["agent_response"] == "line one\nline two"
+
+    status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/withoutput/tasks")
+    assert status == 200
+    assert tasks[0]["agent_response"] == "line one\nline two"
 
 
 def test_reopen_blocked_task(web_env, registry):

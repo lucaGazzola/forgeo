@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The agent's stdout/stderr is now persisted on the task as `agent_response`
+  when a task transitions (BLOCKED/FAILED/COMPLETED), shown in the web
+  console's task modal. A transition that carries no output never wipes a
+  previously stored response.
+- `agent_response_lines` config key: how many agent output lines the task's
+  `agent_response` keeps on a status transition. Unbounded by default; `0`
+  disables persisting agent output on the task.
+
 ## [0.7.2] - 2026-08-18
 
 ### Added

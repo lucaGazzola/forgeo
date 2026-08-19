@@ -165,8 +165,10 @@ class Task(BaseModel):
     ``blocker_reason`` and ``blocked_count`` are engine-managed: they record
     the last agent explanation when the task becomes ``BLOCKED`` and how many
     times that happened, respectively. ``failure_reason`` is likewise
-    engine-managed: the agent's error when the task becomes ``FAILED``. None
-    of them are editable through the web console's ``PATCH`` endpoint.
+    engine-managed: the agent's error when the task becomes ``FAILED``.
+    ``agent_response`` is likewise engine-managed: the last agent
+    stdout/stderr output persisted on a status transition. None of them are
+    editable through the web console's ``PATCH`` endpoint.
     ``retries_left`` is a human-set per-task override of the retry budget
     (``failed_retry_max`` in the config); ``retry_count`` and
     ``failed_wait_cycles`` are engine-managed retry state.
@@ -194,6 +196,14 @@ class Task(BaseModel):
     blocker_reason: list[str] = Field(default_factory=list)
     blocked_count: int = Field(default=0, ge=0)
     failure_reason: list[str] = Field(default_factory=list)
+    agent_response: str | None = Field(
+        default=None,
+        description="Engine-managed: the agent's last stdout/stderr output, "
+        "stripped of its stream prefixes and persisted on status transitions "
+        "(capped at ``agent_response_lines`` lines when set). ``None`` when "
+        "the transition carried no output. Intended for the backlog consumer; "
+        "not editable via ``PATCH``.",
+    )
     retries_left: int | None = Field(
         default=None,
         ge=0,
@@ -409,6 +419,10 @@ class ForgeoConfig(BaseModel):
         run_output_lines: How many agent output lines each run record keeps
             in ``runs.jsonl`` (the bounded tail of the agent's stdout/stderr).
             ``0`` disables persisting agent output entirely.
+        agent_response_lines: How many agent output lines the task's
+            ``agent_response`` keeps when it transitions (the bounded tail of
+            the agent's stdout/stderr). ``None`` (default) = unbounded;
+            ``0`` disables persisting agent output on the task.
         failed_retry_max: How many times a ``FAILED`` task is retried
             automatically (``0`` = disabled: a task stays ``FAILED`` until a
             human reopens it, exactly as before). A task may override this
@@ -456,6 +470,14 @@ class ForgeoConfig(BaseModel):
     log_file: str = "forgeo.log"
     run_history_keep: int = Field(default=DEFAULT_RUN_HISTORY_KEEP, ge=0)
     run_output_lines: int = Field(default=DEFAULT_RUN_OUTPUT_LINES, ge=0)
+    agent_response_lines: int | None = Field(
+        default=None,
+        ge=0,
+        description="How many agent output lines the task's ``agent_response`` "
+        "keeps on a status transition (the bounded tail of the agent's "
+        "stdout/stderr). ``None`` (default) = unbounded; ``0`` disables "
+        "persisting agent output on the task.",
+    )
     failed_retry_max: int = Field(default=0, ge=0)
     failed_retry_wait_cycles: int = Field(default=1, ge=1)
     no_changes_retry_max: int = Field(default=0, ge=0)

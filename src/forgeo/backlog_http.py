@@ -55,8 +55,9 @@ class HttpBacklog(BacklogStore):
         *,
         auth: BacklogAuth | None = None,
         timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
+        output_cap: int | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(output_cap=output_cap)
         self.url = url
         self.timeout_seconds = timeout_seconds
         self._tokens = (

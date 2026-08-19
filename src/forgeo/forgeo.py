@@ -631,8 +631,11 @@ class Forgeo:
                 is_refactor=is_refactor,
             )
             if not is_refactor:
-                await self._mark_failed(task, [NO_CHANGES_DIRTY_REASON],self._last_agent_result
-                    or ExecutionResult(status=ExecutionStatus.ERROR))
+                await self._mark_failed(
+                    task,
+                    [NO_CHANGES_DIRTY_REASON],
+                    self._last_agent_result or ExecutionResult(status=ExecutionStatus.ERROR),
+                )
             return False
         self._last_run_reason = NO_CHANGES_REPORTED_REASON
         logger.info(

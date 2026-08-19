@@ -626,6 +626,10 @@
     }
 
     setText("task-modal-description", task.description || "");
+    var agentResponse = document.getElementById("task-modal-agent-response");
+    if (agentResponse) {
+      agentResponse.textContent = task.agent_response || "";
+    }
     var acceptance = document.getElementById("task-modal-acceptance");
     if (acceptance) {
       acceptance.textContent = "";
@@ -696,6 +700,7 @@
       task.files_to_modify && task.files_to_modify.length > 0
     );
     showModalSection("task-modal-command-section", Boolean(task.agent_command));
+    showModalSection("task-modal-agent-response-section", Boolean(task.agent_response));
     showModalSection(
       "task-modal-retries-section",
       Boolean(retries && retries.textContent)
@@ -1211,6 +1216,7 @@
     { key: "blocker_file", label: "Blocker file", type: "text", hint: "Where BLOCKER.md is written when the agent needs human input. Keep it outside the repository." },
     { key: "log_file", label: "Log file", type: "text" },
     { key: "run_output_lines", label: "Run output lines", type: "number", min: 0, step: 1, hint: "How many agent output lines each run record keeps in runs.jsonl (bounded tail, shown in the History tab). 0 = don't persist agent output." },
+    { key: "agent_response_lines", label: "Agent response lines", type: "number", min: 0, step: 1, optional: true, hint: "How many agent output lines the task's agent_response keeps on a status transition (shown in the task modal). Empty = unbounded. 0 = don't persist agent output on the task." },
     { key: "failed_retry_max", label: "Failed retry max", type: "number", min: 0, step: 1, hint: "How many times a FAILED task is retried automatically. 0 = disabled (a FAILED task stays FAILED until a human reopens it). A task can override this with its own retries_left." },
     { key: "failed_retry_wait_cycles", label: "Failed retry wait (cycles)", type: "number", min: 1, step: 1, hint: "How many cycles a FAILED task waits (backoff) before it is retried." },
     { key: "no_changes_retry_max", label: "No-change retry max", type: "number", min: 0, step: 1, hint: "How many times a task whose agent exits 0 without producing any code changes is re-run immediately, in the same cycle, before it is marked BLOCKED for human review. 0 = block on the first attempt." },

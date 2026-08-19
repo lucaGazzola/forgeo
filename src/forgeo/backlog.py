@@ -59,24 +59,30 @@ EDITABLE_TASK_FIELDS = frozenset(
 )
 
 
-def _join_output_logs(result: ExecutionResult) -> str | None:
-    """The agent's output as one newline-joined string, ``None`` when it asked none.
+def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | None:
+    """The agent's output as one newline-joined string, ``None`` when empty.
 
     ``BacklogStore`` persists agent output as a single string field, so the
-    agent's ``list[str]`` is flattened here; an empty list means "nothing to
-    record" and must stay ``None`` rather than becoming an empty string, which
-    the store would write over any previous value.
+    agent's ``list[str]`` (its ``[stdout]``/``[stderr]``-prefixed lines) is
+    flattened here, prefixes stripped. An empty result means "nothing to
+    record" and must stay ``None`` — the caller then leaves any previously
+    stored response untouched rather than wiping it. ``cap`` bounds the number
+    of kept lines, mirroring ``agent_response_lines`` (``None`` = unbounded;
+    ``0``/negative = persist nothing).
     """
 
     prefixes = ("[stdout]", "[stderr]")
     out = [
         line[len(prefix) + 1 :]
-        for line in result.output_logs or []
+        for line in result.output_logs
         for prefix in prefixes
         if line.startswith(prefix)
     ]
+    if cap is not None:
+        if cap <= 0:
+            return None
+        out = out[-cap:]
     return "\n".join(out) if out else None
-
 
 
 def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
@@ -228,8 +234,9 @@ class BacklogStore(ABC):
     concurrent mutations within one process — lives here.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, output_cap: int | None = None) -> None:
         self._lock = asyncio.Lock()
+        self._output_cap = output_cap
 
     @abstractmethod
     async def _read(self) -> dict[str, Any]:
@@ -292,7 +299,9 @@ class BacklogStore(ABC):
                 and status is not TaskStatus.FAILED
             )
             entry["status"] = status.value
-            entry["agent_response"] = _join_output_logs(result)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                entry["agent_response"] = joined
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
                 if leaving_failed:
@@ -316,7 +325,9 @@ class BacklogStore(ABC):
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
             entry["failure_reason"] = []
-            entry["agent_response"] = _join_output_logs(result)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                entry["agent_response"] = joined
 
         return await self._update_entry(task_id, mutate)
 
@@ -335,7 +346,9 @@ class BacklogStore(ABC):
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
             entry["failed_wait_cycles"] = 0
-            entry["agent_response"] = _join_output_logs(result)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                entry["agent_response"] = joined
 
         return await self._update_entry(task_id, mutate)
 
@@ -519,8 +532,9 @@ class JSONBacklog(BacklogStore):
         path: str | Path,
         *,
         snapshot_count: int = DEFAULT_SNAPSHOT_COUNT,
+        output_cap: int | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(output_cap=output_cap)
         self.path = Path(path)
         self.snapshot_count = max(0, snapshot_count)
 
@@ -651,5 +665,7 @@ def open_backlog(config: ForgeoConfig) -> BacklogStore:
         # it at module level would close an import cycle.
         from forgeo.backlog_http import HttpBacklog
 
-        return HttpBacklog(str(config.backlog), auth=config.backlog_auth)
-    return JSONBacklog(Path(config.backlog))
+        return HttpBacklog(
+            str(config.backlog), auth=config.backlog_auth, output_cap=config.agent_response_lines
+        )
+    return JSONBacklog(Path(config.backlog), output_cap=config.agent_response_lines)

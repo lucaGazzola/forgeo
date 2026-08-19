@@ -187,6 +187,16 @@
             full output.
           </p>
         </section>
+        <section class="modal__section" id="task-modal-agent-response-section" hidden>
+          <h3>Agent output</h3>
+          <pre class="modal__command" id="task-modal-agent-response"></pre>
+          <p class="modal__blocked-note">
+            The agent's last stdout/stderr for this task, persisted on its most
+            recent status transition (bounded by the configured
+            <code>agent_response_lines</code>). The full per-run output is in the
+            History tab.
+          </p>
+        </section>
         <div>
           <span class="badge" id="task-modal-status"></span>
         </div>

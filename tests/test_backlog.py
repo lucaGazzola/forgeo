@@ -12,10 +12,11 @@ from forgeo.backlog import (
     JSONBacklog,
     next_due_run_at,
     oldest_open_task,
+    open_backlog,
     unsatisfied_dependencies,
 )
 from forgeo.models import Task, TaskStatus
-from tests.conftest import make_result, make_task
+from tests.conftest import make_config, make_result, make_task
 
 
 def test_oldest_open_task_picks_oldest():
@@ -360,6 +361,98 @@ async def test_set_failed_unknown_id_returns_none(tmp_path):
     backlog = JSONBacklog(tmp_path / "backlog.json")
     await backlog.create_task(make_task())
     assert await backlog.set_failed("MISSING", ["?"], make_result()) is None
+
+
+async def test_agent_response_persists_output_on_transitions(tmp_path):
+    """Status transitions persist the agent output, stream prefixes stripped."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    result = make_result(
+        output_logs=["[stdout] first line", "[stderr] warning", "untagged line"]
+    )
+
+    failed = await backlog.set_failed(task.id, ["boom"], result)
+    assert failed.agent_response == "first line\nwarning"
+    assert (await backlog.get_task(task.id)).agent_response == "first line\nwarning"
+
+    blocked = await backlog.set_blocked(task.id, ["blocked"], result)
+    assert blocked.agent_response == "first line\nwarning"
+
+    completed = await backlog.update_status(task.id, TaskStatus.COMPLETED, result)
+    assert completed.agent_response == "first line\nwarning"
+
+
+async def test_agent_response_none_without_output(tmp_path):
+    """A transition carrying no output records no agent_response."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+
+    failed = await backlog.set_failed(task.id, ["boom"], make_result())
+    assert failed.agent_response is None
+    assert (await backlog.get_task(task.id)).agent_response is None
+
+
+async def test_agent_response_preserves_previous_when_nothing_to_record(tmp_path):
+    """A transition with no output never wipes a previously stored response."""
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(
+        task.id, ["boom"], make_result(output_logs=["[stderr] original failure"])
+    )
+    assert (await backlog.get_task(task.id)).agent_response == "original failure"
+
+    await backlog.update_status(task.id, TaskStatus.OPEN, make_result())
+    stored = await backlog.get_task(task.id)
+    assert stored.status is TaskStatus.OPEN
+    assert stored.agent_response == "original failure"
+
+
+async def test_agent_response_capped(tmp_path):
+    """agent_response keeps at most ``output_cap`` lines, the latest ones."""
+    backlog = JSONBacklog(tmp_path / "backlog.json", output_cap=2)
+    task = await backlog.create_task(make_task())
+    result = make_result(
+        output_logs=[f"[stdout] line {index}" for index in range(4)]
+    )
+
+    failed = await backlog.set_failed(task.id, ["boom"], result)
+    assert failed.agent_response == "line 2\nline 3"
+
+
+async def test_agent_response_disabled_with_zero_cap(tmp_path):
+    """output_cap=0 mirrors agent_response_lines=0: nothing is persisted."""
+    backlog = JSONBacklog(tmp_path / "backlog.json", output_cap=0)
+    task = await backlog.create_task(make_task())
+    result = make_result(output_logs=["[stdout] line"])
+
+    failed = await backlog.set_failed(task.id, ["boom"], result)
+    assert failed.agent_response is None
+
+
+async def test_agent_response_unbounded_by_default(tmp_path):
+    """Without agent_response_lines every output line is persisted."""
+    config = make_config(tmp_path, tmp_path)
+    assert config.agent_response_lines is None
+    backlog = open_backlog(config)
+    task = await backlog.create_task(make_task())
+    result = make_result(
+        output_logs=[f"[stdout] line {index}" for index in range(500)]
+    )
+
+    failed = await backlog.set_failed(task.id, ["boom"], result)
+    assert failed.agent_response == "\n".join(f"line {index}" for index in range(500))
+
+
+async def test_open_backlog_applies_agent_response_lines_cap(tmp_path):
+    """open_backlog wires the config's agent_response_lines into the store."""
+    config = make_config(tmp_path, tmp_path)
+    config.agent_response_lines = 1
+    backlog = open_backlog(config)
+    task = await backlog.create_task(make_task())
+    result = make_result(output_logs=["[stdout] first", "[stdout] second"])
+
+    failed = await backlog.set_failed(task.id, ["boom"], result)
+    assert failed.agent_response == "second"
 
 
 async def test_update_status_clears_failure_reason(tmp_path):

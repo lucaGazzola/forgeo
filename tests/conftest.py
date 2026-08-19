@@ -212,8 +212,8 @@ def make_result(**overrides) -> ExecutionResult:
 
     The backlog mutators require the result that drove the transition, but a
     test exercising only the status bookkeeping has no agent run behind it.
-    This is that "nothing was captured" result: it records an empty
-    ``agent_response`` rather than standing in for real agent output.
+    This is that "nothing was captured" result: the transition records no
+    ``agent_response`` and leaves any previously stored one untouched.
     """
     defaults = {"status": ExecutionStatus.SUCCESS}
     defaults.update(overrides)

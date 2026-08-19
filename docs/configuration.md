@@ -40,6 +40,7 @@ paths), so `forgeo restart` is still used for those.
 | <span style="white-space: nowrap">`log_file`</span> | `forgeo.log` | Where the daemon writes its log. |
 | <span style="white-space: nowrap">`run_history_keep`</span> | `2000` | How many finished runs `runs.jsonl` keeps (oldest trimmed atomically on append). `0` disables retention (file grows forever). |
 | <span style="white-space: nowrap">`run_output_lines`</span> | `200` | How many agent output lines each run record keeps in `runs.jsonl` (the bounded tail of the agent's stdout/stderr). `0` disables persisting agent output. |
+| <span style="white-space: nowrap">`agent_response_lines`</span> | — (unbounded) | How many agent output lines the task's `agent_response` keeps on a status transition (the bounded tail of the agent's stdout/stderr, shown in the task modal / available to a backlog consumer). Omit = unbounded; `0` disables persisting agent output on the task. |
 | <span style="white-space: nowrap">`failed_retry_max`</span> | `0` | How many times a `FAILED` task is retried automatically. `0` (default) = a `FAILED` task stays `FAILED` until a human reopens it, exactly as before. A task may override this budget per-task with `retries_left`. |
 | <span style="white-space: nowrap">`failed_retry_wait_cycles`</span> | `1` | How many cycles a retry-eligible `FAILED` task waits (backoff) before it is moved back to `OPEN`. |
 | <span style="white-space: nowrap">`no_changes_retry_max`</span> | `0` | How many times a task whose agent exits `0` without producing any code changes is re-run immediately, in the same cycle, before the task is marked `BLOCKED` for human review. `0` (default) = a silent no-change SUCCESS is marked `BLOCKED` on the first attempt. |
@@ -225,6 +226,18 @@ console's **History** tab shows this tail in a read-only, collapsible view.
 Set `0` to stop persisting agent output entirely (run records stay small and
 the History tab shows nothing for them). Old run records written before this
 field existed simply have no output.
+
+### `agent_response_lines`
+
+Alongside the per-run record above, Forgeo persists the agent's output on the
+task itself (`agent_response`, shown in the task modal and available to a
+backlog consumer served over HTTP). Unlike `run_output_lines` it is **unbounded
+by default**: the whole stdout/stderr is stored, overwritten on each status
+transition (a transition that carries no output never wipes a previously
+stored response).
+
+Set a positive value to keep only the last that many lines; set `0` to stop
+persisting agent output on the task entirely.
 
 ### `failed_retry_max` / `failed_retry_wait_cycles`
 

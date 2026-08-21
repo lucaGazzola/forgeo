@@ -113,6 +113,27 @@ shared host protect it with `forgeo web --token` (requires
 `Authorization: Bearer <token>` on every `/api/*` route — see
 [Web console & HTTP API](docs/web-console-api.md)).
 
+### Running the agent in a container
+
+By default Forgeo runs the agent directly on the host. To run it inside a
+Docker container instead, set `agent_sandbox: docker` in `forgeo.yaml`:
+
+```yaml
+agent_sandbox: docker
+agent_sandbox_image: your-image
+agent_sandbox_network: none   # default; set bridge/host to allow network
+agent_sandbox_mounts:         # optional, read-only, e.g. ~/.claude
+  - ~/.claude
+```
+
+The image must already contain the agent CLI your `agent_command` uses plus a
+shell (nothing is installed at run time). Forgeo bind-mounts the repository
+into the container at the same path, so the agent's edits land on your
+checkout and are committed as usual; the task is passed through as
+`FORGEO_TASK`. Networking is off by default (`none`) and nothing else is
+visible inside the container unless you list it in `agent_sandbox_mounts`.
+See the [Configuration](docs/configuration.md) docs for details.
+
 ### Multiple repositories (instances)
 
 Run several factories at once, one per repository; each config is fully

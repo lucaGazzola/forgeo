@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-21
+
 ### Added
 
 - A Jira task provider selected with `backlog_provider: jira`, including Jira
@@ -358,7 +360,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/lucaGazzola/forgeo/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/lucaGazzola/forgeo/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/lucaGazzola/forgeo/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/lucaGazzola/forgeo/compare/v0.7.0...v0.7.1

@@ -19,6 +19,10 @@ remote: origin                  # Git remote to push to; omit to only commit loc
 
 backlog: backlog.json           # The task backlog (created on first use). Keep it
                                 # outside the repository so it is never committed.
+# backlog_provider: auto        # auto (legacy file/HTTP inference, or Jira when
+                                # the `jira` block is present), file, http, or
+                                # jira. Set to jira when `backlog` is a Jira
+                                # base URL and configure the block below.
 #
 # The backlog can also live in another application instead of a file: set it to
 # an http(s) URL and Forgeo reads the whole document with GET and writes it back
@@ -41,6 +45,32 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #     client_secret_env: FORGEO_BACKLOG_CLIENT_SECRET
 #     scope: forgeo-backlog   # Optional.
 #     timeout_seconds: 10     # Optional, default 10.
+#
+# Jira can be used directly instead of a JSON or HTTP backlog. Jira issue keys
+# become task ids. Labels and a Jira issue property hold Forgeo's engine state;
+# workflow status references may be names or (preferably) stable Jira ids.
+#   backlog_provider: jira
+#   backlog: https://jira.example.com
+#   jira:
+#     jql: 'project = APP AND labels = forgeo'
+#     project_key: APP          # Required by the web console's Create action.
+#     issue_type: Task
+#     auth:
+#       scheme: basic           # basic (Jira Cloud) or bearer (Server/DC PAT)
+#       username_env: JIRA_USER # Required for basic auth.
+#       token_env: JIRA_TOKEN
+#     workflow:
+#       open_statuses: ["10000", "10001"]
+#       open_status: "10000"
+#       running_status: "3"
+#       completed_status: "10002"
+#       blocked_status: null    # Optional workflow transition; a label is enough.
+#       failed_status: null     # Optional; otherwise Forgeo uses a failed label.
+#     fields:
+#       acceptance_criteria: customfield_10042
+#       dependencies: customfield_10043
+#       files_to_modify: customfield_10044
+#     claim_timeout_seconds: 86400
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.
 # run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest

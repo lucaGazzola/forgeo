@@ -6,9 +6,9 @@ just schedules cycles and writes its live state to `daemon.state.json`. The
 dashboard reads every registered instance's data straight from its files
 (`backlog.json`, `runs.jsonl`, `forgeo.log`, `BLOCKER.md`,
 `daemon.state.json`), so it works whether or not each instance's daemon is
-running. An instance whose `backlog` is an HTTP endpoint is the exception: its
-tasks are fetched from there, and an endpoint that cannot be reached answers
-`502` rather than showing an empty board.
+running. HTTP and Jira backlogs are fetched from their providers instead, and
+a remote source that cannot be reached answers `502` rather than showing an
+empty board.
 
 ```bash
 forgeo web               # default 0.0.0.0:8790, foreground
@@ -153,10 +153,9 @@ curl http://127.0.0.1:8790/api/instances
 ```
 
 Each row also carries `backlog_error`: `null` normally, and the reason when
-that instance's backlog could not be read (only possible for a backlog served
-over HTTP). Its counts are zero in that case — the row reports a backlog it
-could not reach, not an empty one. One unreachable endpoint never fails the
-whole listing.
+that instance's remote backlog could not be read. Its counts are zero in that
+case — the row reports a backlog it could not reach, not an empty one. One
+unreachable provider never fails the whole listing.
 
 ### `GET /api/instances/<name>/tasks`
 
@@ -189,8 +188,8 @@ curl http://127.0.0.1:8790/api/instances/my-repo/tasks
 ]
 ```
 
-A backlog served over HTTP is fetched on each request; when the endpoint is
-unreachable the response is `502` with the reason in `error`.
+A remote backlog is fetched on each request; when the provider is unreachable
+the response is `502` with the reason in `error`.
 
 ### `GET /api/instances/<name>/tasks/{id}`
 

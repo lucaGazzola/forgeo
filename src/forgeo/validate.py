@@ -7,9 +7,9 @@ non-blank — and reports the run lock state. It never invokes the agent and
 makes no writes (no lock is taken, no backlog or snapshot is touched), so it
 is safe to run at any time, even while a daemon is active.
 
-A URL backlog is fetched once (a plain GET, with credentials when
-``backlog_auth`` is configured) rather than read from disk, so an unreachable
-endpoint or a rejected token is reported here instead of at the first cycle.
+A remote backlog is fetched once (with provider credentials when configured)
+rather than read from disk, so an unreachable endpoint or a rejected token is
+reported here instead of at the first cycle.
 """
 
 from __future__ import annotations
@@ -162,6 +162,9 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     it on first use); a corrupt one is a problem. Reads only — never restores
     or writes anything, unlike the backlog's own corrupt-file recovery.
     """
+    if config.backlog_is_jira:
+        _check_jira_backlog(config, report)
+        return
     if config.backlog_is_url:
         _check_backlog_url(config, report)
         return
@@ -205,6 +208,16 @@ def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
         report.problems.append(f"backlog endpoint could not be read: {exc}")
         return
     report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
+
+
+def _check_jira_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Authenticate to Jira and verify that the configured JQL is readable."""
+    try:
+        asyncio.run(open_backlog(config).validate_connection())
+    except Exception as exc:  # noqa: BLE001 - any provider failure is reportable
+        report.problems.append(f"Jira backlog could not be read: {exc}")
+        return
+    report.notes.append(f"Jira backlog answers ({config.backlog})")
 
 
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:

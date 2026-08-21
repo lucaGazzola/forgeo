@@ -6,7 +6,7 @@ hand, living wherever `backlog:` points in [forgeo.yaml](configuration.md) —
 `forgeo init`. Keep it outside the repository if you can so the agent never
 touches it. It can also be [served over HTTP](#a-backlog-over-http) by another
 application, in which case the document below is exactly what that endpoint
-exchanges with Forgeo.
+exchanges with Forgeo, or it can be sourced directly from [Jira](#a-jira-backlog).
 
 ```json
 {
@@ -287,7 +287,7 @@ favor of an older valid one; when no snapshot exists, the forgeo falls back to
 an empty store exactly as before. A missing backlog is a no-op — no snapshot
 is created for a file that does not exist.
 
-This whole section is about a backlog *file*. A backlog URL is owned by the
+This whole section is about a backlog *file*. A remote backlog is owned by the
 application serving it, which keeps its own history, so Forgeo neither
 snapshots nor repairs it — see below.
 
@@ -349,3 +349,78 @@ There is no backlog file for Forgeo's own runtime files to sit beside, so
 `runs.jsonl` go into `state_dir`, which defaults to the directory holding
 `forgeo.yaml`. No snapshots are written: the document belongs to the remote
 application, so rolling it back is that application's job, not Forgeo's.
+
+## A Jira backlog
+
+Set `backlog_provider: jira` and point `backlog:` at the Jira base URL:
+
+```yaml
+backlog_provider: jira
+backlog: https://jira.example.com
+
+jira:
+  jql: 'project = APP AND labels = forgeo'
+  project_key: APP
+  auth:
+    scheme: basic
+    username_env: JIRA_USER
+    token_env: JIRA_TOKEN
+  workflow:
+    open_statuses: ["10000", "10001"]
+    open_status: "10000"
+    running_status: "3"
+    completed_status: "10002"
+```
+
+The JQL is the provider's scope. It should include open, running, blocked and
+completed issues so Forgeo can see dependencies and render the dashboard
+correctly. Jira status references can be names or ids; ids are more stable.
+
+### Mapping and lifecycle
+
+- Jira issue keys are Forgeo task ids.
+- `summary`, `description`, `created` and `updated` map to the corresponding task fields.
+- `open_statuses` identifies issues eligible for picking.
+- `running_status` is applied before the agent starts, preventing a second worker from claiming the same issue.
+- `completed_status` is applied after a successful commit.
+- `blocked_status` is optional; the `forgeo-blocked` label is always applied when the agent needs human input.
+- `failed_status` is optional; without it, the `forgeo-failed` label represents a failed task while the issue returns to the configured open status.
+
+Forgeo stores blocker reasons, failure reasons, retry counters, claim time and
+bounded agent output in the Jira issue property named `forgeo` by default.
+Set `jira.property_key` to change it. Optional Jira custom fields can carry
+`acceptance_criteria`, `dependencies`, `files_to_modify`, per-task agent
+settings, `run_at`, and `retries_left`. If no custom `run_at` field is
+configured, Jira's native `duedate` is used at midnight UTC:
+
+```yaml
+jira:
+  fields:
+    acceptance_criteria: customfield_10042
+    dependencies: customfield_10043
+```
+
+Dependencies may also be inferred from Jira issue links whose link type is
+`blocks`. The issue that is blocked is treated as depending on the issue that
+blocks it.
+
+### Authentication
+
+Jira credentials are never stored directly in `forgeo.yaml`:
+
+- `basic` uses `username` or `username_env` plus an API token named by `token_env`.
+- `bearer` uses a personal-access token named by `token_env`.
+
+The client uses Jira REST API v3 by default, including Jira Cloud's
+`/search/jql` endpoint and cursor pagination via `nextPageToken`. Set
+`jira.api_version: 2` for Jira installations that expose the older offset-based
+search endpoint and v2 comment/description format.
+
+### Runtime behavior
+
+The daemon reads Jira with paginated JQL searches. A task is claimed by
+rechecking it and transitioning it to `running_status` before the agent runs.
+If a process dies while holding a claim, a later cycle releases claims older
+than `claim_timeout_seconds` and returns them to the configured open status.
+An unavailable Jira endpoint fails the cycle; it is never treated as an empty
+backlog.

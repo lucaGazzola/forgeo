@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -122,6 +122,7 @@ class RunOutcome(str, enum.Enum):
     ERROR = "ERROR"
     PAUSED = "PAUSED"
     DIRTY = "DIRTY"
+    SKIPPED = "SKIPPED"
 
 
 class RunRecord(BaseModel):
@@ -349,6 +350,138 @@ class BacklogAuth(BaseModel):
         return value
 
 
+class JiraAuth(BaseModel):
+    """Authentication for a Jira REST API.
+
+    Jira Cloud normally uses ``basic`` authentication with an email address
+    and API token. Jira Server/Data Center installations commonly expose a
+    bearer personal-access token instead. Secrets are always read from the
+    environment; only the environment variable names are persisted in the
+    config file.
+    """
+
+    scheme: Literal["basic", "bearer"] = "basic"
+    token_env: str
+    username: str | None = None
+    username_env: str | None = None
+
+    @field_validator("token_env", "username_env")
+    @classmethod
+    def _env_name_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("environment variable names must not be blank")
+        return value
+
+    @field_validator("username")
+    @classmethod
+    def _username_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("username must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _basic_auth_requires_username(self) -> JiraAuth:
+        if self.scheme == "basic" and self.username is None and self.username_env is None:
+            raise ValueError(
+                "Jira basic authentication requires username or username_env"
+            )
+        return self
+
+
+class JiraWorkflow(BaseModel):
+    """Jira status references used by the task provider.
+
+    Values may be Jira status IDs or names. IDs are preferred because names
+    can be changed or localized. ``open_statuses`` controls which issues are
+    eligible for picking; ``open_status`` is the target used when reopening.
+    """
+
+    open_statuses: list[str] = Field(default_factory=lambda: ["To Do", "Open"])
+    open_status: str = "To Do"
+    running_status: str | None = "In Progress"
+    blocked_status: str | None = None
+    completed_status: str = "Done"
+    failed_status: str | None = None
+
+    @field_validator(
+        "open_statuses",
+        "open_status",
+        "running_status",
+        "blocked_status",
+        "completed_status",
+        "failed_status",
+    )
+    @classmethod
+    def _status_references_not_blank(
+        cls, value: list[str] | str | None
+    ) -> list[str] | str | None:
+        if isinstance(value, list):
+            if not value or any(not item.strip() for item in value):
+                raise ValueError("open_statuses must contain non-blank values")
+        elif value is not None and not value.strip():
+            raise ValueError("Jira status references must not be blank")
+        return value
+
+
+class JiraFieldMapping(BaseModel):
+    """Optional Jira custom fields carrying Forgeo task attributes."""
+
+    acceptance_criteria: str | None = None
+    dependencies: str | None = None
+    files_to_modify: str | None = None
+    agent_command: str | None = None
+    agent_timeout_seconds: str | None = None
+    run_at: str | None = None
+    retries_left: str | None = None
+
+    @field_validator(
+        "acceptance_criteria",
+        "dependencies",
+        "files_to_modify",
+        "agent_command",
+        "agent_timeout_seconds",
+        "run_at",
+        "retries_left",
+    )
+    @classmethod
+    def _field_names_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Jira field names must not be blank")
+        return value
+
+
+class JiraBacklogConfig(BaseModel):
+    """Jira-specific settings for a remote task provider."""
+
+    auth: JiraAuth
+    jql: str
+    project_key: str | None = None
+    issue_type: str = "Task"
+    api_version: Literal[2, 3] = 3
+    page_size: int = Field(default=50, ge=1, le=100)
+    max_issues: int = Field(default=1000, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0)
+    claim_timeout_seconds: float = Field(default=86400, gt=0)
+    label_prefix: str = "forgeo"
+    property_key: str = "forgeo"
+    workflow: JiraWorkflow = Field(default_factory=JiraWorkflow)
+    fields: JiraFieldMapping = Field(default_factory=JiraFieldMapping)
+
+    @field_validator("jql", "issue_type", "label_prefix", "property_key")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Jira configuration values must not be blank")
+        return value
+
+    @field_validator("label_prefix", "property_key")
+    @classmethod
+    def _safe_identifier(cls, value: str) -> str:
+        if any(character.isspace() for character in value):
+            raise ValueError("Jira labels and property keys must not contain whitespace")
+        return value
+
+
 class ForgeoConfig(BaseModel):
     """Everything needed to run one forgeo on one repository.
 
@@ -357,17 +490,20 @@ class ForgeoConfig(BaseModel):
         repo: Path of the git repository Forgeo works on.
         interval_minutes: How often a scheduled run happens.
         backlog: Where the backlog lives: the path of a JSON file (created on
-            first use), or an ``http(s)`` URL. A URL is read with ``GET`` and
-            written with ``POST``, in both directions carrying the same
-            document a backlog file holds (``{"tasks": [...]}``); see
-            :mod:`forgeo.backlog_http`.
+            first use), an ``http(s)`` URL serving the Forgeo document, or a
+            Jira base URL when ``backlog_provider`` is ``jira``.
+        backlog_provider: ``auto`` preserves the historical file/HTTP
+            inference. ``file``, ``http`` and ``jira`` explicitly select a
+            provider. A Jira provider uses the separate ``jira`` settings.
         state_dir: Directory holding Forgeo's own runtime files (the locks,
             the daemon state, the run history, the update-check stamp). Only
-            meaningful when ``backlog`` is a URL, where there is no backlog
-            file to put them next to; it then defaults to the directory of
+            needed when ``backlog`` is remote, where there is no backlog file
+            to put them next to; it then defaults to the directory of
             ``forgeo.yaml``. With a backlog file they always sit beside it.
         backlog_auth: Credentials for an ``http(s)`` backlog that requires
             them. Omit for a file backlog or an unauthenticated endpoint.
+        jira: Jira REST API, workflow, and field mapping settings. Required
+            when the effective ``backlog_provider`` is ``jira``.
         blocker_file: Where ``BLOCKER.md`` is written when the agent needs
             human input. Keep it outside the repository so it is never
             committed.
@@ -450,8 +586,10 @@ class ForgeoConfig(BaseModel):
     repo: Path = Field(default=Path("."))
     interval_minutes: int = Field(default=60, ge=1)
     backlog: str | Path = Field(default=Path("backlog.json"))
+    backlog_provider: Literal["auto", "file", "http", "jira"] = "auto"
     state_dir: Path | None = None
     backlog_auth: BacklogAuth | None = None
+    jira: JiraBacklogConfig | None = None
     blocker_file: Path = Field(default=Path("BLOCKER.md"))
     agent_command: str | list[str]
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -547,8 +685,27 @@ class ForgeoConfig(BaseModel):
 
     @property
     def backlog_is_url(self) -> bool:
-        """True when the backlog lives behind an HTTP endpoint, not on disk."""
+        """True when the backlog value is a remote HTTP(S) URL."""
         return is_url(self.backlog)
+
+    @property
+    def effective_backlog_provider(self) -> Literal["file", "http", "jira"]:
+        """The provider selected by explicit config or legacy inference."""
+        if self.backlog_provider != "auto":
+            return self.backlog_provider
+        if self.jira is not None:
+            return "jira"
+        return "http" if self.backlog_is_url else "file"
+
+    @property
+    def backlog_is_jira(self) -> bool:
+        """True when tasks are loaded from Jira rather than a document."""
+        return self.effective_backlog_provider == "jira"
+
+    @property
+    def backlog_is_remote(self) -> bool:
+        """True when the backlog has no local task document."""
+        return self.effective_backlog_provider in ("http", "jira")
 
     @model_validator(mode="after")
     def _docker_requires_image(self) -> ForgeoConfig:
@@ -558,10 +715,26 @@ class ForgeoConfig(BaseModel):
             raise ValueError(
                 "no_changes_exit_code must differ from blocked_exit_code"
             )
-        if self.backlog_auth is not None and not self.backlog_is_url:
+        provider = self.effective_backlog_provider
+        if provider in ("http", "jira") and not self.backlog_is_url:
+            raise ValueError(
+                f"backlog must be an http:// or https:// URL when backlog_provider is "
+                f"{provider!r}"
+            )
+        if provider == "file" and self.backlog_is_url:
+            raise ValueError("backlog must be a filesystem path when backlog_provider is 'file'")
+        if self.backlog_auth is not None and provider != "http":
             # Silently ignoring the credentials would hide a typo in the
             # backlog value behind a working (but local) forgeo.
             raise ValueError(
-                "backlog_auth is only valid when backlog is an http:// or https:// URL"
+                "backlog_auth is only valid when backlog is an http:// or https:// URL "
+                "and backlog_provider is 'http'"
+            )
+        if provider == "jira" and self.jira is None:
+            raise ValueError("jira configuration is required when backlog_provider is 'jira'")
+        if provider != "jira" and self.jira is not None:
+            raise ValueError(
+                "jira configuration is only valid when backlog_provider is 'jira' "
+                "or 'auto' with a Jira backlog"
             )
         return self

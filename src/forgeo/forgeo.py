@@ -108,7 +108,8 @@ class Forgeo:
     async def run_cycle(self) -> str:
         """Execute one run; returns a short outcome label.
 
-        Outcomes: ``blocked``, ``task``, ``paused``, ``refactor``, ``dirty``.
+        Outcomes: ``blocked``, ``task``, ``paused``, ``refactor``, ``dirty``,
+        and ``skipped``.
         Every completed cycle appends exactly one run record.
         """
         started_at = datetime.now(UTC)
@@ -188,6 +189,7 @@ class Forgeo:
         self._last_run_reason = None
         self._blocked_tasks = []
         await self.git.a_ensure_branch(self.config.branch)
+        await self.backlog.recover_claims()
         return await self.backlog.list_tasks()
 
     async def _tree_clean_for(self, task: Task) -> bool:
@@ -214,7 +216,14 @@ class Forgeo:
         """
         if not await self._tree_clean_for(task):
             return "dirty"
-        await self._run_task(task)
+        claimed = await self.backlog.claim_task(task)
+        if claimed is None:
+            logger.info(
+                "Task %s was claimed or changed by another worker; skipping this cycle.",
+                task.id,
+            )
+            return "skipped"
+        await self._run_task(claimed)
         return "task"
 
     # ------------------------------------------------------------------ #
@@ -346,6 +355,7 @@ class Forgeo:
             "blocked": RunOutcome.BLOCKED,
             "paused": RunOutcome.PAUSED,
             "dirty": RunOutcome.DIRTY,
+            "skipped": RunOutcome.SKIPPED,
         }.get(outcome, RunOutcome.ERROR)
 
     def _run_exit_code(self, outcome: str) -> int | None:

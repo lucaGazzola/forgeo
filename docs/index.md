@@ -36,12 +36,12 @@ Forgeo is deliberately single-purpose:
 ## Where state lives
 
 - `forgeo.yaml` — the config (see [Configuration](configuration.md)).
-- `backlog.json` (configurable) — the task backlog, a file or an HTTP
-  endpoint (see [Backlog format](backlog.md)).
+- `backlog.json` (configurable) — the task backlog, a file, an HTTP endpoint,
+  or Jira (see [Backlog format](backlog.md)).
 - `backlog.json.bak`, `backlog.json.bak.1`, ... — rotating snapshots of a
   *file* backlog, written before every agent run and on daemon startup so a
   bad write can always be rolled back (see [Backlog format](backlog.md)). A
-  URL backlog is owned by the remote application and is never snapshotted.
+  remote backlog is owned by its provider and is never snapshotted locally.
 - `BLOCKER.md` (configurable) — written when a human decision is needed; keep
   it outside the repo so it is never committed.
 - `forgeo.log` — rotating daemon log (5 MB × 3), also served over HTTP.
@@ -58,8 +58,8 @@ Forgeo is deliberately single-purpose:
   token (`forgeo web --token`): when present, every `/api/*` route requires
   `Authorization: Bearer <token>`; with no file the dashboard stays open.
 
-The runtime files above sit next to the backlog file; with a backlog URL they
-go in `state_dir`, which defaults to the directory holding `forgeo.yaml`.
+The runtime files above sit next to the backlog file; with a remote backlog
+they go in `state_dir`, which defaults to the directory holding `forgeo.yaml`.
 
 ## Next steps
 

@@ -67,6 +67,9 @@ configuration, start the daemon.
 # Backlog format), created on first use:
 #   .forgeo/backlog.json
 
+# Or: configure `backlog_provider: jira` and set `backlog` to a Jira base URL
+# (see the Jira backlog documentation).
+
 # Or: add tasks from the web console once your forgeo is registered
 # (first `forgeo start` registers it automatically):
 forgeo web      # dashboard at http://0.0.0.0:8790, or keep it on with `forgeo web -d`
@@ -153,14 +156,15 @@ and get one aggregate overview with the central dashboard, `forgeo web`.
 | All CLI commands | [CLI reference](docs/cli-reference.md) |
 | Web dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
 
-Everything is stored in plain files: the backlog, `forgeo.log`, and
+Everything is stored in plain files: the local backlog, `forgeo.log`, and
 `BLOCKER.md` whenever a decision is pending. The backlog can also live in
-another application behind an `http(s)` URL — Forgeo reads the whole task
-document with `GET` and writes it back with `POST`, with optional OAuth2
-client-credentials auth (see [Backlog format](docs/backlog.md)). A *file*
-backlog is snapshotted (rotating `backlog.json.bak` files) before every
-agent run and on daemon startup, and restored automatically if it is ever
-found corrupt — a bad write never loses your tasks.
+another application behind an `http(s)` URL, or in Jira. HTTP backlogs
+exchange the complete task document; Jira issues are read and transitioned
+individually with workflow state and engine metadata stored on the issue (see
+[Backlog format](docs/backlog.md)). A *file* backlog is snapshotted (rotating
+`backlog.json.bak` files) before every agent run and on daemon startup, and
+restored automatically if it is ever found corrupt — a bad write never loses
+your tasks.
 
 ## Develop
 

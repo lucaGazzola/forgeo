@@ -402,6 +402,96 @@ def test_backlog_auth_rejects_a_blank_client_id():
         )
 
 
+def jira_payload(**overrides) -> dict:
+    payload = {
+        "auth": {
+            "scheme": "bearer",
+            "token_env": "JIRA_TOKEN",
+        },
+        "jql": "project = APP",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_jira_provider_requires_a_remote_backlog_url():
+    with pytest.raises(ValidationError, match="backlog must be an http"):
+        ForgeoConfig(
+            agent_command="x",
+            backlog="tasks.json",
+            backlog_provider="jira",
+            jira=jira_payload(),
+        )
+
+
+def test_jira_provider_accepts_bearer_auth_and_keeps_url():
+    config = ForgeoConfig(
+        agent_command="x",
+        backlog="https://jira.example.com",
+        backlog_provider="jira",
+        jira=jira_payload(),
+    )
+    assert config.effective_backlog_provider == "jira"
+    assert config.backlog_is_jira is True
+    assert config.backlog_is_remote is True
+    assert config.jira is not None
+    assert config.jira.auth.scheme == "bearer"
+
+
+def test_jira_basic_auth_requires_a_username():
+    with pytest.raises(ValidationError, match="requires username"):
+        ForgeoConfig(
+            agent_command="x",
+            backlog="https://jira.example.com",
+            backlog_provider="jira",
+            jira=jira_payload(
+                auth={"scheme": "basic", "token_env": "JIRA_TOKEN"}
+            ),
+        )
+
+
+def test_jira_load_config_defaults_remote_runtime_state_dir(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text(
+        "repo: .\n"
+        "backlog_provider: jira\n"
+        "backlog: https://jira.example.com\n"
+        "jira:\n"
+        "  jql: project = APP\n"
+        "  auth:\n"
+        "    scheme: bearer\n"
+        "    token_env: JIRA_TOKEN\n"
+        "agent_command: echo\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.backlog_is_jira is True
+    assert config.state_dir == tmp_path.resolve()
+
+
+def test_jira_config_round_trips_without_mangling_the_base_url(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text(
+        "backlog_provider: jira\n"
+        "backlog: https://jira.example.com\n"
+        "jira:\n"
+        "  jql: project = APP\n"
+        "  auth:\n"
+        "    scheme: bearer\n"
+        "    token_env: JIRA_TOKEN\n"
+        "agent_command: echo\n",
+        encoding="utf-8",
+    )
+
+    original = load_config(config_path)
+    saved = save_config(config_path, original)
+
+    assert saved == original
+    assert load_config(config_path).backlog == "https://jira.example.com"
+
+
 def test_the_secret_itself_is_never_a_config_field():
     """Only the name of the environment variable holding it is stored."""
     config = ForgeoConfig(

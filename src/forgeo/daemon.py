@@ -353,7 +353,7 @@ class ForgeoDaemon:
         backlog = getattr(self.forgeo, "backlog", None)
         if backlog is not None:
             await backlog.snapshot()
-            logger.info("Backlog snapshot taken on startup next to %s", backlog.path)
+            logger.info("Backlog startup snapshot completed for %s", self.config.backlog)
         while not self._stop_event.is_set():
             try:
                 self._reload_config()

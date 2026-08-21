@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A Jira task provider selected with `backlog_provider: jira`, including Jira
+  Cloud cursor pagination, workflow-based claiming, optional custom-field
+  mappings, issue-property engine state, stale-claim recovery, and bearer or
+  basic authentication from environment variables.
+- A provider-level claim hook so remote task sources can prevent duplicate
+  agent runs while preserving the existing JSON and HTTP backlog behavior.
+
 ## [0.7.3] - 2026-08-19
 
 ### Added

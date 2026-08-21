@@ -8,11 +8,12 @@ Commands:
   a config triggers it automatically.
 * ``forgeo start --config forgeo.yaml`` — start the scheduled forgeo on one
   repository detached in the background and exit. Every ``interval_minutes``
-  it picks an ``OPEN`` task from the backlog, or runs a refactoring pass when
-  the backlog is empty; everything is committed and pushed on the main
-  branch. When the agent needs human input, a detailed ``BLOCKER.md`` file is
-  written with what you must do. The daemon binds no ports; live state is
-  written to ``daemon.state.json`` and is served to you by ``forgeo web``.
+  it picks an ``OPEN`` task from the configured provider, or runs a refactoring
+  pass when the provider has no runnable task; everything is committed and
+  pushed on the main branch. When the agent needs human input, a detailed
+  ``BLOCKER.md`` file is written with what you must do. The daemon binds no
+  ports; live state is written to ``daemon.state.json`` and is served to you
+  by ``forgeo web``.
   ``forgeo start -f`` (``--foreground``) runs the daemon in the foreground
   instead, interruptible with Ctrl-C. The daemon watches
   ``forgeo.yaml`` and re-reads it on the next cycle boundary when it changes

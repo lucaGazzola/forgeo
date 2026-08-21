@@ -5,19 +5,20 @@ from here (an optional ``run_at`` one-shot schedule overrides the oldest-first
 order). The tasks live in a single JSON document — ``{"tasks": [...]}`` — which
 is either a local file you can edit by hand (add, remove, or set a ``BLOCKED``
 task back to ``OPEN`` once you have provided the input it needed) or an HTTP
-endpoint owned by another application, see :mod:`forgeo.backlog_http`.
+endpoint owned by another application, see :mod:`forgeo.backlog_http`. A Jira
+provider implements the same task-level contract through issue operations.
 
-Everything above the storage layer is shared: :class:`BacklogStore` holds all
-the task manipulation and the asyncio lock that serializes writes, and leaves
-exactly two operations to its subclasses — load the document, store the
-document.
+Everything above the document-storage layer is shared: :class:`BacklogStore`
+holds the task manipulation and the asyncio lock that serializes writes. File
+and HTTP document providers implement load/store; issue providers override the
+task-level operations that cannot be represented as a whole-document write.
 
 A file backlog is the single source of truth, so it is guarded against bad
 writes: before every agent run (and on daemon startup) a rotating snapshot is
 written next to it (``backlog.json.bak``, ``backlog.json.bak.1``, ...) and a
 read that finds a corrupt store restores the newest valid snapshot in place
-instead of silently starting from an empty one. A URL backlog is owned by the
-remote application, which keeps its own history, so it is never snapshotted.
+instead of silently starting from an empty one. A remote backlog is owned by
+the provider, which keeps its own history, so it is never snapshotted.
 """
 
 from __future__ import annotations
@@ -57,6 +58,41 @@ EDITABLE_TASK_FIELDS = frozenset(
         "run_at",
     }
 )
+
+
+def validate_task_updates(updates: dict[str, Any]) -> None:
+    """Validate fields accepted by the task-editing API.
+
+    Providers use the same validation before translating updates into their
+    native API. Keeping it here prevents a remote provider from accepting a
+    task shape that a local backlog would reject.
+    """
+    unknown = set(updates) - EDITABLE_TASK_FIELDS
+    if unknown:
+        raise ValueError(f"unknown task field(s): {', '.join(sorted(unknown))}")
+    for field in ("title", "description"):
+        if field in updates and not isinstance(updates[field], str):
+            raise ValueError(f"{field} must be a string")
+    if "title" in updates and not updates["title"].strip():
+        raise ValueError("title must be a non-blank string")
+    if "description" in updates and not updates["description"].strip():
+        raise ValueError("description must be a non-blank string")
+    for field in ("acceptance_criteria", "dependencies", "files_to_modify"):
+        if field in updates and (
+            not isinstance(updates[field], list)
+            or not all(isinstance(item, str) for item in updates[field])
+        ):
+            raise ValueError(f"{field} must be a list of strings")
+    if "retries_left" in updates and updates["retries_left"] is not None and (
+        not isinstance(updates["retries_left"], int)
+        or isinstance(updates["retries_left"], bool)
+        or updates["retries_left"] < 0
+    ):
+        raise ValueError("retries_left must be a non-negative integer or null")
+    if "run_at" in updates and updates["run_at"] is not None and not isinstance(
+        updates["run_at"], str
+    ):
+        raise ValueError("run_at must be an ISO-8601 datetime string or null")
 
 
 def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | None:
@@ -229,9 +265,10 @@ def normalize_store(data: Any) -> dict[str, Any]:
 class BacklogStore(ABC):
     """A backlog of tasks, independent of where the document is kept.
 
-    Subclasses implement :meth:`_read` and :meth:`_write`; everything else —
-    the task transitions, their validation, and the lock that serializes
-    concurrent mutations within one process — lives here.
+    Document subclasses implement :meth:`_read` and :meth:`_write`; an issue
+    provider may override task-level methods when its native API has no
+    whole-document mutation. The shared validation and local lock still live
+    here.
     """
 
     def __init__(self, *, output_cap: int | None = None) -> None:
@@ -254,6 +291,38 @@ class BacklogStore(ABC):
         """Return all tasks, in the order they were created."""
         store = await self._read()
         return [self._to_task(entry) for entry in store["tasks"]]
+
+    async def claim_task(self, task: Task) -> Task | None:
+        """Claim ``task`` immediately before an agent starts working on it.
+
+        A local document is protected by Forgeo's per-instance run lock, so a
+        claim only needs to re-check that the task is still ``OPEN``. Remote
+        providers override this with an atomic or workflow-backed claim (for
+        example, a Jira transition to ``In Progress``). Returning ``None``
+        means another worker won the race and the caller must not run the
+        agent or start a refactoring pass for this selection.
+        """
+        async with self._lock:
+            store = await self._read()
+            entry = self._entry_by_id(store, task.id)
+            if entry is None:
+                return None
+            current = self._to_task(entry)
+            if current.status is not TaskStatus.OPEN:
+                return None
+            return current
+
+    async def recover_claims(self) -> None:
+        """Recover stale remote claims before a new cycle starts.
+
+        File and document backends have no claim state to recover. Providers
+        with an external workflow may override this to release claims left by
+        a crashed process after their configured lease expires.
+        """
+
+    async def validate_connection(self) -> None:
+        """Verify that this provider can be read without mutating it."""
+        await self.list_tasks()
 
     async def snapshot(self) -> None:
         """Take a rollback copy of the backlog before it is written to.
@@ -430,34 +499,7 @@ class BacklogStore(ABC):
         """
         if not isinstance(updates, dict):
             raise TypeError("updates must be a dict of task fields")
-        unknown = set(updates) - EDITABLE_TASK_FIELDS
-        if unknown:
-            raise ValueError(
-                f"unknown task field(s): {', '.join(sorted(unknown))}"
-            )
-        for field in ("title", "description"):
-            if field in updates and not isinstance(updates[field], str):
-                raise ValueError(f"{field} must be a string")
-        if "title" in updates and not updates["title"].strip():
-            raise ValueError("title must be a non-blank string")
-        if "description" in updates and not updates["description"].strip():
-            raise ValueError("description must be a non-blank string")
-        for field in ("acceptance_criteria", "dependencies", "files_to_modify"):
-            if field in updates and (
-                not isinstance(updates[field], list)
-                or not all(isinstance(item, str) for item in updates[field])
-            ):
-                raise ValueError(f"{field} must be a list of strings")
-        if "retries_left" in updates and updates["retries_left"] is not None and (
-            not isinstance(updates["retries_left"], int)
-            or isinstance(updates["retries_left"], bool)
-            or updates["retries_left"] < 0
-        ):
-            raise ValueError("retries_left must be a non-negative integer or null")
-        if "run_at" in updates and updates["run_at"] is not None and not isinstance(
-            updates["run_at"], str
-        ):
-            raise ValueError("run_at must be an ISO-8601 datetime string or null")
+        validate_task_updates(updates)
 
         async with self._lock:
             store = await self._read()
@@ -659,7 +701,12 @@ class JSONBacklog(BacklogStore):
 
 
 def open_backlog(config: ForgeoConfig) -> BacklogStore:
-    """The backlog store ``config`` points at: a JSON file or an HTTP endpoint."""
+    """The task provider selected by ``config``."""
+    if config.backlog_is_jira:
+        from forgeo.backlog_jira import JiraBacklog
+
+        assert config.jira is not None
+        return JiraBacklog(str(config.backlog), config.jira, output_cap=config.agent_response_lines)
     if config.backlog_is_url:
         # Imported here: the HTTP backend builds on BacklogStore, so importing
         # it at module level would close an import cycle.

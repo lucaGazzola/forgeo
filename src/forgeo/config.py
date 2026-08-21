@@ -5,10 +5,10 @@ so a config file can live anywhere and still point at sibling directories.
 :func:`save_config` writes them back relative to that same directory, so a
 config round-trips without hard-coding absolute paths into the file.
 
-A ``backlog`` that is an ``http(s)`` URL is not a path and is left exactly as
-written. It is also the one case where Forgeo's runtime files have no backlog
-file to sit beside, so loading fills in ``state_dir`` with the config file's
-own directory (see :mod:`forgeo.paths`).
+A remote ``backlog`` URL is not a path and is left exactly as written. It is
+also the case where Forgeo's runtime files have no backlog file to sit beside,
+so loading fills in ``state_dir`` with the config file's own directory (see
+:mod:`forgeo.paths`).
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ def load_config(path: str | Path) -> ForgeoConfig:
     if not config.backlog_is_url and not Path(config.backlog).is_absolute():
         updates["backlog"] = base / config.backlog
     if config.state_dir is None:
-        if config.backlog_is_url:
-            # A URL backlog has no file for the locks and the run history to
-            # sit beside, so they go next to the config that describes it.
+        if config.backlog_is_remote:
+            # A remote backlog has no file for the locks and the run history
+            # to sit beside, so they go next to the config that describes it.
             updates["state_dir"] = base
     elif not config.state_dir.is_absolute():
         updates["state_dir"] = base / config.state_dir

@@ -184,8 +184,9 @@ It validates, reporting **all** problems at once:
   would refuse as dirty — make an initial commit first
   (`git add -A && git commit -m "Initial commit"`);
 - the remote resolves when `remote` is set (`git remote get-url`);
-- the backlog parses and every task is valid (a missing backlog is fine: it
-  is treated as empty on the first cycle);
+- the backlog parses and every task is valid (a missing file backlog is fine:
+  it is treated as empty on the first cycle; HTTP and Jira providers are
+  contacted read-only and must answer);
 - the run lock state (`backlog.lock`); a held lock is a warning, since
   `forgeo start`/`forgeo once` will refuse to run until it is released.
 

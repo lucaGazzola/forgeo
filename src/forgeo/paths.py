@@ -12,7 +12,7 @@ This module is the single place that decides those locations:
   is a sibling of the backlog, named after it (``tasks.json`` yields
   ``tasks.lock``, ``tasks.run``, ...), with the run history as the shared
   ``runs.jsonl``.
-* **backlog URL** — there is no file to sit beside, so they go in
+* **remote backlog** — there is no file to sit beside, so they go in
   ``state_dir`` (defaulting to the directory of ``forgeo.yaml``, filled in by
   :func:`forgeo.config.load_config`) under fixed ``backlog.*`` names.
 
@@ -38,7 +38,7 @@ def state_dir_for(config: ForgeoConfig) -> Path:
     """The directory holding Forgeo's runtime files for ``config``.
 
     An explicit ``state_dir`` always wins; otherwise a backlog file keeps
-    them beside itself. A URL backlog always has one, because ``load_config``
+    them beside itself. A remote backlog always has one, because ``load_config``
     resolves ``state_dir`` to the config file's own directory when it is left
     unset.
     """
@@ -50,7 +50,7 @@ def state_dir_for(config: ForgeoConfig) -> Path:
 def _runtime_file(config: ForgeoConfig, suffix: str) -> Path:
     """A runtime file for ``config``, named after the backlog when it is one."""
     directory = state_dir_for(config)
-    if config.backlog_is_url:
+    if config.backlog_is_remote:
         return directory / f"{_URL_BACKLOG_STEM}{suffix}"
     return directory / Path(config.backlog).with_suffix(suffix).name
 

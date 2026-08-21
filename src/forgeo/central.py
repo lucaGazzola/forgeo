@@ -4,10 +4,9 @@ A standalone server that aggregates every forgeo registered in the instance
 registry (:mod:`forgeo.instances`). It reads each instance's data straight
 from its files (``backlog.json``, ``runs.jsonl``, ``forgeo.log``,
 ``BLOCKER.md``, ``daemon.state.json``), so it works whether or not that
-instance's daemon is running — the daemon binds no ports at all. An instance
-whose backlog is an HTTP endpoint is the one exception: its tasks are fetched
-from there, and an endpoint that cannot be reached is reported as such rather
-than shown as an empty backlog.
+instance's daemon is running — the daemon binds no ports at all. HTTP and Jira
+backlogs are fetched from their providers instead, and an unavailable remote
+source is reported as such rather than shown as an empty backlog.
 
 Routes:
 
@@ -369,14 +368,14 @@ def read_tasks(config: ForgeoConfig | None) -> list[Task]:
 
     A backlog file is read directly, so the dashboard never writes to an
     instance's files (``JSONBacklog`` renames a corrupt backlog; here it is
-    skipped) and a missing or corrupt file simply reads as empty. A backlog
-    URL has to be fetched, and that request can fail — callers decide what to
-    show when it does, because "unreachable" and "empty" must never look the
-    same.
+    skipped) and a missing or corrupt file simply reads as empty. A remote
+    backlog has to be fetched, and that request can fail — callers decide what
+    to show when it does, because "unreachable" and "empty" must never look
+    the same.
     """
     if config is None:
         return []
-    if config.backlog_is_url:
+    if config.backlog_is_remote:
         return asyncio.run(open_backlog(config).list_tasks())
     data = _read_json_dict(Path(config.backlog))
     if data is None:

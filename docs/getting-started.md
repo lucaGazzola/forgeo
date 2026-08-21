@@ -82,7 +82,13 @@ the file configured as `backlog:` in your `forgeo.yaml` — by default
 `.forgeo/backlog.json`. Once Forgeo is running you can also add tasks
 from the [web console](web-console-api.md) — no file editing needed. (If your
 tasks already live in another application, `backlog:` also accepts an
-[HTTP endpoint](backlog.md#a-backlog-over-http) instead of a file.)
+[HTTP endpoint](backlog.md#a-backlog-over-http) or a [Jira source](backlog.md#a-jira-backlog)
+instead of a file.)
+
+For Jira, set `backlog_provider: jira`, point `backlog:` at the Jira base URL,
+configure `jira.jql` and the workflow mappings, export the credentials named in
+`jira.auth`, and run `forgeo validate` before starting the daemon. See [Jira
+backlogs](backlog.md#a-jira-backlog) for the complete configuration.
 
 ```json
 {

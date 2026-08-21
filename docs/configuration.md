@@ -22,9 +22,11 @@ paths), so `forgeo restart` is still used for those.
 | <span style="white-space: nowrap">`interval_minutes`</span> | `60` | How often Forgeo runs (≥ 1). |
 | <span style="white-space: nowrap">`branch`</span> | `main` | The single branch everything is committed to. |
 | <span style="white-space: nowrap">`remote`</span> | — | Remote to push to (e.g. `origin`); omit to only commit locally. |
-| <span style="white-space: nowrap">`backlog`</span> | `backlog.json` | The task backlog: the path of a JSON file (keep it outside the repo if you can), or an `http(s)` URL serving the same document — see [a backlog over HTTP](backlog.md#a-backlog-over-http). |
-| <span style="white-space: nowrap">`state_dir`</span> | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Only meaningful with a backlog URL, where it defaults to the directory of `forgeo.yaml`. |
+| <span style="white-space: nowrap">`backlog`</span> | `backlog.json` | The task backlog: the path of a JSON file, an HTTP endpoint serving the same document, or a Jira base URL when `backlog_provider: jira`. |
+| <span style="white-space: nowrap">`backlog_provider`</span> | `auto` | `auto` infers file/HTTP from `backlog`, or Jira when a `jira` block is present; explicitly choose `file`, `http`, or `jira` when preferred. |
+| <span style="white-space: nowrap">`state_dir`</span> | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Remote backlogs default this to the directory of `forgeo.yaml`. |
 | <span style="white-space: nowrap">`backlog_auth`</span> | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). |
+| <span style="white-space: nowrap">`jira`</span> | — | Jira REST, workflow, authentication, and custom-field settings. Required when `backlog_provider: jira`. |
 | <span style="white-space: nowrap">`blocker_file`</span> | `BLOCKER.md` | Where `BLOCKER.md` is written. Keep it outside the repo so it is never committed. |
 | <span style="white-space: nowrap">`agent_command`</span> | — | The coding agent: any shell command (string) or argv list. **Required.** |
 | <span style="white-space: nowrap">`agent_timeout_seconds`</span> | — | Optional: kill the agent after this many seconds (`null` = never). |
@@ -66,6 +68,77 @@ refactor_prompt: >
   Review the codebase for improvement opportunities that do not change
   behavior, run the test suite, and apply safe changes.
 ```
+
+## Jira backlog
+
+Forgeo can read and update Jira issues directly. Set `backlog_provider: jira`
+and make `backlog` the Jira base URL. Jira issue keys become task ids. The JQL
+should include every lifecycle state that should be visible to Forgeo; do not
+filter it to only `To Do`, or completed and blocked issues will disappear from
+the dashboard and dependency checks.
+
+```yaml
+backlog_provider: jira
+backlog: https://jira.example.com
+state_dir: .forgeo
+
+jira:
+  jql: 'project = APP AND labels = forgeo'
+  project_key: APP                 # Needed for task creation from the web UI.
+  issue_type: Task
+  auth:
+    scheme: basic                  # Jira Cloud; use bearer for a Server/DC PAT.
+    username_env: JIRA_USER
+    token_env: JIRA_TOKEN
+  workflow:
+    open_statuses: ["10000", "10001"]
+    open_status: "10000"
+    running_status: "3"
+    completed_status: "10002"
+    blocked_status: null            # Optional Jira workflow transition.
+    failed_status: null             # Failed is represented by a Forgeo label.
+  fields:
+    acceptance_criteria: customfield_10042
+    dependencies: customfield_10043
+```
+
+Status values may be names, but stable Jira status ids are preferred. Forgeo
+adds `forgeo-running`, `forgeo-blocked`, and `forgeo-failed` labels as needed.
+Engine-managed details (`blocker_reason`, failure details, retry counters and
+the bounded agent response) are stored in a Jira issue property, whose key is
+`forgeo` by default. A Jira workflow does not need a custom `FAILED` status.
+
+Before starting the daemon, set the configured environment variables and run:
+
+```bash
+export JIRA_USER='automation@example.com'
+export JIRA_TOKEN='...'
+forgeo validate
+```
+
+Forgeo transitions an issue to `running_status` before invoking the agent and
+releases stale claims after `claim_timeout_seconds` (one day by default). The
+web console can create, edit, reopen, and delete Jira issues when the required
+project and custom-field mappings are configured; Jira remains the source of
+truth for human changes.
+
+### Jira settings
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `jira.jql` | — | Required JQL scope. Include all lifecycle states that Forgeo must see. |
+| `jira.auth` | — | Required credentials. Use `basic` with a username and API-token environment variable, or `bearer` with a token environment variable. |
+| `jira.project_key` | — | Jira project key used when the web console creates issues. |
+| `jira.issue_type` | `Task` | Jira issue type name used for creation. |
+| `jira.api_version` | `3` | API version. v3 uses Jira Cloud's cursor-based `/search/jql`; v2 uses offset-based search. |
+| `jira.page_size` | `50` | Issues requested per search page, from 1 to 100. |
+| `jira.max_issues` | `1000` | Maximum issues read from one JQL search. |
+| `jira.timeout_seconds` | `30` | Timeout for each Jira REST request. |
+| `jira.claim_timeout_seconds` | `86400` | Age after which an abandoned running claim is released. |
+| `jira.label_prefix` | `forgeo` | Prefix for the running, blocked, and failed labels. |
+| `jira.property_key` | `forgeo` | Jira issue-property key holding Forgeo engine state. |
+| `jira.workflow` | defaults | Status ids or names for open, running, blocked, completed, and failed transitions. |
+| `jira.fields` | — | Optional custom-field ids for task attributes such as acceptance criteria and dependencies. |
 
 ## Key details
 
@@ -385,7 +458,7 @@ Each registered instance is fully independent: every instance owns its own
 **backlog**, **logs** (`log_file`), **run history** (`runs.jsonl`), **locks**
 (`backlog.lock` and the per-iteration `backlog.run`), and a
 **`backlog.state.json`** with its live state. Those runtime files sit next to
-the backlog file, or — when the backlog is a URL — in `state_dir`, which
+the backlog file, or — when the backlog is remote — in `state_dir`, which
 defaults to the directory of that instance's `forgeo.yaml`. Because relative
 paths resolve against each config file's own directory, two configs in
 different directories can never share state.

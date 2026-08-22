@@ -424,3 +424,75 @@ If a process dies while holding a claim, a later cycle releases claims older
 than `claim_timeout_seconds` and returns them to the configured open status.
 An unavailable Jira endpoint fails the cycle; it is never treated as an empty
 backlog.
+
+## A GitHub backlog
+
+Set `backlog_provider: github` and point `backlog:` at the GitHub API base URL:
+
+```yaml
+backlog_provider: github
+backlog: https://api.github.com
+
+github:
+  repo: owner/repo
+  token_env: GITHUB_TOKEN
+  label_prefix: forgeo
+```
+
+Use `https://api.github.com` for github.com or `https://github.example.com/api/v3` for Enterprise.
+
+### Mapping and lifecycle
+
+- GitHub issue numbers are Forgeo task ids.
+- `title`, `body` (visible part), `created_at` and `updated_at` map to task fields.
+- `state` `open` maps to `OPEN`; `closed` maps to `COMPLETED`.
+- Labels `forgeo-running`, `forgeo-blocked`, `forgeo-failed` (prefix configurable via `label_prefix`) represent running, blocked, and failed tasks. An open issue carrying `forgeo-running` is considered claimed and filtered from picking.
+- Closing an issue completes its task; reopening it moves the task back to `OPEN`.
+
+Forgeo stores blocker reasons, failure reasons, retry counters, claim time, dependencies, and bounded agent output in a hidden JSON block inside the issue body: `<!-- forgeo: {...} -->`. The visible body remains human-readable; the hidden block is stripped on read and merged on write. No GitHub issue property or custom field is required. Set `github.property_key` only for symmetry; the marker key is `forgeo` by default.
+
+Dependencies are persisted via the hidden block's `dependencies` list; no GitHub issue links are required.
+
+### Authentication
+
+GitHub credentials are never stored in `forgeo.yaml`:
+
+- `token_env` names the environment variable holding a personal-access token (classic or fine-grained). The token is sent as `Authorization: Bearer <token>`.
+
+### Runtime behavior
+
+The daemon lists GitHub issues with paginated `GET /repos/{owner}/{repo}/issues?state=all`. A task is claimed by adding the `forgeo-running` label and persisting `claimed_at` in the hidden block. If a process dies while holding a claim, a later cycle releases claims older than `claim_timeout_seconds` and removes the running label. An unavailable GitHub endpoint fails the cycle.
+
+## A GitLab backlog
+
+Set `backlog_provider: gitlab` and point `backlog:` at the GitLab base URL:
+
+```yaml
+backlog_provider: gitlab
+backlog: https://gitlab.example.com
+
+gitlab:
+  repo: group/project   # or numeric project id
+  token_env: GITLAB_TOKEN
+  label_prefix: forgeo
+```
+
+GitLab base URL is the instance root (e.g. `https://gitlab.com`); the client appends `/api/v4`.
+
+### Mapping and lifecycle
+
+- GitLab issue `iid`s are Forgeo task ids.
+- `title`, `description` (visible part), `created_at` and `updated_at` map to task fields.
+- `state` `opened` maps to `OPEN`; `closed` maps to `COMPLETED`.
+- Labels `forgeo-running`, `forgeo-blocked`, `forgeo-failed` represent running, blocked, and failed tasks, like GitHub. An `opened` issue with `forgeo-running` is filtered as claimed.
+- Closing/reopening via `state_event` transitions the task to `COMPLETED`/`OPEN`.
+
+Forgeo stores engine state the same way as GitHub: a hidden `<!-- forgeo: {...} -->` block inside `description`. Dependencies and other task attributes are kept there; no GitLab custom fields are required.
+
+### Authentication
+
+- `token_env` names the environment variable holding a personal-access token. Sent as `PRIVATE-TOKEN` and `Authorization: Bearer`.
+
+### Runtime behavior
+
+Paginated `GET /api/v4/projects/:id/issues?state=all`. Claiming adds `forgeo-running` and `claimed_at`; stale claims older than `claim_timeout_seconds` are released. An unavailable GitLab endpoint fails the cycle.

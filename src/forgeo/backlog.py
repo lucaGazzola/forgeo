@@ -5,8 +5,9 @@ from here (an optional ``run_at`` one-shot schedule overrides the oldest-first
 order). The tasks live in a single JSON document — ``{"tasks": [...]}`` — which
 is either a local file you can edit by hand (add, remove, or set a ``BLOCKED``
 task back to ``OPEN`` once you have provided the input it needed) or an HTTP
-endpoint owned by another application, see :mod:`forgeo.backlog_http`. A Jira
-provider implements the same task-level contract through issue operations.
+endpoint owned by another application, see :mod:`forgeo.backlog_http`. Issue
+providers (Jira, GitHub, GitLab) implement the same task-level contract through
+issue operations.
 
 Everything above the document-storage layer is shared: :class:`BacklogStore`
 holds the task manipulation and the asyncio lock that serializes writes. File
@@ -263,12 +264,11 @@ def normalize_store(data: Any) -> dict[str, Any]:
 
 
 class BacklogStore(ABC):
-    """A backlog of tasks, independent of where the document is kept.
+    """Abstract task backlog.
 
-    Document subclasses implement :meth:`_read` and :meth:`_write`; an issue
-    provider may override task-level methods when its native API has no
-    whole-document mutation. The shared validation and local lock still live
-    here.
+    Holds the shared lock, output cap, and the task-level contract.
+    Document and issue providers subclass via :class:`DocumentBacklogStore`
+    and :class:`IssueBacklogBase`.
     """
 
     def __init__(self, *, output_cap: int | None = None) -> None:
@@ -276,32 +276,115 @@ class BacklogStore(ABC):
         self._output_cap = output_cap
 
     @abstractmethod
-    async def _read(self) -> dict[str, Any]:
-        """Load the whole document as ``{"tasks": [...]}``.
-
-        Must raise when the document cannot be retrieved, and return an empty
-        store only when the backlog genuinely holds no tasks.
-        """
-
-    @abstractmethod
-    async def _write(self, store: dict[str, Any]) -> None:
-        """Persist the whole document; must raise when it cannot be stored."""
-
     async def list_tasks(self) -> list[Task]:
         """Return all tasks, in the order they were created."""
-        store = await self._read()
-        return [self._to_task(entry) for entry in store["tasks"]]
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> Task | None:
+        """Return a task by id, or ``None`` if it does not exist."""
 
     async def claim_task(self, task: Task) -> Task | None:
         """Claim ``task`` immediately before an agent starts working on it.
 
         A local document is protected by Forgeo's per-instance run lock, so a
         claim only needs to re-check that the task is still ``OPEN``. Remote
-        providers override this with an atomic or workflow-backed claim (for
-        example, a Jira transition to ``In Progress``). Returning ``None``
-        means another worker won the race and the caller must not run the
-        agent or start a refactoring pass for this selection.
+        providers override this with an atomic or workflow-backed claim.
+        Returning ``None`` means another worker won the race.
         """
+        # default: no remote claim state
+        tasks = await self.list_tasks()
+        for t in tasks:
+            if t.id == task.id and t.status is TaskStatus.OPEN:
+                return t
+        return None
+
+    async def recover_claims(self) -> None:
+        """Recover stale remote claims before a new cycle starts."""
+
+    async def validate_connection(self) -> None:
+        """Verify that this provider can be read without mutating it."""
+        await self.list_tasks()
+
+    async def snapshot(self) -> None:
+        """Take a rollback copy before the backlog is written to."""
+
+    @abstractmethod
+    async def create_task(self, task: Task) -> Task:
+        """Persist ``task``, rejecting duplicate ids."""
+
+    @abstractmethod
+    async def update_status(
+        self, task_id: str, status: TaskStatus, result: ExecutionResult
+    ) -> Task | None:
+        """Transition a task's status."""
+
+    @abstractmethod
+    async def set_blocked(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
+        """Mark a task ``BLOCKED``."""
+
+    @abstractmethod
+    async def set_failed(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
+        """Mark a task ``FAILED``."""
+
+    @abstractmethod
+    async def bump_failed_wait(self, task_id: str) -> Task | None:
+        """Increment a retry-eligible ``FAILED`` task's wait counter."""
+
+    @abstractmethod
+    async def retry_task(self, task_id: str) -> Task | None:
+        """Move a retry-eligible ``FAILED`` task back to ``OPEN``."""
+
+    @abstractmethod
+    async def reopen_task(self, task_id: str) -> Task | None:
+        """Reopen a blocked task."""
+
+    @abstractmethod
+    async def delete_task(self, task_id: str) -> Task | None:
+        """Remove a task from the backlog."""
+
+    @abstractmethod
+    async def update_task(
+        self, task_id: str, updates: dict[str, Any]
+    ) -> Task | None:
+        """Update a task's editable fields."""
+
+    @staticmethod
+    def _to_task(entry: dict[str, Any]) -> Task:
+        """Validate a stored dictionary back into a Task."""
+        try:
+            return Task.model_validate(entry)
+        except ValidationError:
+            return Task(
+                id=str(entry.get("id", "<unknown>")),
+                title="<unparsable task>",
+                description="<unparsable task>",
+                status=TaskStatus.FAILED,
+            )
+
+
+class DocumentBacklogStore(BacklogStore):
+    """A backlog persisted as a whole document (file or HTTP).
+
+    Implements task operations via serialized whole-document reads/writes.
+    """
+
+    @abstractmethod
+    async def _read(self) -> dict[str, Any]:
+        """Load the whole document as ``{"tasks": [...]}``."""
+
+    @abstractmethod
+    async def _write(self, store: dict[str, Any]) -> None:
+        """Persist the whole document."""
+
+    async def list_tasks(self) -> list[Task]:
+        store = await self._read()
+        return [self._to_task(entry) for entry in store["tasks"]]
+
+    async def claim_task(self, task: Task) -> Task | None:
         async with self._lock:
             store = await self._read()
             entry = self._entry_by_id(store, task.id)
@@ -312,35 +395,12 @@ class BacklogStore(ABC):
                 return None
             return current
 
-    async def recover_claims(self) -> None:
-        """Recover stale remote claims before a new cycle starts.
-
-        File and document backends have no claim state to recover. Providers
-        with an external workflow may override this to release claims left by
-        a crashed process after their configured lease expires.
-        """
-
-    async def validate_connection(self) -> None:
-        """Verify that this provider can be read without mutating it."""
-        await self.list_tasks()
-
-    async def snapshot(self) -> None:
-        """Take a rollback copy of the backlog before it is written to.
-
-        A no-op by default: only a backend that *owns* the document can
-        meaningfully snapshot it. :class:`JSONBacklog` overrides this; a
-        backlog served over HTTP belongs to the remote application, which
-        keeps its own history, so Forgeo does not shadow-copy it.
-        """
-
     async def get_task(self, task_id: str) -> Task | None:
-        """Return a task by id, or ``None`` if it does not exist."""
         store = await self._read()
         entry = self._entry_by_id(store, task_id)
         return self._to_task(entry) if entry is not None else None
 
     async def create_task(self, task: Task) -> Task:
-        """Persist ``task``, rejecting duplicate ids with a ``ValueError``."""
         async with self._lock:
             store = await self._read()
             if self._entry_by_id(store, task.id) is not None:
@@ -352,16 +412,6 @@ class BacklogStore(ABC):
     async def update_status(
         self, task_id: str, status: TaskStatus, result: ExecutionResult
     ) -> Task | None:
-        """Transition a task's status, bumping its ``updated_at`` timestamp.
-
-        Any transition away from ``FAILED`` clears the persisted
-        ``failure_reason``, so a task that stops being failed no longer shows
-        the stale reason. A transition that leaves ``FAILED`` (e.g. a human
-        setting the status back to ``OPEN``) also resets the engine-managed
-        retry state (``retry_count`` and ``failed_wait_cycles``), so the
-        manual retry starts with a fresh retry budget. A task completing
-        normally keeps its ``retry_count``, so the run record can show it.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             leaving_failed = (
                 entry.get("status") == TaskStatus.FAILED.value
@@ -382,13 +432,6 @@ class BacklogStore(ABC):
     async def set_blocked(
         self, task_id: str, reason: list[str], result: ExecutionResult
     ) -> Task | None:
-        """Mark a task ``BLOCKED``, persisting the agent's blocker reason.
-
-        ``reason`` is stored on the task as ``blocker_reason`` (the source
-        ``BLOCKER.md`` is derived from) and ``blocked_count`` is incremented
-        every time a task transitions into ``BLOCKED``. An unknown ``task_id``
-        returns ``None`` without writing anything.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.BLOCKED.value
             entry["blocker_reason"] = list(reason)
@@ -403,14 +446,6 @@ class BacklogStore(ABC):
     async def set_failed(
         self, task_id: str, reason: list[str], result: ExecutionResult
     ) -> Task | None:
-        """Mark a task ``FAILED``, persisting the failure reason.
-
-        ``reason`` is stored on the task as ``failure_reason`` (shown in the
-        web console's task modal) every time a task transitions into
-        ``FAILED``. The engine-managed retry wait counter is reset, so a fresh
-        failure restarts the ``failed_retry_wait_cycles`` backoff. An unknown
-        ``task_id`` returns ``None`` without writing anything.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
@@ -422,26 +457,12 @@ class BacklogStore(ABC):
         return await self._update_entry(task_id, mutate)
 
     async def bump_failed_wait(self, task_id: str) -> Task | None:
-        """Increment a retry-eligible ``FAILED`` task's wait-cycle counter.
-
-        Called once per cycle while a task is ``FAILED`` and awaiting a
-        retry, so the ``failed_retry_wait_cycles`` backoff counts real
-        cycles. An unknown ``task_id`` returns ``None`` without writing
-        anything.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             entry["failed_wait_cycles"] = int(entry.get("failed_wait_cycles", 0)) + 1
 
         return await self._update_entry(task_id, mutate)
 
     async def retry_task(self, task_id: str) -> Task | None:
-        """Move a retry-eligible ``FAILED`` task back to ``OPEN`` for a retry.
-
-        Increments the engine-managed ``retry_count`` and resets the wait
-        counter; the persisted ``failure_reason`` is cleared because the task
-        is no longer failed (a fresh failure records a fresh reason). An
-        unknown ``task_id`` returns ``None`` without writing anything.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.OPEN.value
             entry["retry_count"] = int(entry.get("retry_count", 0)) + 1
@@ -451,12 +472,6 @@ class BacklogStore(ABC):
         return await self._update_entry(task_id, mutate)
 
     async def reopen_task(self, task_id: str) -> Task | None:
-        """Reopen a blocked task: status back to ``OPEN``, reason cleared.
-
-        ``blocked_count`` is kept as history (the human should see how often
-        the task blocked before deciding to retry, split, or drop it). An
-        unknown ``task_id`` returns ``None`` without writing anything.
-        """
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.OPEN.value
             entry["blocker_reason"] = []
@@ -465,14 +480,6 @@ class BacklogStore(ABC):
         return await self._update_entry(task_id, mutate)
 
     async def delete_task(self, task_id: str) -> Task | None:
-        """Remove a task from the backlog, returning the deleted task.
-
-        An unknown ``task_id`` returns ``None`` without writing anything.
-        Any other callers wishing to restrict deletion (e.g. only ``OPEN``
-        tasks) must check the status before calling; this method deletes
-        whatever is there. Writes go through the same lock and atomic-replace
-        path as the other mutators.
-        """
         async with self._lock:
             store = await self._read()
             entry = self._entry_by_id(store, task_id)
@@ -488,15 +495,6 @@ class BacklogStore(ABC):
     async def update_task(
         self, task_id: str, updates: dict[str, Any]
     ) -> Task | None:
-        """Update a task's editable fields, bumping its ``updated_at``.
-
-        ``updates`` may contain any of :data:`EDITABLE_TASK_FIELDS`; ``id``,
-        ``status``, ``created_at`` and ``updated_at`` are never replaced
-        (except ``updated_at``, bumped to now). Unknown fields and invalid
-        values raise a ``ValueError``; an unknown ``task_id`` returns ``None``
-        (mirroring :meth:`update_status`). Writes go through the same lock
-        and atomic-replace path as the other mutators.
-        """
         if not isinstance(updates, dict):
             raise TypeError("updates must be a dict of task fields")
         validate_task_updates(updates)
@@ -520,19 +518,9 @@ class BacklogStore(ABC):
             await self._write(store)
             return task
 
-    # ------------------------------------------------------------------ #
-    # Internal task helpers                                               #
-    # ------------------------------------------------------------------ #
-
     async def _update_entry(
         self, task_id: str, mutate: Callable[[dict[str, Any]], None]
     ) -> Task | None:
-        """Mutate one stored task under the lock and persist it.
-
-        ``mutate`` receives the stored dict for ``task_id`` and changes it in
-        place; ``updated_at`` is bumped after it runs. An unknown ``task_id``
-        returns ``None`` without writing anything.
-        """
         async with self._lock:
             store = await self._read()
             entry = self._entry_by_id(store, task_id)
@@ -546,27 +534,30 @@ class BacklogStore(ABC):
 
     @staticmethod
     def _entry_by_id(store: dict[str, Any], task_id: str) -> Any:
-        """The stored dict for ``task_id``, or ``None`` when it is absent."""
         for entry in store["tasks"]:
             if entry["id"] == task_id:
                 return entry
         return None
 
-    @staticmethod
-    def _to_task(entry: dict[str, Any]) -> Task:
-        """Validate a stored dictionary back into a Task, skipping corrupt rows."""
-        try:
-            return Task.model_validate(entry)
-        except ValidationError:
-            return Task(
-                id=str(entry.get("id", "<unknown>")),
-                title="<unparsable task>",
-                description="<unparsable task>",
-                status=TaskStatus.FAILED,
-            )
+
+class IssueBacklogBase(BacklogStore):
+    """Base for issue-level providers (Jira, GitHub, GitLab).
+
+    Issue providers store engine state via an abstract interface so that Jira
+    (issue property) and GitHub/GitLab (hidden body marker) can share the same
+    retry/blocked lease logic.
+    """
+
+    @abstractmethod
+    async def get_engine_state(self, issue_id: str) -> dict[str, Any]:
+        """Return engine-managed state for ``issue_id`` (may be empty)."""
+
+    @abstractmethod
+    async def put_engine_state(self, issue_id: str, state: dict[str, Any]) -> None:
+        """Persist engine-managed state for ``issue_id``."""
 
 
-class JSONBacklog(BacklogStore):
+class JSONBacklog(DocumentBacklogStore):
     """A backlog stored in a single JSON document on disk."""
 
     def __init__(
@@ -586,16 +577,7 @@ class JSONBacklog(BacklogStore):
         return snapshot_paths_for(self.path, count=self.snapshot_count)
 
     async def snapshot(self) -> None:
-        """Copy the current store to a rotating snapshot (``backlog.json.bak``).
-
-        Called before every agent run and on daemon startup so a bad write to
-        the backlog (a hostile agent, a half-written file, an accidental
-        manual edit) can always be rolled back to the newest valid snapshot.
-        The newest snapshot is always ``<backlog>.bak``; existing snapshots
-        are rotated up by one index and the oldest beyond ``snapshot_count``
-        is dropped. A missing backlog is a no-op and a failure is logged
-        without raising, so snapshotting can never break a cycle.
-        """
+        """Copy the current store to a rotating snapshot (``backlog.json.bak``)."""
         if not self.path.exists() or self.snapshot_count <= 0:
             return
         async with self._lock:
@@ -608,14 +590,6 @@ class JSONBacklog(BacklogStore):
                 logger.warning("Could not snapshot backlog at %s: %s", self.path, exc)
 
     async def _read(self) -> dict[str, Any]:
-        """Load the store from disk, tolerating a missing or corrupt file.
-
-        A missing file yields an empty store. A corrupt file (unparseable,
-        not a JSON object, or missing a ``tasks`` list) falls back to the
-        newest valid snapshot when one exists — restoring it in place and
-        preserving the corrupt file under a ``.corrupt-<timestamp>`` name —
-        and to an empty store otherwise.
-        """
         if not self.path.exists():
             return {"tasks": []}
         try:
@@ -627,22 +601,11 @@ class JSONBacklog(BacklogStore):
             if restored is not None:
                 return restored
             if data is None:
-                # Only an unparseable file is set aside; a valid JSON
-                # document of the wrong shape stays in place (a hand edit
-                # to fix, not an accident to hide).
                 self._preserve_corrupt_file()
             return {"tasks": []}
         return {"tasks": data["tasks"]}
 
     async def _restore_from_snapshot(self) -> dict[str, Any] | None:
-        """Return the newest valid snapshot's store, or ``None`` when none exists.
-
-        When a valid snapshot is found, the corrupt backlog is preserved
-        under a ``.corrupt-<timestamp>`` name and the snapshot is restored as
-        the current backlog (rewritten atomically) so later reads see valid
-        content. A failure to persist the restored store is logged and the
-        store is still returned for this read.
-        """
         for snapshot in self.snapshot_paths:
             if not snapshot.is_file():
                 continue
@@ -667,7 +630,6 @@ class JSONBacklog(BacklogStore):
         return None
 
     def _preserve_corrupt_file(self) -> None:
-        """Rename the corrupt backlog aside so nothing is silently discarded."""
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
         corrupt_path = self.path.with_name(f"{self.path.name}.corrupt-{timestamp}")
         try:
@@ -677,42 +639,51 @@ class JSONBacklog(BacklogStore):
             logger.warning("Corrupt backlog at %s could not be preserved", self.path)
 
     def _rotate_snapshots(self) -> None:
-        """Shift existing snapshots up by one index, dropping the oldest."""
         paths = self.snapshot_paths
         for index in range(len(paths) - 1, 0, -1):
             if paths[index - 1].exists():
                 os.replace(paths[index - 1], paths[index])
 
     def _write_snapshot(self, store: dict[str, Any]) -> None:
-        """Persist ``store`` to the newest snapshot slot atomically."""
         self._write_store(self.snapshot_paths[0], store)
 
     async def _write(self, store: dict[str, Any]) -> None:
-        """Atomically persist the store (temp file + rename)."""
         self._write_store(self.path, store)
 
     @staticmethod
     def _write_store(path: Path, store: dict[str, Any]) -> None:
-        """Atomically persist ``store`` to ``path`` (temp file + rename)."""
         atomic_write_text(
             path,
             json.dumps(store, indent=2, ensure_ascii=False) + "\n",
         )
 
 
-def open_backlog(config: ForgeoConfig) -> BacklogStore:
-    """The task provider selected by ``config``."""
-    if config.backlog_is_jira:
+def _provider_factory(config: ForgeoConfig) -> BacklogStore:
+    provider = config.effective_backlog_provider
+    if provider == "jira":
         from forgeo.backlog_jira import JiraBacklog
 
         assert config.jira is not None
         return JiraBacklog(str(config.backlog), config.jira, output_cap=config.agent_response_lines)
-    if config.backlog_is_url:
-        # Imported here: the HTTP backend builds on BacklogStore, so importing
-        # it at module level would close an import cycle.
+    if provider == "github":
+        from forgeo.backlog_github import GithubBacklog
+
+        assert config.github is not None
+        return GithubBacklog(str(config.backlog), config.github, output_cap=config.agent_response_lines)
+    if provider == "gitlab":
+        from forgeo.backlog_gitlab import GitlabBacklog
+
+        assert config.gitlab is not None
+        return GitlabBacklog(str(config.backlog), config.gitlab, output_cap=config.agent_response_lines)
+    if provider == "http":
         from forgeo.backlog_http import HttpBacklog
 
         return HttpBacklog(
             str(config.backlog), auth=config.backlog_auth, output_cap=config.agent_response_lines
         )
     return JSONBacklog(Path(config.backlog), output_cap=config.agent_response_lines)
+
+
+def open_backlog(config: ForgeoConfig) -> BacklogStore:
+    """The task provider selected by ``config`` via registry."""
+    return _provider_factory(config)

@@ -57,6 +57,13 @@ DEFAULT_RUN_HISTORY_KEEP = 2000
 #: Anything else is treated as a filesystem path.
 _URL_SCHEMES = ("http://", "https://")
 
+#: All backlog providers Forgeo knows about.
+PROVIDER_CHOICES: tuple[str, ...] = ("file", "http", "jira", "github", "gitlab")
+PROVIDER_LITERAL = Literal["auto", "file", "http", "jira", "github", "gitlab"]
+REMOTE_PROVIDERS: frozenset[str] = frozenset({"http", "jira", "github", "gitlab"})
+ISSUE_PROVIDERS: frozenset[str] = frozenset({"jira", "github", "gitlab"})
+DOCUMENT_PROVIDERS: frozenset[str] = frozenset({"file", "http"})
+
 
 def is_url(value: object) -> bool:
     """True when ``value`` is a string pointing at an ``http(s)`` endpoint."""
@@ -482,6 +489,179 @@ class JiraBacklogConfig(BaseModel):
         return value
 
 
+# ------------------------------------------------------------------ #
+# GitHub / GitLab shared base                                       #
+# ------------------------------------------------------------------ #
+
+
+class GithubAuth(BaseModel):
+    """PAT authentication for GitHub REST API."""
+
+    token_env: str
+
+    @field_validator("token_env")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+
+class GitlabAuth(BaseModel):
+    """PAT authentication for GitLab REST API."""
+
+    token_env: str
+
+    @field_validator("token_env")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+
+class GithubWorkflow(BaseModel):
+    """Workflow mapping for GitHub issues.
+
+    GitHub issues have states ``open`` / ``closed``; blocked/failed are
+    represented by labels. ``open_statuses`` is kept for symmetry but not
+    used; ``completed_state`` defaults to ``closed``.
+    """
+
+    open_statuses: list[str] = Field(default_factory=lambda: ["open"])
+    open_status: str = "open"
+    running_status: str | None = None
+    blocked_status: str | None = None
+    completed_status: str = "closed"
+    failed_status: str | None = None
+
+
+class GitlabWorkflow(BaseModel):
+    """Workflow mapping for GitLab issues.
+
+    GitLab issues have states ``opened`` / ``closed``.
+    """
+
+    open_statuses: list[str] = Field(default_factory=lambda: ["opened"])
+    open_status: str = "opened"
+    running_status: str | None = None
+    blocked_status: str | None = None
+    completed_status: str = "closed"
+    failed_status: str | None = None
+
+
+class GithubFieldMapping(BaseModel):
+    """Optional field mappings for GitHub issues."""
+
+    acceptance_criteria: str | None = None
+    dependencies: str | None = None
+    files_to_modify: str | None = None
+    agent_command: str | None = None
+    agent_timeout_seconds: str | None = None
+    run_at: str | None = None
+    retries_left: str | None = None
+
+    @field_validator(
+        "acceptance_criteria",
+        "dependencies",
+        "files_to_modify",
+        "agent_command",
+        "agent_timeout_seconds",
+        "run_at",
+        "retries_left",
+    )
+    @classmethod
+    def _field_names_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("field names must not be blank")
+        return value
+
+
+class GitlabFieldMapping(BaseModel):
+    """Optional field mappings for GitLab issues."""
+
+    acceptance_criteria: str | None = None
+    dependencies: str | None = None
+    files_to_modify: str | None = None
+    agent_command: str | None = None
+    agent_timeout_seconds: str | None = None
+    run_at: str | None = None
+    retries_left: str | None = None
+
+    @field_validator(
+        "acceptance_criteria",
+        "dependencies",
+        "files_to_modify",
+        "agent_command",
+        "agent_timeout_seconds",
+        "run_at",
+        "retries_left",
+    )
+    @classmethod
+    def _field_names_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("field names must not be blank")
+        return value
+
+
+class GithubBacklogConfig(BaseModel):
+    """GitHub-specific settings for an issue backlog."""
+
+    auth: GithubAuth
+    repo: str
+    label_prefix: str = "forgeo"
+    property_key: str = "forgeo"
+    page_size: int = Field(default=30, ge=1, le=100)
+    max_issues: int = Field(default=1000, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0)
+    claim_timeout_seconds: float = Field(default=86400, gt=0)
+    workflow: GithubWorkflow = Field(default_factory=GithubWorkflow)
+    fields: GithubFieldMapping = Field(default_factory=GithubFieldMapping)
+
+    @field_validator("repo", "label_prefix", "property_key")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("GitHub configuration values must not be blank")
+        return value
+
+    @field_validator("label_prefix", "property_key")
+    @classmethod
+    def _safe_identifier(cls, value: str) -> str:
+        if any(character.isspace() for character in value):
+            raise ValueError("labels and property keys must not contain whitespace")
+        return value
+
+
+class GitlabBacklogConfig(BaseModel):
+    """GitLab-specific settings for an issue backlog."""
+
+    auth: GitlabAuth
+    repo: str
+    label_prefix: str = "forgeo"
+    property_key: str = "forgeo"
+    page_size: int = Field(default=30, ge=1, le=100)
+    max_issues: int = Field(default=1000, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0)
+    claim_timeout_seconds: float = Field(default=86400, gt=0)
+    workflow: GitlabWorkflow = Field(default_factory=GitlabWorkflow)
+    fields: GitlabFieldMapping = Field(default_factory=GitlabFieldMapping)
+
+    @field_validator("repo", "label_prefix", "property_key")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("GitLab configuration values must not be blank")
+        return value
+
+    @field_validator("label_prefix", "property_key")
+    @classmethod
+    def _safe_identifier(cls, value: str) -> str:
+        if any(character.isspace() for character in value):
+            raise ValueError("labels and property keys must not contain whitespace")
+        return value
+
+
 class ForgeoConfig(BaseModel):
     """Everything needed to run one forgeo on one repository.
 
@@ -586,10 +766,12 @@ class ForgeoConfig(BaseModel):
     repo: Path = Field(default=Path("."))
     interval_minutes: int = Field(default=60, ge=1)
     backlog: str | Path = Field(default=Path("backlog.json"))
-    backlog_provider: Literal["auto", "file", "http", "jira"] = "auto"
+    backlog_provider: PROVIDER_LITERAL = "auto"
     state_dir: Path | None = None
     backlog_auth: BacklogAuth | None = None
     jira: JiraBacklogConfig | None = None
+    github: GithubBacklogConfig | None = None
+    gitlab: GitlabBacklogConfig | None = None
     blocker_file: Path = Field(default=Path("BLOCKER.md"))
     agent_command: str | list[str]
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
@@ -689,13 +871,20 @@ class ForgeoConfig(BaseModel):
         return is_url(self.backlog)
 
     @property
-    def effective_backlog_provider(self) -> Literal["file", "http", "jira"]:
+    def effective_backlog_provider(self) -> Literal["file", "http", "jira", "github", "gitlab"]:
         """The provider selected by explicit config or legacy inference."""
         if self.backlog_provider != "auto":
             return self.backlog_provider
         if self.jira is not None:
             return "jira"
-        return "http" if self.backlog_is_url else "file"
+        if self.github is not None:
+            return "github"
+        if self.gitlab is not None:
+            return "gitlab"
+        value: Literal["file", "http", "jira", "github", "gitlab"] = (
+            "http" if self.backlog_is_url else "file"
+        )
+        return value
 
     @property
     def backlog_is_jira(self) -> bool:
@@ -703,9 +892,21 @@ class ForgeoConfig(BaseModel):
         return self.effective_backlog_provider == "jira"
 
     @property
+    def backlog_is_github(self) -> bool:
+        return self.effective_backlog_provider == "github"
+
+    @property
+    def backlog_is_gitlab(self) -> bool:
+        return self.effective_backlog_provider == "gitlab"
+
+    @property
     def backlog_is_remote(self) -> bool:
         """True when the backlog has no local task document."""
-        return self.effective_backlog_provider in ("http", "jira")
+        return self.effective_backlog_provider in REMOTE_PROVIDERS
+
+    @property
+    def backlog_is_issue_provider(self) -> bool:
+        return self.effective_backlog_provider in ISSUE_PROVIDERS
 
     @model_validator(mode="after")
     def _docker_requires_image(self) -> ForgeoConfig:
@@ -716,7 +917,7 @@ class ForgeoConfig(BaseModel):
                 "no_changes_exit_code must differ from blocked_exit_code"
             )
         provider = self.effective_backlog_provider
-        if provider in ("http", "jira") and not self.backlog_is_url:
+        if provider in REMOTE_PROVIDERS and not self.backlog_is_url:
             raise ValueError(
                 f"backlog must be an http:// or https:// URL when backlog_provider is "
                 f"{provider!r}"
@@ -736,5 +937,19 @@ class ForgeoConfig(BaseModel):
             raise ValueError(
                 "jira configuration is only valid when backlog_provider is 'jira' "
                 "or 'auto' with a Jira backlog"
+            )
+        if provider == "github" and self.github is None:
+            raise ValueError("github configuration is required when backlog_provider is 'github'")
+        if provider != "github" and self.github is not None:
+            raise ValueError(
+                "github configuration is only valid when backlog_provider is 'github' "
+                "or 'auto' with a GitHub backlog"
+            )
+        if provider == "gitlab" and self.gitlab is None:
+            raise ValueError("gitlab configuration is required when backlog_provider is 'gitlab'")
+        if provider != "gitlab" and self.gitlab is not None:
+            raise ValueError(
+                "gitlab configuration is only valid when backlog_provider is 'gitlab' "
+                "or 'auto' with a GitLab backlog"
             )
         return self

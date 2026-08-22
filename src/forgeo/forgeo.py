@@ -785,7 +785,7 @@ class Forgeo:
         belongs to another application, so the human is pointed at it instead
         of at a file that does not exist on this machine.
         """
-        if self.config.backlog_is_url:
+        if self.config.backlog_is_remote:
             return f", or wherever the backlog at `{self.config.backlog}` is edited."
         return (
             f", or set the status of `{task.id}` back to `OPEN` directly in "

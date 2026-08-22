@@ -22,11 +22,13 @@ paths), so `forgeo restart` is still used for those.
 | <span style="white-space: nowrap">`interval_minutes`</span> | `60` | How often Forgeo runs (≥ 1). |
 | <span style="white-space: nowrap">`branch`</span> | `main` | The single branch everything is committed to. |
 | <span style="white-space: nowrap">`remote`</span> | — | Remote to push to (e.g. `origin`); omit to only commit locally. |
-| <span style="white-space: nowrap">`backlog`</span> | `backlog.json` | The task backlog: the path of a JSON file, an HTTP endpoint serving the same document, or a Jira base URL when `backlog_provider: jira`. |
-| <span style="white-space: nowrap">`backlog_provider`</span> | `auto` | `auto` infers file/HTTP from `backlog`, or Jira when a `jira` block is present; explicitly choose `file`, `http`, or `jira` when preferred. |
+| <span style="white-space: nowrap">`backlog`</span> | `backlog.json` | The task backlog: the path of a JSON file, an HTTP endpoint serving the same document, or a base URL for `jira`/`github`/`gitlab` providers. |
+| <span style="white-space: nowrap">`backlog_provider`</span> | `auto` | `auto` infers file/HTTP from `backlog`, or `jira`/`github`/`gitlab` when the corresponding block is present; explicitly choose `file`, `http`, `jira`, `github`, or `gitlab`. |
 | <span style="white-space: nowrap">`state_dir`</span> | — | Directory for Forgeo's runtime files (locks, run history, daemon state). Remote backlogs default this to the directory of `forgeo.yaml`. |
-| <span style="white-space: nowrap">`backlog_auth`</span> | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). |
+| <span style="white-space: nowrap">`backlog_auth`</span> | — | OAuth2 client credentials for a backlog URL that requires them (see [below](#backlog_auth)). Only for `http` provider. |
 | <span style="white-space: nowrap">`jira`</span> | — | Jira REST, workflow, authentication, and custom-field settings. Required when `backlog_provider: jira`. |
+| <span style="white-space: nowrap">`github`</span> | — | GitHub REST settings. Required when `backlog_provider: github`. |
+| <span style="white-space: nowrap">`gitlab`</span> | — | GitLab REST settings. Required when `backlog_provider: gitlab`. |
 | <span style="white-space: nowrap">`blocker_file`</span> | `BLOCKER.md` | Where `BLOCKER.md` is written. Keep it outside the repo so it is never committed. |
 | <span style="white-space: nowrap">`agent_command`</span> | — | The coding agent: any shell command (string) or argv list. **Required.** |
 | <span style="white-space: nowrap">`agent_timeout_seconds`</span> | — | Optional: kill the agent after this many seconds (`null` = never). |
@@ -139,6 +141,55 @@ truth for human changes.
 | `jira.property_key` | `forgeo` | Jira issue-property key holding Forgeo engine state. |
 | `jira.workflow` | defaults | Status ids or names for open, running, blocked, completed, and failed transitions. |
 | `jira.fields` | — | Optional custom-field ids for task attributes such as acceptance criteria and dependencies. |
+
+### GitHub backlog
+
+Forgeo can read and update GitHub issues directly. Set `backlog_provider: github` and make `backlog` the GitHub API base URL. Issue numbers become task ids. Labels and a hidden JSON block in the issue body hold Forgeo's engine state.
+
+```yaml
+backlog_provider: github
+backlog: https://api.github.com
+github:
+  repo: owner/repo
+  token_env: GITHUB_TOKEN
+  label_prefix: forgeo
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `github.repo` | — | Required owner/repo. |
+| `github.auth` | — | Required PAT env var `token_env`. |
+| `github.label_prefix` | `forgeo` | Prefix for running/blocked/failed labels. |
+| `github.property_key` | `forgeo` | Marker key for hidden body block (symmetry). |
+| `github.page_size` | `30` | Issues per page. |
+| `github.max_issues` | `1000` | Max issues read. |
+| `github.timeout_seconds` | `30` | HTTP timeout. |
+| `github.claim_timeout_seconds` | `86400` | Stale claim timeout. |
+| `github.workflow` | defaults | State/label mapping. |
+| `github.fields` | — | Optional field mappings. |
+
+### GitLab backlog
+
+```yaml
+backlog_provider: gitlab
+backlog: https://gitlab.example.com
+gitlab:
+  repo: group/project
+  token_env: GITLAB_TOKEN
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `gitlab.repo` | — | Required project path or numeric id. |
+| `gitlab.auth` | — | Required PAT env var `token_env`. |
+| `gitlab.label_prefix` | `forgeo` | Prefix for labels. |
+| `gitlab.property_key` | `forgeo` | Marker key. |
+| `gitlab.page_size` | `30` | Issues per page. |
+| `gitlab.max_issues` | `1000` | Max issues. |
+| `gitlab.timeout_seconds` | `30` | HTTP timeout. |
+| `gitlab.claim_timeout_seconds` | `86400` | Stale claim timeout. |
+| `gitlab.workflow` | defaults | State mapping. |
+| `gitlab.fields` | — | Optional field mappings. |
 
 ## Key details
 

@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from forgeo.backlog import BacklogStore, BacklogUnavailableError, normalize_store
+from forgeo.backlog import BacklogUnavailableError, DocumentBacklogStore, normalize_store
 from forgeo.models import BacklogAuth
 from forgeo.oauth import ClientCredentialsTokenProvider, TokenError
 
@@ -46,7 +46,7 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 _AUTH_STATUSES = (401, 403)
 
 
-class HttpBacklog(BacklogStore):
+class HttpBacklog(DocumentBacklogStore):
     """A backlog document served over HTTP by another application."""
 
     def __init__(

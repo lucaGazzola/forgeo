@@ -19,10 +19,9 @@ remote: origin                  # Git remote to push to; omit to only commit loc
 
 backlog: backlog.json           # The task backlog (created on first use). Keep it
                                 # outside the repository so it is never committed.
-# backlog_provider: auto        # auto (legacy file/HTTP inference, or Jira when
-                                # the `jira` block is present), file, http, or
-                                # jira. Set to jira when `backlog` is a Jira
-                                # base URL and configure the block below.
+# backlog_provider: auto        # auto (legacy file/HTTP inference, or Jira/GitHub/GitLab when
+                                 # the `jira`/`github`/`gitlab` block is present), file, http, jira, github, or
+                                 # gitlab. Set to github/gitlab/jira when `backlog` is the provider base URL.
 #
 # The backlog can also live in another application instead of a file: set it to
 # an http(s) URL and Forgeo reads the whole document with GET and writes it back
@@ -70,6 +69,25 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #       acceptance_criteria: customfield_10042
 #       dependencies: customfield_10043
 #       files_to_modify: customfield_10044
+#     claim_timeout_seconds: 86400
+#
+# GitHub Issues as backlog. Issue numbers become task ids. Labels hold Forgeo state;
+# engine state is stored as a hidden JSON block in the issue body.
+#   backlog_provider: github
+#   backlog: https://api.github.com
+#   github:
+#     repo: owner/repo
+#     token_env: GITHUB_TOKEN
+#     label_prefix: forgeo
+#     claim_timeout_seconds: 86400
+#
+# GitLab Issues as backlog. Issue iids become task ids. Labels + hidden body block.
+#   backlog_provider: gitlab
+#   backlog: https://gitlab.example.com
+#   gitlab:
+#     repo: group/project   # or numeric project id
+#     token_env: GITLAB_TOKEN
+#     label_prefix: forgeo
 #     claim_timeout_seconds: 86400
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.

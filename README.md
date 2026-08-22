@@ -67,8 +67,8 @@ configuration, start the daemon.
 # Backlog format), created on first use:
 #   .forgeo/backlog.json
 
-# Or: configure `backlog_provider: jira` and set `backlog` to a Jira base URL
-# (see the Jira backlog documentation).
+# Or: configure `backlog_provider: jira` / `github` / `gitlab` and set `backlog` to the provider base URL
+# (see the backlog documentation for Jira/GitHub/GitLab).
 
 # Or: add tasks from the web console once your forgeo is registered
 # (first `forgeo start` registers it automatically):
@@ -158,8 +158,8 @@ and get one aggregate overview with the central dashboard, `forgeo web`.
 
 Everything is stored in plain files: the local backlog, `forgeo.log`, and
 `BLOCKER.md` whenever a decision is pending. The backlog can also live in
-another application behind an `http(s)` URL, or in Jira. HTTP backlogs
-exchange the complete task document; Jira issues are read and transitioned
+another application behind an `http(s)` URL, or in Jira, GitHub Issues, or GitLab Issues.
+File and HTTP backlogs exchange the complete task document; Jira/GitHub/GitLab issues are read and transitioned
 individually with workflow state and engine metadata stored on the issue (see
 [Backlog format](docs/backlog.md)). A *file* backlog is snapshotted (rotating
 `backlog.json.bak` files) before every agent run and on daemon startup, and

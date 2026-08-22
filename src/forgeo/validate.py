@@ -162,11 +162,8 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     it on first use); a corrupt one is a problem. Reads only — never restores
     or writes anything, unlike the backlog's own corrupt-file recovery.
     """
-    if config.backlog_is_jira:
-        _check_jira_backlog(config, report)
-        return
-    if config.backlog_is_url:
-        _check_backlog_url(config, report)
+    if config.backlog_is_remote:
+        _check_remote_backlog(config, report)
         return
     path = Path(config.backlog)
     if not path.exists():
@@ -193,31 +190,45 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
-def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
-    """Fetch a URL backlog once to prove it answers before a cycle needs it.
-
-    This is the one check that leaves the machine, and it is worth it: an
-    unreachable endpoint or a rejected client-credentials grant is exactly
-    the failure a dry run should surface, and it would otherwise only show up
-    as a failed cycle. Still read-only — a single GET, nothing is written
-    back.
-    """
+def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Fetch a remote backlog once to prove it answers before a cycle needs it."""
     try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
+        # Use validate_connection for issue providers to avoid listing all tasks twice
+        if config.backlog_is_issue_provider:
+            asyncio.run(open_backlog(config).validate_connection())
+        else:
+            tasks = asyncio.run(open_backlog(config).list_tasks())
+            report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
+            return
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
-        report.problems.append(f"backlog endpoint could not be read: {exc}")
+        provider = config.effective_backlog_provider
+        prefix = {
+            "jira": "Jira backlog could not be read",
+            "github": "GitHub backlog could not be read",
+            "gitlab": "GitLab backlog could not be read",
+            "http": "backlog endpoint could not be read",
+        }.get(provider, "backlog could not be read")
+        report.problems.append(f"{prefix}: {exc}")
         return
-    report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
+    provider = config.effective_backlog_provider
+    if provider == "jira":
+        report.notes.append(f"Jira backlog answers ({config.backlog})")
+    elif provider == "github":
+        report.notes.append(f"GitHub backlog answers ({config.backlog})")
+    elif provider == "gitlab":
+        report.notes.append(f"GitLab backlog answers ({config.backlog})")
+    else:
+        report.notes.append(f"backlog endpoint answers ({config.backlog})")
+
+
+def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Legacy alias for remote backlog check."""
+    _check_remote_backlog(config, report)
 
 
 def _check_jira_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
-    """Authenticate to Jira and verify that the configured JQL is readable."""
-    try:
-        asyncio.run(open_backlog(config).validate_connection())
-    except Exception as exc:  # noqa: BLE001 - any provider failure is reportable
-        report.problems.append(f"Jira backlog could not be read: {exc}")
-        return
-    report.notes.append(f"Jira backlog answers ({config.backlog})")
+    """Legacy alias for remote backlog check."""
+    _check_remote_backlog(config, report)
 
 
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:

@@ -31,10 +31,32 @@ from urllib.parse import quote, urlencode
 from pydantic import ValidationError
 
 from forgeo.backlog import (
-    BacklogStore,
     BacklogUnavailableError,
+    IssueBacklogBase,
     _join_output_logs,
     validate_task_updates,
+)
+from forgeo.backlog_issue_base import (
+    adf_to_plain_text,
+    plain_text_to_adf,
+)
+from forgeo.backlog_issue_base import (
+    as_nonnegative_int as _as_nonnegative_int,
+)
+from forgeo.backlog_issue_base import (
+    as_optional_float as _as_optional_float,
+)
+from forgeo.backlog_issue_base import (
+    as_optional_int as _as_optional_int,
+)
+from forgeo.backlog_issue_base import (
+    as_string_list as _as_string_list,
+)
+from forgeo.backlog_issue_base import (
+    parse_datetime as _parse_datetime,
+)
+from forgeo.backlog_issue_base import (
+    parse_optional_datetime as _parse_optional_datetime,
 )
 from forgeo.models import (
     ExecutionResult,
@@ -259,143 +281,7 @@ class JiraClient:
         )
 
 
-def plain_text_to_adf(text: str) -> dict[str, Any]:
-    """Convert plain text to the minimal Jira Cloud document format."""
-    paragraphs: list[dict[str, Any]] = []
-    for line in text.splitlines() or [""]:
-        content: list[dict[str, str]] = []
-        if line:
-            content.append({"type": "text", "text": line})
-        paragraphs.append({"type": "paragraph", "content": content})
-    return {"version": 1, "type": "doc", "content": paragraphs}
-
-
-def adf_to_plain_text(value: Any) -> str:
-    """Extract readable text from Jira Cloud's Atlassian document format."""
-    if isinstance(value, str):
-        return value
-    if not isinstance(value, dict):
-        return ""
-    lines: list[str] = []
-
-    def visit(node: Any) -> None:
-        if isinstance(node, list):
-            for item in node:
-                visit(item)
-            return
-        if not isinstance(node, dict):
-            return
-        node_type = node.get("type")
-        if node_type == "text" and isinstance(node.get("text"), str):
-            lines.append(node["text"])
-            return
-        if node_type in {"hardBreak", "paragraph", "heading", "listItem", "blockquote"}:
-            if node_type != "hardBreak":
-                before = len(lines)
-                visit(node.get("content", []))
-                if len(lines) > before and lines[-1] != "\n":
-                    lines.append("\n")
-            else:
-                lines.append("\n")
-            return
-        visit(node.get("content", []))
-
-    visit(value.get("content", []))
-    return "".join(lines).strip()
-
-
-def _parse_datetime(value: Any) -> datetime:
-    """Parse Jira's offset-bearing timestamp, falling back to current UTC."""
-    if isinstance(value, str):
-        normalized = value.replace("Z", "+00:00")
-        if normalized.endswith("+0000"):
-            normalized = normalized[:-5] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            pass
-        else:
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-    return datetime.now(UTC)
-
-
-def _parse_optional_datetime(value: Any) -> datetime | None:
-    """Parse an optional Jira date without inventing a schedule on failure."""
-    if not isinstance(value, str):
-        return None
-    normalized = value.replace("Z", "+00:00")
-    if normalized.endswith("+0000"):
-        normalized = normalized[:-5] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
-def _as_string_list(value: Any) -> list[str]:
-    """Normalize common Jira custom-field representations to strings."""
-    if isinstance(value, str):
-        return [line.strip() for line in value.splitlines() if line.strip()]
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    for item in value:
-        if isinstance(item, str) and item.strip():
-            result.append(item.strip())
-        elif isinstance(item, dict):
-            found = False
-            for key in ("value", "name", "key"):
-                candidate = item.get(key)
-                if isinstance(candidate, str) and candidate.strip():
-                    result.append(candidate.strip())
-                    found = True
-                    break
-            if not found:
-                text = adf_to_plain_text(item)
-                if text:
-                    result.extend(line.strip() for line in text.splitlines() if line.strip())
-    return result
-
-
-def _as_optional_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _as_optional_float(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _as_nonnegative_int(value: Any) -> int:
-    """Normalize provider metadata counters without invalidating the task."""
-    return max(0, _as_optional_int(value) or 0)
-
-
-class JiraBacklog(BacklogStore):
+class JiraBacklog(IssueBacklogBase):
     """A task provider backed by Jira issues and workflow transitions."""
 
     def __init__(
@@ -518,6 +404,12 @@ class JiraBacklog(BacklogStore):
             self.config.property_key,
             metadata,
         )
+
+    async def get_engine_state(self, issue_id: str) -> dict[str, Any]:
+        return await self._metadata(issue_id)
+
+    async def put_engine_state(self, issue_id: str, state: dict[str, Any]) -> None:
+        await self._save_metadata(issue_id, state)
 
     @staticmethod
     def _issue_key(issue: dict[str, Any]) -> str | None:
@@ -1083,8 +975,4 @@ class JiraBacklog(BacklogStore):
                 await self._call(self.client.update_issue, task_id, fields=fields)
             return await self.get_task(task_id)
 
-    async def _read(self) -> dict[str, Any]:
-        raise NotImplementedError("JiraBacklog does not expose a replaceable document")
 
-    async def _write(self, store: dict[str, Any]) -> None:
-        raise NotImplementedError("JiraBacklog does not expose a replaceable document")

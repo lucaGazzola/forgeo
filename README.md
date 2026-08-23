@@ -157,11 +157,17 @@ and get one aggregate overview with the central dashboard, `forgeo web`.
 | Web dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
 
 Everything is stored in plain files: the local backlog, `forgeo.log`, and
-`BLOCKER.md` whenever a decision is pending. The backlog can also live in
-another application behind an `http(s)` URL, or in Jira, GitHub Issues, or GitLab Issues.
+`BLOCKER.md` whenever a decision is pending. Backlog providers (see
+[Backlog format](docs/backlog.md)):
+
+- [JSON file](docs/backlog.md#a-json-file-backlog)
+- [HTTP endpoint](docs/backlog.md#a-backlog-over-http)
+- [Jira](docs/backlog.md#a-jira-backlog)
+- [GitHub](docs/backlog.md#a-github-backlog)
+- [GitLab](docs/backlog.md#a-gitlab-backlog)
+
 File and HTTP backlogs exchange the complete task document; Jira/GitHub/GitLab issues are read and transitioned
-individually with workflow state and engine metadata stored on the issue (see
-[Backlog format](docs/backlog.md)). A *file* backlog is snapshotted (rotating
+individually with workflow state and engine metadata stored on the issue. A *file* backlog is snapshotted (rotating
 `backlog.json.bak` files) before every agent run and on daemon startup, and
 restored automatically if it is ever found corrupt — a bad write never loses
 your tasks.

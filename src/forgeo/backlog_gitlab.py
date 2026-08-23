@@ -598,7 +598,6 @@ class GitlabBacklog(IssueBacklogBase):
             fields: dict[str, Any] = {}
             if "title" in updates:
                 fields["title"] = candidate.title
-            # body holds description + engine state; update when any relevant field changes
             if any(k in updates for k in ("description", "acceptance_criteria", "dependencies", "files_to_modify", "agent_command", "agent_timeout_seconds", "run_at", "retries_left")):
                 state = await self._metadata(task_id)
                 state.update(
@@ -612,11 +611,6 @@ class GitlabBacklog(IssueBacklogBase):
                         "retries_left": candidate.retries_left,
                     }
                 )
-                visible = candidate.description
-                new_body = embed_engine_state(visible, state)
-                fields["description"] = new_body
-            elif "description" in updates:
-                state = await self._metadata(task_id)
                 fields["description"] = embed_engine_state(candidate.description, state)
             if fields:
                 await self._call(self.client.update_issue, iid, fields)

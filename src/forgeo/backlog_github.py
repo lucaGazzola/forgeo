@@ -242,11 +242,12 @@ class GithubBacklog(IssueBacklogBase):
         body = issue.get("body") if isinstance(issue.get("body"), str) else ""
         _, visible = extract_engine_state(body)
         new_body = embed_engine_state(visible, state)
-        number = int(issue.get("number") or issue_id)
-        try:
-            number = int(issue.get("number") or 0) or int(issue_id)
-        except ValueError:
-            number = int(str(issue.get("number") or 0))
+        number = self._issue_number(issue)
+        if number is None:
+            try:
+                number = int(issue_id)
+            except ValueError:
+                return
         await self._call(self.client.update_issue, number, {"body": new_body})
 
     async def _metadata(self, issue_id: str) -> dict[str, Any]:
@@ -624,7 +625,7 @@ class GithubBacklog(IssueBacklogBase):
             fields: dict[str, Any] = {}
             if "title" in updates:
                 fields["title"] = candidate.title
-            if "description" in updates or any(k in updates for k in ("acceptance_criteria", "dependencies", "files_to_modify", "agent_command", "agent_timeout_seconds", "run_at", "retries_left")):
+            if any(k in updates for k in ("description", "acceptance_criteria", "dependencies", "files_to_modify", "agent_command", "agent_timeout_seconds", "run_at", "retries_left")):
                 state = await self._metadata(task_id)
                 state.update(
                     {
@@ -637,18 +638,7 @@ class GithubBacklog(IssueBacklogBase):
                         "retries_left": candidate.retries_left,
                     }
                 )
-                body_visible = candidate.description
-                new_body = embed_engine_state(body_visible, state)
-                fields["body"] = new_body
-                # Save state also via put_engine_state to keep marker in sync (body already has it)
-                # but we already embed; no extra save needed unless we want consistency
-            elif "description" in updates:
-                state = await self._metadata(task_id)
-                body_visible = candidate.description
-                fields["body"] = embed_engine_state(body_visible, state)
+                fields["body"] = embed_engine_state(candidate.description, state)
             if fields:
                 await self._call(self.client.update_issue, number, fields)
-                # If body updated, state already persisted via body; if not, persist state
-                if "body" not in fields:
-                    pass
             return await self.get_task(task_id)

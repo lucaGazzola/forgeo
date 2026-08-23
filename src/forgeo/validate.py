@@ -221,16 +221,6 @@ def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> Non
         report.notes.append(f"backlog endpoint answers ({config.backlog})")
 
 
-def _check_backlog_url(config: ForgeoConfig, report: ValidationReport) -> None:
-    """Legacy alias for remote backlog check."""
-    _check_remote_backlog(config, report)
-
-
-def _check_jira_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
-    """Legacy alias for remote backlog check."""
-    _check_remote_backlog(config, report)
-
-
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:
     """A configured context file that is missing or unreadable is a warning.
 

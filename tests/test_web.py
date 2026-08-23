@@ -249,7 +249,7 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
     while time.monotonic() < deadline:
         if predicate():
             return True
-        time.sleep(0.1)
+        time.sleep(0.02)
     return False
 
 

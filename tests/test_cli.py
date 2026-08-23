@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -115,7 +116,7 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
     while time.monotonic() < deadline:
         if predicate():
             return True
-        time.sleep(0.1)
+        time.sleep(0.02)
     return False
 
 
@@ -203,12 +204,9 @@ def test_once_missing_config_offers_setup(monkeypatch, tmp_path):
 
 def test_parser_help_lists_once(capsys):
     build_parser().print_help()
-    assert "once" in capsys.readouterr().out
-
-
-def test_parser_help_lists_run(capsys):
-    build_parser().print_help()
-    assert "run" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    for cmd in ("once", "run", "status", "validate", "stop", "restart"):
+        assert cmd in out
 
 
 def test_parser_requires_task_for_run():
@@ -324,11 +322,6 @@ def test_run_does_not_register_instance(git_repo, tmp_path, monkeypatch, capsys)
 
     assert cmd_run(run_args(config_path, "SELF-012")) == 0
     assert load_registry() == {}
-
-
-def test_parser_help_lists_status(capsys):
-    build_parser().print_help()
-    assert "status" in capsys.readouterr().out
 
 
 def test_backlog_status_counts_empty():
@@ -574,11 +567,6 @@ def write_validate_config(path: Path, **overrides) -> None:
     fields.update(overrides)
     body = "".join(f"{key}: {value}\n" for key, value in fields.items())
     path.write_text(body, encoding="utf-8")
-
-
-def test_parser_help_lists_validate(capsys):
-    build_parser().print_help()
-    assert "validate" in capsys.readouterr().out
 
 
 def test_validate_healthy_reports_ready(git_repo, tmp_path, capsys):
@@ -865,13 +853,6 @@ def test_validate_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     assert cmd_validate(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
     assert "Unknown instance" in capsys.readouterr().out
-
-
-def test_parser_help_lists_stop_and_restart(capsys):
-    build_parser().print_help()
-    out = capsys.readouterr().out
-    assert "stop" in out
-    assert "restart" in out
 
 
 def test_stop_not_running(git_repo, tmp_path, monkeypatch, capsys):
@@ -1304,7 +1285,7 @@ def test_restart_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, ca
 
 
 def test_two_instances_stay_fully_independent(
-    git_repo, tmp_path, monkeypatch, capsys
+    git_repo, git_template, tmp_path, monkeypatch, capsys
 ):
     """Two registered instances with configs in different directories keep every
     lock file, log, backlog, and runs.jsonl fully independent, and concurrent
@@ -1313,13 +1294,7 @@ def test_two_instances_stay_fully_independent(
     monkeypatch.setenv("FORGEO_REGISTRY", str(registry))
 
     repo_b = tmp_path / "repo-b"
-    repo_b.mkdir()
-    git(repo_b, "init", "-b", "main")
-    git(repo_b, "config", "user.email", "forgeo@test.local")
-    git(repo_b, "config", "user.name", "Forgeo Test")
-    (repo_b / "app.py").write_text("def answer():\n    return 0\n", encoding="utf-8")
-    git(repo_b, "add", "-A")
-    git(repo_b, "commit", "-m", "initial")
+    shutil.copytree(git_template, repo_b)
 
     dir_a = tmp_path / "inst-a"
     dir_b = tmp_path / "inst-b"

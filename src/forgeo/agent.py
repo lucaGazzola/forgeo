@@ -206,7 +206,26 @@ class ShellAgent(BaseAgent):
         except TimeoutError:
             timed_out = True
             _kill_process_group(proc)
-            await proc.wait()
+            # ``proc.wait()`` waits for both process exit *and* pipe closure
+            # (see ``BaseSubprocessTransport._try_finish``).  A grandchild that
+            # called ``setsid()`` and holds the write end of the pipe keeps it
+            # open forever, so the wait would hang past the drain deadline.
+            # Bound it by ``drain_timeout_seconds`` and force-close the
+            # transport if it still hangs.
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=self.drain_timeout_seconds)
+            except TimeoutError:
+                try:
+                    proc._transport.close()  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001, S110 - close must not fail the task
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=1.0)
+                except TimeoutError:
+                    logs.append(
+                        f"[{self.name}] Process did not exit within "
+                        f"{self.drain_timeout_seconds:g}s after kill; proceeding."
+                    )
         # Always finish draining so lines already written (and any residual
         # after kill) are captured before we build the result. Bounded: a
         # grandchild that escaped the process group (daemonized agent, docker
@@ -215,6 +234,11 @@ class ShellAgent(BaseAgent):
         try:
             await asyncio.wait_for(readers, timeout=self.drain_timeout_seconds)
         except TimeoutError:
+            readers.cancel()
+            try:
+                await readers
+            except asyncio.CancelledError:
+                pass
             logs.append(
                 f"[{self.name}] Output streams stayed open beyond "
                 f"{self.drain_timeout_seconds:g}s; proceeding without them."

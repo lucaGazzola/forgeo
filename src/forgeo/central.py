@@ -1294,7 +1294,7 @@ class CentralWebServer:
             return False
         self._httpd = httpd
         thread = threading.Thread(
-            target=httpd.serve_forever,
+            target=lambda: httpd.serve_forever(poll_interval=0.05),
             name="forgeo-central-web",
             daemon=True,
         )

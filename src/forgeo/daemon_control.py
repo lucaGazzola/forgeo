@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 STOP_TIMEOUT_SECONDS = 600.0
 START_TIMEOUT_SECONDS = 15.0
-_POLL_SECONDS = 0.5
+_POLL_SECONDS = 0.05
 
 
 class DaemonError(Exception):

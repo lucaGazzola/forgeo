@@ -5,6 +5,7 @@ used across suites."""
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import threading
 from collections.abc import Callable
@@ -49,17 +50,27 @@ def git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-@pytest.fixture
-def git_repo(tmp_path: Path) -> Path:
-    """A fresh git repository on ``main`` with one committed file."""
-    repo = tmp_path / "repo"
+@pytest.fixture(scope="session")
+def git_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A template git repo built once per session and copied for each test."""
+    template = tmp_path_factory.mktemp("git-template")
+    repo = template / "repo"
     repo.mkdir()
-    git(repo, "init", "-b", "main")
+    git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "forgeo@test.local")
     git(repo, "config", "user.name", "Forgeo Test")
     (repo / "app.py").write_text("def answer():\n    return 42\n", encoding="utf-8")
     git(repo, "add", "-A")
-    git(repo, "commit", "-m", "initial")
+    git(repo, "commit", "-q", "-m", "initial")
+    return repo
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path, git_template: Path) -> Path:
+    """A fresh git repository on ``main`` with one committed file (copied)."""
+    repo = tmp_path / "repo"
+    shutil.copytree(git_template, repo, symlinks=False)
+    # Make the copy writable (git objects may be read-only).
     return repo
 
 
@@ -161,7 +172,9 @@ class BacklogServer:
                 self.end_headers()
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=lambda: self._server.serve_forever(poll_interval=0.05), daemon=True
+        )
 
     @property
     def url(self) -> str:

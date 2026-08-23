@@ -109,8 +109,6 @@ class GithubClient:
             raise GithubRequestError(
                 f"{method} {request.full_url} returned a body that is not JSON: {exc}"
             ) from exc
-        # For pagination, caller may need to inspect Link header; stash via attribute?
-        # Simple: if data is list, return list, caller handles pagination via query
         return data
 
     def search_issues(
@@ -149,8 +147,6 @@ class GithubClient:
         self._request("POST", path, payload={"body": body})
 
     def delete_issue(self, issue_number: int) -> None:
-        # GitHub does not support deleting issues via API; we close them.
-        # For real provider, caller will handle delete via close.
         repo = self.config.repo
         path = f"/repos/{quote(repo, safe='')}/issues/{issue_number}"
         self._request("PATCH", path, payload={"state": "closed"})
@@ -294,7 +290,7 @@ class GithubBacklog(IssueBacklogBase):
             return TaskStatus.OPEN
         return None
 
-    async def _task_from_issue(self, issue: dict[str, Any], *, include_metadata: bool = False) -> Task | None:
+    async def _task_from_issue(self, issue: dict[str, Any]) -> Task | None:
         number = self._issue_number(issue)
         if number is None:
             return None
@@ -348,7 +344,7 @@ class GithubBacklog(IssueBacklogBase):
         issue = await self._get_issue(task_id)
         if issue is None:
             return None
-        return await self._task_from_issue(issue, include_metadata=True)
+        return await self._task_from_issue(issue)
 
     async def validate_connection(self) -> None:
         await self._search_all()

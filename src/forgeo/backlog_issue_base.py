@@ -61,25 +61,7 @@ def adf_to_plain_text(value: Any) -> str:
     return "".join(lines).strip()
 
 
-def parse_datetime(value: Any) -> datetime:
-    if isinstance(value, str):
-        normalized = value.replace("Z", "+00:00")
-        if normalized.endswith("+0000"):
-            normalized = normalized[:-5] + "+00:00"
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            pass
-        else:
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-    return datetime.now(UTC)
-
-
-def parse_optional_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
+def _parse_iso_datetime(value: str) -> datetime | None:
     normalized = value.replace("Z", "+00:00")
     if normalized.endswith("+0000"):
         normalized = normalized[:-5] + "+00:00"
@@ -90,6 +72,20 @@ def parse_optional_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def parse_datetime(value: Any) -> datetime:
+    if isinstance(value, str):
+        parsed = _parse_iso_datetime(value)
+        if parsed is not None:
+            return parsed
+    return datetime.now(UTC)
+
+
+def parse_optional_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    return _parse_iso_datetime(value)
 
 
 def as_string_list(value: Any) -> list[str]:
@@ -184,7 +180,4 @@ def extract_engine_state(body: str | None) -> tuple[dict[str, Any], str]:
     return state, visible
 
 
-def strip_engine_state(body: str | None) -> str:
-    """Visible body without forgeo marker."""
-    _, visible = extract_engine_state(body)
-    return visible
+

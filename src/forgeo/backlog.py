@@ -108,13 +108,12 @@ def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | 
     ``0``/negative = persist nothing).
     """
 
-    prefixes = ("[stdout]", "[stderr]")
-    out = [
-        line[len(prefix) + 1 :]
-        for line in result.output_logs
-        for prefix in prefixes
-        if line.startswith(prefix)
-    ]
+    out: list[str] = []
+    for line in result.output_logs:
+        for prefix in ("[stdout]", "[stderr]"):
+            if line.startswith(prefix):
+                out.append(line[len(prefix) + 1 :])
+                break
     if cap is not None:
         if cap <= 0:
             return None

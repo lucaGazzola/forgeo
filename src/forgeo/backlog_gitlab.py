@@ -268,7 +268,7 @@ class GitlabBacklog(IssueBacklogBase):
             return TaskStatus.OPEN
         return None
 
-    async def _task_from_issue(self, issue: dict[str, Any], *, include_metadata: bool = False) -> Task | None:
+    async def _task_from_issue(self, issue: dict[str, Any]) -> Task | None:
         iid = self._issue_iid(issue)
         if iid is None:
             return None
@@ -319,7 +319,7 @@ class GitlabBacklog(IssueBacklogBase):
         issue = await self._get_issue(task_id)
         if issue is None:
             return None
-        return await self._task_from_issue(issue, include_metadata=True)
+        return await self._task_from_issue(issue)
 
     async def validate_connection(self) -> None:
         await self._search_all()
@@ -563,7 +563,7 @@ class GitlabBacklog(IssueBacklogBase):
                     "files_to_modify": task.files_to_modify,
                 },
             ),
-            "labels": self.config.label_prefix,
+            "labels": [self.config.label_prefix],
         }
         async with self._lock:
             created = await self._call(self.client.create_issue, fields)

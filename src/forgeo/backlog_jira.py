@@ -598,7 +598,6 @@ class JiraBacklog(IssueBacklogBase):
                 task.id,
                 add=[self._labels["running"]],
                 remove=[self._labels["blocked"], self._labels["failed"]],
-                issue=issue,
             )
             metadata = await self._metadata(task.id)
             metadata.update(
@@ -626,7 +625,7 @@ class JiraBacklog(IssueBacklogBase):
                 claimed_at = _parse_datetime(issue.get("fields", {}).get("updated"))
             if claimed_at > cutoff:
                 continue
-            await self._update_labels(key, add=[], remove=[running_label], issue=issue)
+            await self._update_labels(key, add=[], remove=[running_label])
             metadata.update({"state": TaskStatus.OPEN.value})
             metadata.pop("claimed_at", None)
             await self._save_metadata(key, metadata)
@@ -669,7 +668,6 @@ class JiraBacklog(IssueBacklogBase):
         *,
         add: list[str],
         remove: list[str],
-        issue: dict[str, Any] | None = None,
     ) -> None:
         """Apply label additions/removals without replacing unrelated labels."""
         update: list[dict[str, str]] = []
@@ -712,7 +710,6 @@ class JiraBacklog(IssueBacklogBase):
                 key,
                 add=[],
                 remove=list(self._labels.values()),
-                issue=issue,
             )
             await self._save_metadata(key, metadata)
             return await self.get_task(key)
@@ -723,7 +720,7 @@ class JiraBacklog(IssueBacklogBase):
                 metadata["failed_wait_cycles"] = 0
             metadata.pop("claimed_at", None)
             await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(key, add=[], remove=list(self._labels.values()), issue=issue)
+            await self._update_labels(key, add=[], remove=list(self._labels.values()))
             await self._save_metadata(key, metadata)
             return await self.get_task(key)
         if status is TaskStatus.BLOCKED:
@@ -735,7 +732,6 @@ class JiraBacklog(IssueBacklogBase):
                 key,
                 add=[self._labels["blocked"]],
                 remove=[self._labels["running"], self._labels["failed"]],
-                issue=issue,
             )
             await self._save_metadata(key, metadata)
             await self._transition_to(issue, self.config.workflow.blocked_status)
@@ -748,7 +744,6 @@ class JiraBacklog(IssueBacklogBase):
             key,
             add=[self._labels["failed"]],
             remove=[self._labels["running"], self._labels["blocked"]],
-            issue=issue,
         )
         await self._save_metadata(key, metadata)
         target = self.config.workflow.failed_status
@@ -840,7 +835,7 @@ class JiraBacklog(IssueBacklogBase):
                 }
             )
             await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()), issue=issue)
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self._save_metadata(task_id, metadata)
             return await self.get_task(task_id)
 
@@ -861,7 +856,7 @@ class JiraBacklog(IssueBacklogBase):
                 }
             )
             await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()), issue=issue)
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self._save_metadata(task_id, metadata)
             return await self.get_task(task_id)
 

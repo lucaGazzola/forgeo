@@ -188,6 +188,31 @@
   /* Home page                                                           */
   /* ------------------------------------------------------------------ */
 
+  function renderExternalBanner(status) {
+    var banner = document.getElementById("external-backlog-banner");
+    var createBanner = document.getElementById("external-create-banner");
+    var isIssue = Boolean(status && status.backlog_is_issue_provider && status.external_board_url);
+    var label = status && status.external_board_label ? status.external_board_label : "";
+    var url = status && status.external_board_url ? status.external_board_url : "#";
+    if (banner) {
+      banner.hidden = !isIssue;
+      var labelNode = document.getElementById("external-provider-label");
+      if (labelNode) labelNode.textContent = label;
+      var link = document.getElementById("external-board-link");
+      if (link) {
+        link.href = url;
+        link.textContent = label ? "open in " + label + " ↗" : "open board ↗";
+      }
+    }
+    if (createBanner) {
+      createBanner.hidden = !isIssue;
+      var cLabel = document.getElementById("external-create-label");
+      if (cLabel) cLabel.textContent = label;
+      var cLink = document.getElementById("external-create-link");
+      if (cLink) cLink.href = url;
+    }
+  }
+
   function renderHome(instances) {
     var list = document.getElementById("instance-list");
     var empty = document.getElementById("empty-state");
@@ -201,8 +226,22 @@
     if (empty) empty.hidden = true;
 
     instances.forEach(function (inst) {
-      var card = el("a", "instance-card", null);
-      card.href = "instances/" + encodeURIComponent(inst.name) + "/";
+      var isIssue = Boolean(inst.backlog_is_issue_provider && inst.external_board_url);
+      var card = el("div", "instance-card", null);
+      card.setAttribute("role", "link");
+      card.setAttribute("tabindex", "0");
+      var href = "instances/" + encodeURIComponent(inst.name) + "/";
+      card.addEventListener("click", function (event) {
+        if (event.target.closest("a")) return;
+        window.location.href = href;
+      });
+      card.addEventListener("keydown", function (event) {
+        if (event.target.closest("a")) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          window.location.href = href;
+        }
+      });
 
       var head = el("div", "instance-card__head");
       head.appendChild(el("span", "instance-card__name", inst.name));
@@ -245,6 +284,20 @@
       grid.appendChild(counts);
 
       card.appendChild(grid);
+      if (isIssue) {
+        var ext = el("div", "instance-card__external");
+        var link = el("a", "instance-card__external-link", "open in " + (inst.external_board_label || "board") + " ↗");
+        link.href = inst.external_board_url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.addEventListener("click", function (e) { e.stopPropagation(); });
+        ext.appendChild(link);
+        card.appendChild(ext);
+      } else if (inst.backlog_provider) {
+        var prov = el("div", "instance-card__provider");
+        prov.textContent = inst.backlog_provider + " backlog";
+        card.appendChild(prov);
+      }
       list.appendChild(card);
     });
   }
@@ -305,6 +358,18 @@
     top.appendChild(el("span", "badge badge--" + status, status));
     if (status === "FAILED" && task.retry_count) {
       top.appendChild(el("span", "badge badge--retry", "retried " + task.retry_count + "x"));
+    }
+    if (task.external_url) {
+      var ext = el("a", "task__external", "↗");
+      ext.href = task.external_url;
+      ext.target = "_blank";
+      ext.rel = "noopener";
+      ext.title = "Open in external tracker";
+      ext.setAttribute("aria-label", "Open " + task.id + " in external tracker");
+      ext.addEventListener("click", function (event) {
+        event.stopPropagation();
+      });
+      top.appendChild(ext);
     }
     card.appendChild(top);
     card.appendChild(el("h3", "task__title", task.title));
@@ -581,6 +646,20 @@
 
     var status = (task.status || "OPEN").toUpperCase();
     updateModalActions();
+
+    var externalLink = document.getElementById("task-modal-external");
+    if (externalLink) {
+      if (task.external_url) {
+        externalLink.href = task.external_url;
+        var label = instanceStatus && instanceStatus.external_board_label
+          ? "Open in " + instanceStatus.external_board_label + " ↗"
+          : "Open in external ↗";
+        externalLink.textContent = label;
+        externalLink.hidden = false;
+      } else {
+        externalLink.hidden = true;
+      }
+    }
 
     var blocked = status === "BLOCKED";
     var failed = status === "FAILED";
@@ -972,6 +1051,7 @@
     setText("meta-next", formatTime(status.next_run_at));
     setText("meta-outcome", status.last_outcome || "—");
     updateDaemonButtons();
+    renderExternalBanner(status);
   }
 
   /* ------------------------------------------------------------------ */

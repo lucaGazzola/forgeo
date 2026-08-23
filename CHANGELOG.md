@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Web console now treats `jira`/`github`/`gitlab` as a **read-mostly mirror** instead of a replacement: the home page cards show `Open in Jira/GitHub/GitLab ↗` (via `external_board_url`/`external_board_label`), the instance page shows a top banner linking to the native board, and each task card/modal links to the native issue (`external_url`). Document backlogs (`file`/`http`) keep the existing primary-editor behaviour. Creating/editing still works through the dashboard, but triage is expected in the native tracker where Forgeo-specific state (BLOCKED/FAILED reasons, `agent_response`, retry budget) is now surfaced on the mirror.
+- Central API now exposes `backlog_provider`, `backlog`, `backlog_is_issue_provider`, `external_board_url`/`external_board_label` on `GET /api/instances` and `GET /api/instances/<name>/status`, and `external_url` per task on `GET /api/instances/<name>/tasks` (+ single-task) for issue providers. Covers `https://api.github.com` → `https://github.com` and `https://…/api/v3` → web base mapping for GitHub Enterprise, and `https://jira…/issues/?jql=` / `https://gitlab…/{repo}/-/issues` board links.
+
+### Changed
+
+- `README`, `docs/backlog.md`, `docs/getting-started.md` and `docs/web-console-api.md` document the mirror vs editor split and the new `external_*` API fields.
+- `src/forgeo/central.py` deduplicates provider metadata via `_backlog_meta()` and centralises GitHub web-base handling; `instance-card` is now a `div[role=link]` to allow nested external links without invalid HTML.
+
 ## [0.9.0] - 2026-08-23
 
 ### Added

@@ -144,6 +144,11 @@ You add, remove, or reopen tasks by editing the file directly — or use the
 the task detail modal's **Edit** button updates an existing task's fields
 (`PATCH /api/instances/<name>/tasks/<id>`), while its **Delete** button
 removes an `OPEN` or `BLOCKED` task (`DELETE /api/instances/<name>/tasks/<id>`).
+For `file`/`http` backlogs this is the primary editor; for `jira`/`github`/`gitlab` the web console is a
+read-mostly **mirror** of the native tracker — a top banner links to the external board, each task card/modal
+links to the native issue (`Open in Jira/GitHub/GitLab ↗`), and the board surfaces Forgeo-specific state
+(`blocker_reason`, `failure_reason`, `agent_response`, retry budget) that the tracker does not — triage stays in
+Jira/GitHub/GitLab, Forgeo reflects it (see [Web console & HTTP API](web-console-api.md)).
 
 ### Resolving a blocked task
 

@@ -68,7 +68,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from pydantic import ValidationError
 from rich.console import Console
@@ -88,7 +88,7 @@ from forgeo.instances import (
     list_instances,
     registry_path,
 )
-from forgeo.models import ForgeoConfig, Task, TaskStatus
+from forgeo.models import ISSUE_PROVIDERS, ForgeoConfig, Task, TaskStatus
 from forgeo.paths import daemon_state_path, lock_path, runs_path
 from forgeo.runs import RunRecorder
 from forgeo.web_common import (
@@ -118,6 +118,71 @@ DEFAULT_FORGEO_CONFIG_DIR = Path.home() / ".config" / "forgeo"
 
 _HOME_PAGE = "/central/index.html"
 _INSTANCE_PAGE = "/central/instance.html"
+
+_ISSUE_PROVIDER_LABELS: dict[str, str] = {
+    "jira": "Jira",
+    "github": "GitHub",
+    "gitlab": "GitLab",
+}
+
+
+def _github_web_base(api_base: str) -> str:
+    """Derive the web base from a GitHub API base URL.
+
+    ``https://api.github.com`` → ``https://github.com``,
+    ``https://github.example.com/api/v3`` → ``https://github.example.com``,
+    otherwise the base itself when already a web URL.
+    """
+    base = api_base.rstrip("/")
+    if base.endswith("/api/v3"):
+        return base[:-7].rstrip("/")
+    if "api.github.com" in base:
+        return base.replace("api.github.com", "github.com")
+    return base
+
+
+def _external_board_url(config: ForgeoConfig | None) -> str | None:
+    """The native backlog URL for an issue provider, or ``None`` for documents."""
+    if config is None or not isinstance(config.backlog, str):
+        return None
+    provider = config.effective_backlog_provider
+    base = config.backlog.rstrip("/")
+    if provider == "jira":
+        if config.jira is None:
+            return base
+        return f"{base}/issues/?jql={quote(config.jira.jql, safe='')}"
+    if provider == "github" and config.github is not None:
+        web_base = _github_web_base(base)
+        repo = config.github.repo.strip("/")
+        return f"{web_base}/{repo}/issues"
+    if provider == "gitlab" and config.gitlab is not None:
+        repo = config.gitlab.repo.strip("/")
+        if repo.isdigit():
+            return f"{base}/-/issues"
+        return f"{base}/{repo}/-/issues"
+    return None
+
+
+def _external_issue_url(config: ForgeoConfig | None, task_id: str) -> str | None:
+    """The native issue URL for one task, or ``None`` for document providers."""
+    if config is None or not isinstance(config.backlog, str) or not task_id:
+        return None
+    provider = config.effective_backlog_provider
+    base = config.backlog.rstrip("/")
+    if provider == "jira":
+        return f"{base}/browse/{quote(task_id, safe='')}"
+    if provider == "github" and config.github is not None:
+        web_base = _github_web_base(base)
+        repo = config.github.repo.strip("/")
+        # GitHub ids are numeric; a stale WEB-### prefix is stripped for the URL.
+        issue_num = task_id.split("-")[-1] if "-" in task_id and task_id.rsplit("-", 1)[-1].isdigit() else task_id
+        return f"{web_base}/{repo}/issues/{issue_num}"
+    if provider == "gitlab" and config.gitlab is not None:
+        repo = config.gitlab.repo.strip("/")
+        if repo.isdigit():
+            return f"{base}/-/issues/{task_id}"
+        return f"{base}/{repo}/-/issues/{task_id}"
+    return None
 
 _WEB_TASK_ID_RE = re.compile(r"^WEB-(\d+)$")
 
@@ -412,7 +477,7 @@ def _task_payload(
     tasks: list[Task],
     config: ForgeoConfig | None = None,
 ) -> dict[str, Any]:
-    """Serialize a task for the API, annotating its unsatisfied dependencies.
+    """Serialize a task for the API, annotating dependencies and external links.
 
     The extra ``unsatisfied_dependencies`` field lists every dependency id
     that is not ``COMPLETED`` yet (with its current status, or ``missing``
@@ -422,6 +487,8 @@ def _task_payload(
     (``retry_budget``, the per-task ``retries_left`` override falling back to
     the config's ``failed_retry_max``) and ``retries_remaining`` so the
     console can show whether a FAILED task will be retried automatically.
+    For issue providers the payload also carries ``external_url`` pointing at
+    the native issue page.
     """
     payload = task.model_dump(mode="json")
     payload["unsatisfied_dependencies"] = unsatisfied_dependencies(tasks, task)
@@ -429,6 +496,9 @@ def _task_payload(
         budget = task.retries_left if task.retries_left is not None else config.failed_retry_max
         payload["retry_budget"] = budget
         payload["retries_remaining"] = max(0, budget - task.retry_count)
+        external = _external_issue_url(config, task.id)
+        if external is not None:
+            payload["external_url"] = external
     return payload
 
 
@@ -481,6 +551,29 @@ def _next_run(info: InstanceInfo, config: ForgeoConfig | None) -> str | None:
     return iso(estimate)
 
 
+def _backlog_meta(config: ForgeoConfig | None) -> dict[str, Any]:
+    """Provider and external URL for a config, or document defaults."""
+    if config is None:
+        return {
+            "backlog_provider": None,
+            "backlog": None,
+            "backlog_is_issue_provider": False,
+            "external_board_url": None,
+            "external_board_label": None,
+        }
+    provider = config.effective_backlog_provider
+    is_issue = provider in ISSUE_PROVIDERS
+    label = _ISSUE_PROVIDER_LABELS.get(provider) if is_issue else None
+    backlog_value = str(config.backlog)
+    return {
+        "backlog_provider": provider,
+        "backlog": backlog_value,
+        "backlog_is_issue_provider": is_issue,
+        "external_board_url": _external_board_url(config),
+        "external_board_label": label,
+    }
+
+
 def _status_payload(info: InstanceInfo) -> dict[str, Any]:
     """The per-instance status payload."""
     config = info.config
@@ -493,6 +586,7 @@ def _status_payload(info: InstanceInfo) -> dict[str, Any]:
             "pid": None,
             "last_outcome": None,
             "next_run_at": None,
+            **_backlog_meta(None),
         }
     state = _daemon_state(config)
     pid: int | None = read_lock_pid(lock_path(config))
@@ -508,6 +602,7 @@ def _status_payload(info: InstanceInfo) -> dict[str, Any]:
         "pid": pid,
         "last_outcome": _last_outcome(config),
         "next_run_at": _next_run(info, config),
+        **_backlog_meta(config),
     }
 
 
@@ -524,6 +619,7 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
             "next_run_at": None,
             "backlog_counts": {status.value: 0 for status in TaskStatus},
             "backlog_error": None,
+            **_backlog_meta(None),
         }
     tasks, backlog_error = _read_tasks_or_error(config)
     return {
@@ -535,6 +631,7 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
         "next_run_at": _next_run(info, config),
         "backlog_counts": backlog_status_counts(tasks),
         "backlog_error": backlog_error,
+        **_backlog_meta(config),
     }
 
 

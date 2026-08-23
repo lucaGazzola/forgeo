@@ -172,6 +172,12 @@ individually with workflow state and engine metadata stored on the issue. A *fil
 restored automatically if it is ever found corrupt — a bad write never loses
 your tasks.
 
+The central dashboard (`forgeo web`) mirrors every instance: for `file`/`http` it is the primary editor; for
+`jira`/`github`/`gitlab` it is a read-mostly mirror of the native tracker — each task card and its detail modal link
+to the native issue (`Open in Jira/GitHub/GitLab ↗`), a top banner links to the native board, and the board surfaces
+Forgeo-specific state the native UI does not (BLOCKED/FAILED reasons, `agent_response`, retry budget) — triage stays in
+the tracker (see [Web console & HTTP API](docs/web-console-api.md)).
+
 ## Develop
 
 ```bash

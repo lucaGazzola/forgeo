@@ -66,11 +66,20 @@ open-by-default behavior.
 
 - `GET /` — home page listing every registered instance: name, repository,
   daemon state (lock held), last outcome, next run, and per-status backlog
-  counts, each linking to its instance page.
+  counts, each linking to its instance page. For issue-backed instances
+  (`jira`/`github`/`gitlab`) the card also shows an **Open in Jira/GitHub/GitLab ↗**
+  link to the native board.
 - `GET /instances/<name>/` — one instance's page: a kanban backlog, a
   **Create** tab with a form to add tasks (including an optional *Run at*
   date/time input for a one-shot schedule), plus tabs for **logs**, **history**,
-  **blocker** and **config**. The header carries a **DAEMON** section with the
+  **blocker** and **config**. For document backlogs (`file`/`http`) this board
+  is the primary editor; for issue providers (`jira`/`github`/`gitlab`) it is a
+  read-mostly **mirror** of the native tracker: a banner at the top links to
+  the external board (`Jira`/`GitHub`/`GitLab`), each task card and its detail
+  modal carry an **Open in external ↗** link to the native issue, and the board
+  surfaces Forgeo-specific state that the native UI does not (BLOCKED/FAILED
+  reasons, `agent_response`, retry budget). Creating/editing still works via
+  the dashboard, but triage is expected in the native tool. The header carries a **DAEMON** section with the
   daemon status tag (`running`/`stopped`) and **Start**/**Stop**/**Restart**
   buttons that call `POST /api/instances/<name>/start|stop|restart`; the
   buttons reflect the current state (Start is disabled while running, Stop
@@ -152,15 +161,19 @@ outcome, next run, and backlog counts.
 curl http://127.0.0.1:8790/api/instances
 ```
 
-Each row also carries `backlog_error`: `null` normally, and the reason when
-that instance's remote backlog could not be read. Its counts are zero in that
-case — the row reports a backlog it could not reach, not an empty one. One
-unreachable provider never fails the whole listing.
+Each row also carries `backlog_provider` (`file`/`http`/`jira`/`github`/`gitlab`),
+`backlog` (path or base URL), `backlog_is_issue_provider`, and for issue
+providers `external_board_url`/`external_board_label` (the native board link
+shown on the home cards). It also carries `backlog_error`: `null` normally,
+and the reason when that instance's remote backlog could not be read. Its
+counts are zero in that case — the row reports a backlog it could not reach,
+not an empty one. One unreachable provider never fails the whole listing.
 
 ### `GET /api/instances/<name>/tasks`
 
 List every task in that instance's backlog, in creation order. Each task
-carries extra `unsatisfied_dependencies` and retry fields (see below).
+carries extra `unsatisfied_dependencies`, retry fields (see below), and for
+issue providers `external_url` (link to the native Jira/GitHub/GitLab issue).
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/tasks
@@ -400,7 +413,10 @@ Errors:
 ### `GET /api/instances/<name>/status`
 
 Daemon status: name, repo, interval, `daemon_running` (whether the instance's
-lock is held), the recorded PID, `last_outcome`, and the `next_run_at`.
+lock is held), the recorded PID, `last_outcome`, and the `next_run_at`. Also
+carries `backlog_provider`, `backlog`, `backlog_is_issue_provider`,
+`external_board_url`/`external_board_label` so the instance page can render the
+issue-provider banner and per-task external links.
 
 ```bash
 curl http://127.0.0.1:8790/api/instances/my-repo/status
@@ -414,7 +430,12 @@ curl http://127.0.0.1:8790/api/instances/my-repo/status
   "daemon_running": true,
   "pid": 4242,
   "last_outcome": "task",
-  "next_run_at": "2026-08-01T12:00:00+00:00"
+  "next_run_at": "2026-08-01T12:00:00+00:00",
+  "backlog_provider": "github",
+  "backlog": "https://api.github.com",
+  "backlog_is_issue_provider": true,
+  "external_board_url": "https://github.com/owner/repo/issues",
+  "external_board_label": "GitHub"
 }
 ```
 

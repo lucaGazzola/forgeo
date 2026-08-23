@@ -47,6 +47,14 @@
     </dl>
   </header>
 
+  <div class="external-banner" id="external-backlog-banner" hidden>
+    <span class="external-banner__text">
+      This instance’s backlog lives in <strong id="external-provider-label"></strong> —
+      triage in <a id="external-board-link" href="#" target="_blank" rel="noopener">open board ↗</a>.
+      This board is a Forgeo mirror (OPEN/BLOCKED/COMPLETED/FAILED, blocked/failed reasons, agent output).
+    </span>
+  </div>
+
   <nav class="tabs" id="tabs">
     <button class="tab is-active" data-tab="backlog" type="button">Backlog</button>
     <button class="tab" data-tab="create" type="button">Create</button>
@@ -81,6 +89,12 @@
     </div>
   </main>
   <main id="tab-create" class="tab-panel" hidden>
+    <div class="external-banner external-banner--create" id="external-create-banner" hidden>
+      <span>
+        Tasks are stored in <strong id="external-create-label"></strong>.
+        You can create here or in <a id="external-create-link" href="#" target="_blank" rel="noopener">open board ↗</a>.
+      </span>
+    </div>
     <form class="new-task" id="new-task">
       <div class="new-task__fields">
         <label class="new-task__field" for="task-title">
@@ -197,8 +211,9 @@
             History tab.
           </p>
         </section>
-        <div>
+        <div class="modal__meta-row">
           <span class="badge" id="task-modal-status"></span>
+          <a class="modal__external" id="task-modal-external" href="#" target="_blank" rel="noopener" hidden>Open in external ↗</a>
         </div>
         <p class="modal__error" id="task-modal-delete-error" hidden></p>
         <section class="modal__section" id="task-modal-description-section" hidden>

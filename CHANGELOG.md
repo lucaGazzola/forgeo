@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-23
+
+### Added
+
+- GitHub Issues and GitLab Issues task providers. Set `backlog_provider: github`
+  or `gitlab` and point `backlog:` at the API base URL
+  (`https://api.github.com` or `https://github.example.com/api/v3` for
+  Enterprise; `https://gitlab.com` or a self-hosted root for GitLab). Issue
+  numbers/`iid`s become Forgeo task ids, `open`/`opened` vs `closed` maps to
+  `OPEN`/`COMPLETED`, and `forgeo-running`/`forgeo-blocked`/`forgeo-failed`
+  labels (configurable via `label_prefix`) represent the remaining states.
+  Engine state — blocker and failure reasons, retry counters, claim time,
+  dependencies, and bounded agent output — is stored in a hidden
+  `<!-- forgeo: {...} -->` block inside the issue body/description, so the
+  visible text stays human-readable and no custom fields or issue properties
+  are required.
+- `github` and `gitlab` config blocks: `repo` (`owner/repo` or project path/id),
+  `token_env` (PAT from an environment variable, never stored in the file),
+  `label_prefix`/`property_key`, pagination, timeouts, stale-claim recovery
+  via `claim_timeout_seconds`, and optional workflow/field mappings mirroring
+  the Jira provider.
+- Shared issue-provider helpers extracted to `backlog_issue_base` and a new
+  `DocumentBacklogStore` / `IssueBacklogBase` split in `backlog.py`,
+  unifying claim, label, and engine-state handling across Jira, GitHub, and
+  GitLab. `forgeo validate` now checks any remote backlog with a
+  provider-specific message, and `config/forgeo.yaml`, the README, and the
+  backlog/configuration docs list and document all five providers
+  (`file`, `http`, `jira`, `github`, `gitlab`).
+
 ## [0.8.0] - 2026-08-21
 
 ### Added
@@ -360,7 +389,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/lucaGazzola/forgeo/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/lucaGazzola/forgeo/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/lucaGazzola/forgeo/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/lucaGazzola/forgeo/compare/v0.7.1...v0.7.2

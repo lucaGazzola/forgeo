@@ -56,6 +56,10 @@ forgeo init
 
 Guided wizard, run from your project root. Writes `forgeo.yaml` (the
 config) and a `.forgeo/` folder for the backlog, logs and blocker files.
+The wizard asks for the backlog provider (`file` for a local JSON file, or
+`github`/`gitlab`/`jira`/`http` for an external tracker — for `github` it
+auto-detects `owner/repo` from `git remote` and can persist a pasted
+`GITHUB_TOKEN` to `~/.config/forgeo/github_token_env.sh`).
 
 The base flow is then three steps: fill the backlog, check the
 configuration, start the daemon.
@@ -67,8 +71,10 @@ configuration, start the daemon.
 # Backlog format), created on first use:
 #   .forgeo/backlog.json
 
-# Or: configure `backlog_provider: jira` / `github` / `gitlab` and set `backlog` to the provider base URL
-# (see the backlog documentation for Jira/GitHub/GitLab).
+# Or: pick github/gitlab/jira in forgeo init (or configure forgeo.yaml
+# manually): set backlog_provider: github and backlog: https://api.github.com
+# with github.repo + token_env, then export GITHUB_TOKEN and run
+# forgeo validate. See backlog docs for Jira/GitHub/GitLab.
 
 # Or: add tasks from the web console once your forgeo is registered
 # (first `forgeo start` registers it automatically):

@@ -23,6 +23,8 @@ Guided first-time setup: interactively write a `forgeo.yaml`.
 | <span style="white-space: nowrap">`--config <file>`</span> | Where to write the config (default `forgeo.yaml`). |
 | <span style="white-space: nowrap">`--force`</span> | Overwrite an existing config file. |
 
+The wizard asks for: Forgeo folder, backlog provider (`file`/`github`/`gitlab`/`jira`/`http` — for `github` it auto-detects `owner/repo` from `git remote` and can persist `GITHUB_TOKEN`), coding agent command, and refactor prompt.
+
 Exit codes:
 
 - `0` — config written.

@@ -56,20 +56,29 @@ Run the guided wizard from your project root:
 forgeo init
 ```
 
-The wizard asks for three things:
+The wizard asks for:
 
 1. **Forgeo folder** — where the backlog, `BLOCKER.md` and the log live
    (default `.forgeo`). It is gitignored by default.
-2. **Coding agent command** — the bare command that launches your coding
+2. **Backlog provider** — where tasks live: `file` (local `.forgeo/backlog.json`),
+   `github` / `gitlab` / `jira` / `http`. For `github` it auto-detects
+   `owner/repo` from `git remote origin`, asks for `token_env` (default
+   `GITHUB_TOKEN`) and can persist a pasted classic PAT (`ghp_...`, scope `repo`)
+   to `~/.config/forgeo/github_token_env.sh` (600, wired to `~/.bashrc`). Same
+   for `gitlab` (`GITLAB_TOKEN`, base URL) and `jira`/`http`.
+3. **Coding agent command** — the bare command that launches your coding
    agent (default `opencode run --auto`). Forgeo appends the standard task
    prompt (which ends in `$FORGEO_TASK`) automatically, so you never type
    it. Enter a command that already references `$FORGEO_TASK` and it is
    kept verbatim.
-3. **Refactor prompt** — the instruction used when the backlog is empty; the
+4. **Refactor prompt** — the instruction used when the backlog is empty; the
    default is offered, or you can paste a custom one.
 
 `forgeo init` writes `forgeo.yaml`, creates Forgeo folder, and appends
-`<folder>/` to `.gitignore` (unless you opt out).
+`<folder>/` to `.gitignore` (unless you opt out). For `github`/`gitlab`/`jira`
+set `backlog_provider` + `backlog` URL + provider block is written automatically
+and `state_dir` is set to the Forgeo folder so runtime files stay beside the
+config.
 
 ```bash
 forgeo init --force    # overwrite an existing forgeo.yaml
@@ -77,14 +86,17 @@ forgeo init --force    # overwrite an existing forgeo.yaml
 
 ## 3. Create your first backlog
 
-The backlog is a plain JSON file (see [Backlog format](backlog.md)). Create
-the file configured as `backlog:` in your `forgeo.yaml` — by default
-`.forgeo/backlog.json`. Once Forgeo is running you can also add tasks
-from the [web console](web-console-api.md) — no file editing needed. (If your
-tasks already live in another application, `backlog:` also accepts an
-[HTTP endpoint](backlog.md#a-backlog-over-http), [Jira](backlog.md#a-jira-backlog),
-[GitHub](backlog.md#a-github-backlog) or [GitLab](backlog.md#a-gitlab-backlog)
-instead of a file.)
+If you chose `file` in the wizard, the backlog is a plain JSON file (see
+[Backlog format](backlog.md)) — by default `.forgeo/backlog.json`. Once Forgeo
+is running you can also add tasks from the [web console](web-console-api.md) — no
+file editing needed.
+
+If you chose `github`/`gitlab`/`jira`/`http` in the wizard, your `forgeo.yaml`
+already points at the provider (`backlog: https://api.github.com` etc.).
+For `github` create a classic PAT at `https://github.com/settings/tokens/new`
+(scope `repo`), `export GITHUB_TOKEN=ghp_...` (or let the wizard persist it),
+then `forgeo validate` before `forgeo start`. Same for `gitlab` (`GITLAB_TOKEN`)
+and `jira`. See [Backlog format](backlog.md) for provider details.
 
 For `jira`/`github`/`gitlab`, set `backlog_provider:` to the provider, point `backlog:` at its base URL
 (`https://jira.example.com`, `https://api.github.com` / `https://github.example.com/api/v3`,

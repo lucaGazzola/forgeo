@@ -273,7 +273,7 @@ def run_setup(
     gitlab_cfg = None
     jira_cfg = None
     state_dir = None
-    provider_hint = ""
+    github_token_env: str | None = None
 
     if provider == "github":
         detected = _detect_github_repo(root)
@@ -298,8 +298,8 @@ def run_setup(
         backlog = DEFAULT_GITHUB_API
         backlog_provider = "github"
         github_cfg = {"repo": github_repo, "auth": {"token_env": token_env}}
+        github_token_env = token_env
         state_dir = forgeo_dir
-        provider_hint = f"github:{github_repo}"
         # Offer to persist token value immediately (interactive only)
         if input_fn is None:
             if _ask_yes_no(input_fn, f"[bold]Paste GitHub token now to save to {token_env}?[/bold] (stored in ~/.config/forgeo/github_token_env.sh, 600)", default=False):
@@ -340,7 +340,6 @@ def run_setup(
         backlog_provider = "gitlab"
         gitlab_cfg = {"repo": gitlab_repo, "auth": {"token_env": token_env}}
         state_dir = forgeo_dir
-        provider_hint = f"gitlab:{gitlab_repo}"
     elif provider == "jira":
         jira_url = _ask_text(
             input_fn,
@@ -364,7 +363,6 @@ def run_setup(
         backlog_provider = "jira"
         jira_cfg = {"jql": jql, "auth": {"token_env": token_env, "scheme": "bearer"}}
         state_dir = forgeo_dir
-        provider_hint = f"jira:{jira_url}"
         out.print("[dim]Complete Jira workflow/fields in forgeo.yaml (see config/forgeo.yaml example).[/dim]")
     elif provider == "http":
         http_url = _ask_text(
@@ -378,11 +376,9 @@ def run_setup(
         backlog = http_url.strip()
         backlog_provider = "http"
         state_dir = forgeo_dir
-        provider_hint = f"http:{backlog}"
     else:
         backlog = f"{forgeo_dir}/backlog.json"
         backlog_provider = "file"
-        provider_hint = f"file:{backlog}"
 
     command = _ask_text(
         input_fn,
@@ -448,8 +444,8 @@ def run_setup(
     if provider != "file":
         backlog_display = f"{backlog_display} [{provider}]"
     next_hint = f"forgeo start --config {config_path.name}"
-    if provider == "github":
-        next_hint = f"export {github_cfg['auth']['token_env']}=ghp_... && forgeo validate --config {config_path.name} && {next_hint}"
+    if provider == "github" and github_token_env is not None:
+        next_hint = f"export {github_token_env}=ghp_... && forgeo validate --config {config_path.name} && {next_hint}"
     out.print(
         Panel.fit(
             f"[bold]Forgeo configured[/bold] in {config_path}\n"

@@ -7,15 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-24
+
 ### Added
 
+- `forgeo init` now asks for **backlog provider** (`file`/`github`/`gitlab`/`jira`/`http`). For `github` it auto-detects `owner/repo` from `git remote origin`, prompts for `token_env` (`GITHUB_TOKEN`) and can persist a pasted classic PAT (`ghp_...`, scope `repo`) to `~/.config/forgeo/github_token_env.sh` (600, wired to `~/.bashrc`). Same for `gitlab` (`GITLAB_TOKEN`, base URL) and `jira`/`http`. The wizard writes `backlog: https://api.github.com`, `backlog_provider: github`, `github: {repo, auth: {token_env}}` and `state_dir: .forgeo` automatically.
 - Web console now treats `jira`/`github`/`gitlab` as a **read-mostly mirror** instead of a replacement: the home page cards show `Open in Jira/GitHub/GitLab ↗` (via `external_board_url`/`external_board_label`), the instance page shows a top banner linking to the native board, and each task card/modal links to the native issue (`external_url`). Document backlogs (`file`/`http`) keep the existing primary-editor behaviour. Creating/editing still works through the dashboard, but triage is expected in the native tracker where Forgeo-specific state (BLOCKED/FAILED reasons, `agent_response`, retry budget) is now surfaced on the mirror.
 - Central API now exposes `backlog_provider`, `backlog`, `backlog_is_issue_provider`, `external_board_url`/`external_board_label` on `GET /api/instances` and `GET /api/instances/<name>/status`, and `external_url` per task on `GET /api/instances/<name>/tasks` (+ single-task) for issue providers. Covers `https://api.github.com` → `https://github.com` and `https://…/api/v3` → web base mapping for GitHub Enterprise, and `https://jira…/issues/?jql=` / `https://gitlab…/{repo}/-/issues` board links.
+
+### Fixed
+
+- GitHub provider now encodes `owner/repo` as two path segments (`quote` per segment, keeping `/`) instead of `quote(repo, safe='')` which produced `owner%2Frepo` and 404 on every `GET /repos/{owner%2Frepo}/issues`.
 
 ### Changed
 
 - `README`, `docs/backlog.md`, `docs/getting-started.md` and `docs/web-console-api.md` document the mirror vs editor split and the new `external_*` API fields.
 - `src/forgeo/central.py` deduplicates provider metadata via `_backlog_meta()` and centralises GitHub web-base handling; `instance-card` is now a `div[role=link]` to allow nested external links without invalid HTML.
+- `README`, `docs/getting-started.md` and `docs/cli-reference.md` document the new backlog-provider step in `forgeo init` and the `GITHUB_TOKEN` PAT setup (`https://github.com/settings/tokens/new`, scope `repo`).
 
 ## [0.9.0] - 2026-08-23
 
@@ -399,7 +407,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/lucaGazzola/forgeo/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/lucaGazzola/forgeo/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/lucaGazzola/forgeo/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/lucaGazzola/forgeo/compare/v0.7.2...v0.7.3

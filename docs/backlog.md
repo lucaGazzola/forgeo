@@ -480,6 +480,25 @@ GitHub credentials are never stored in `forgeo.yaml`:
 
 The daemon lists GitHub issues with paginated `GET /repos/{owner}/{repo}/issues?state=all`. A task is claimed by adding the `forgeo-running` label and persisting `claimed_at` in the hidden block. If a process dies while holding a claim, a later cycle releases claims older than `claim_timeout_seconds` and removes the running label. An unavailable GitHub endpoint fails the cycle.
 
+### End-to-end test via `gh` CLI
+
+`scripts/test-github-backlog-e2e.sh` exercises the full lifecycle against the real GitHub API — via `gh` and via the forgeo Python client — without mocking:
+
+```bash
+GITHUB_TOKEN=... ./scripts/test-github-backlog-e2e.sh          # repo defaults to lucaGazzola/forgeo
+REPO=owner/repo GITHUB_TOKEN=... ./scripts/test-github-backlog-e2e.sh
+```
+
+It checks:
+
+- `gh issue create` + `gh api` visibility, and `GithubBacklog.get_task` / `list_tasks` (with retry for API eventual consistency)
+- `claim_task` adds `forgeo-running` and `claimed_at` in the hidden `<!-- forgeo: {...} -->` block
+- `set_blocked` / `reopen_task` and `set_failed` / `bump_failed_wait` / `retry_task` label transitions
+- `update_status(..., COMPLETED)` closes the issue, and `gh issue close` / label edits map back to `BLOCKED` / `FAILED` / `COMPLETED` on read-back
+- `gh` label edits (`forgeo-blocked`, `forgeo-failed`) and `gh issue close` are reflected by `get_task`
+
+Each run creates one temporary `e2e-gh-cli-*` issue, verifies the transitions, and closes it — the closed issue remains as `COMPLETED` history (GitHub has no issue delete). See also `tests/test_backlog_github.py` for the mocked unit coverage; the script is the live counterpart.
+
 ## A GitLab backlog
 
 Set `backlog_provider: gitlab` and point `backlog:` at the GitLab base URL:

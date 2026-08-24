@@ -153,7 +153,7 @@ def _detect_github_repo(project_root: Path) -> str | None:
                 if len(segs) >= 2:
                     return f"{segs[0]}/{segs[1]}"
         return None
-    except Exception:
+    except Exception:  # noqa: BLE001 - git detection is best-effort, any failure means no detection
         return None
 
 
@@ -178,7 +178,7 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
             import os
 
             os.chmod(env_file, 0o600)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - chmod is best-effort, ignore failures
             pass
         # Wire bashrc
         bashrc = _Path.home() / ".bashrc"
@@ -187,7 +187,7 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
             content = bashrc.read_text(encoding="utf-8")
             if marker not in content:
                 bashrc.write_text(
-                    content.rstrip("\n") + f"\n\n# Forgeo GitHub token\n[ -f ~/.config/forgeo/github_token_env.sh ] && . ~/.config/forgeo/github_token_env.sh\n",
+                    content.rstrip("\n") + "\n\n# Forgeo GitHub token\n[ -f ~/.config/forgeo/github_token_env.sh ] && . ~/.config/forgeo/github_token_env.sh\n",
                     encoding="utf-8",
                 )
         else:
@@ -197,7 +197,7 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
             )
         console.print(f"[green]Token saved to {env_file} (600) and wired to ~/.bashrc.[/green]")
         console.print(f"[dim]Run: source {env_file}  or  export {token_env}=xxx  before forgeo start/validate[/dim]")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - token persistence is best-effort, never fail setup
         console.print(f"[yellow]Could not persist token: {exc}[/yellow]")
 
 

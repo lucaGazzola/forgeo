@@ -44,13 +44,12 @@ def tail_lines(path: Path, n: int) -> list[str]:
     if n <= 0 or not path.exists():
         return []
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        from collections import deque
+
+        with path.open(encoding="utf-8", errors="replace") as file:
+            return [line.rstrip("\r\n") for line in deque(file, maxlen=n)]
     except OSError:
         return []
-    lines = text.splitlines()
-    if n >= len(lines):
-        return lines
-    return lines[-n:]
 
 
 def clamp_query_int(

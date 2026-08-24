@@ -21,10 +21,12 @@ from typing import Any
 def plain_text_to_adf(text: str) -> dict[str, Any]:
     paragraphs: list[dict[str, Any]] = []
     for line in text.splitlines() or [""]:
-        content: list[dict[str, str]] = []
         if line:
-            content.append({"type": "text", "text": line})
-        paragraphs.append({"type": "paragraph", "content": content})
+            paragraphs.append(
+                {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+            )
+        else:
+            paragraphs.append({"type": "paragraph"})
     return {"version": 1, "type": "doc", "content": paragraphs}
 
 
@@ -141,14 +143,17 @@ def as_optional_float(value: Any) -> float | None:
 
 
 def as_nonnegative_int(value: Any) -> int:
-    return max(0, as_optional_int(value) or 0)
+    parsed = as_optional_int(value)
+    if parsed is None:
+        return 0
+    return max(0, parsed)
 
 
 # ------------------------------------------------------------------ #
 # Engine-state hidden marker (GitHub/GitLab)                          #
 # ------------------------------------------------------------------ #
 
-FORGEO_MARKER_RE = re.compile(r"<!--\s*forgeo:\s*(\{.*?\})\s*-->", re.DOTALL)
+FORGEO_MARKER_RE = re.compile(r"<!--\s*forgeo:\s*(\{.*\})\s*-->", re.DOTALL)
 
 
 def embed_engine_state(body: str | None, state: dict[str, Any]) -> str:

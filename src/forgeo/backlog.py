@@ -121,6 +121,15 @@ def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | 
     return "\n".join(out) if out else None
 
 
+def _set_agent_response(
+    entry: dict[str, Any], result: ExecutionResult, cap: int | None
+) -> None:
+    """Store capped agent output on ``entry`` when non-empty."""
+    joined = _join_output_logs(result, cap)
+    if joined is not None:
+        entry["agent_response"] = joined
+
+
 def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
     """The dependencies of ``task`` that are not yet satisfied.
 
@@ -184,10 +193,16 @@ def oldest_open_task(tasks: list[Task], *, now: datetime | None = None) -> Task 
     if now is None:
         now = datetime.now(UTC)
     runnable = _runnable_open_tasks(tasks)
-    due = [task for task in runnable if task.run_at is not None and task.run_at <= now]
+    due: list[Task] = []
+    normal: list[Task] = []
+    for task in runnable:
+        if task.run_at is not None:
+            if task.run_at <= now:
+                due.append(task)
+        else:
+            normal.append(task)
     if due:
         return min(due, key=lambda task: (task.run_at, task.created_at))
-    normal = [task for task in runnable if task.run_at is None]
     if not normal:
         return None
     return min(normal, key=lambda task: task.created_at)
@@ -417,9 +432,7 @@ class DocumentBacklogStore(BacklogStore):
                 and status is not TaskStatus.FAILED
             )
             entry["status"] = status.value
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                entry["agent_response"] = joined
+            _set_agent_response(entry, result, self._output_cap)
             if status is not TaskStatus.FAILED:
                 entry["failure_reason"] = []
                 if leaving_failed:
@@ -436,9 +449,7 @@ class DocumentBacklogStore(BacklogStore):
             entry["blocker_reason"] = list(reason)
             entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
             entry["failure_reason"] = []
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                entry["agent_response"] = joined
+            _set_agent_response(entry, result, self._output_cap)
 
         return await self._update_entry(task_id, mutate)
 
@@ -449,9 +460,7 @@ class DocumentBacklogStore(BacklogStore):
             entry["status"] = TaskStatus.FAILED.value
             entry["failure_reason"] = list(reason)
             entry["failed_wait_cycles"] = 0
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                entry["agent_response"] = joined
+            _set_agent_response(entry, result, self._output_cap)
 
         return await self._update_entry(task_id, mutate)
 
@@ -659,28 +668,28 @@ class JSONBacklog(DocumentBacklogStore):
 
 def _provider_factory(config: ForgeoConfig) -> BacklogStore:
     provider = config.effective_backlog_provider
+    backlog = str(config.backlog)
+    cap = config.agent_response_lines
     if provider == "jira":
         from forgeo.backlog_jira import JiraBacklog
 
         assert config.jira is not None
-        return JiraBacklog(str(config.backlog), config.jira, output_cap=config.agent_response_lines)
+        return JiraBacklog(backlog, config.jira, output_cap=cap)
     if provider == "github":
         from forgeo.backlog_github import GithubBacklog
 
         assert config.github is not None
-        return GithubBacklog(str(config.backlog), config.github, output_cap=config.agent_response_lines)
+        return GithubBacklog(backlog, config.github, output_cap=cap)
     if provider == "gitlab":
         from forgeo.backlog_gitlab import GitlabBacklog
 
         assert config.gitlab is not None
-        return GitlabBacklog(str(config.backlog), config.gitlab, output_cap=config.agent_response_lines)
+        return GitlabBacklog(backlog, config.gitlab, output_cap=cap)
     if provider == "http":
         from forgeo.backlog_http import HttpBacklog
 
-        return HttpBacklog(
-            str(config.backlog), auth=config.backlog_auth, output_cap=config.agent_response_lines
-        )
-    return JSONBacklog(Path(config.backlog), output_cap=config.agent_response_lines)
+        return HttpBacklog(backlog, auth=config.backlog_auth, output_cap=cap)
+    return JSONBacklog(Path(config.backlog), output_cap=cap)
 
 
 def open_backlog(config: ForgeoConfig) -> BacklogStore:

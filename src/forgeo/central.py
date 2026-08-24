@@ -136,8 +136,12 @@ def _github_web_base(api_base: str) -> str:
     base = api_base.rstrip("/")
     if base.endswith("/api/v3"):
         return base[:-7].rstrip("/")
-    if "api.github.com" in base:
-        return base.replace("api.github.com", "github.com")
+    parsed = urlparse(base)
+    if parsed.hostname == "api.github.com":
+        # Only rewrite the exact api.github.com host; do not touch
+        # hosts like api.github.com.example.com.
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://github.com{port}"
     return base
 
 

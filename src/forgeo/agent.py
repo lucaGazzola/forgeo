@@ -353,18 +353,18 @@ class DockerSandboxAgent(ShellAgent):
     ) -> list[str]:
         """Build the ``docker run`` argv for one agent execution."""
         args = ["docker", "run", "--rm", "--network", self.network, "-w", cwd]
-        args += ["-v", f"{cwd}:{cwd}"]
+        args.extend(["-v", f"{cwd}:{cwd}"])
         forwarded = set(_SANDBOX_FORWARDED_ENV) | set(self.env)
         for key in sorted(forwarded):
             if key in env:
-                args += ["-e", f"{key}={env[key]}"]
+                args.extend(["-e", f"{key}={env[key]}"])
         for mount in self.mounts:
-            args += ["-v", f"{mount}:{mount}:ro"]
+            args.extend(["-v", f"{mount}:{mount}:ro"])
         args.append(self.image)
         if isinstance(command, str):
-            args += ["sh", "-c", command]
+            args.extend(["sh", "-c", command])
         else:
-            args += list(command)
+            args.extend(command)
         return args
 
     async def _spawn(

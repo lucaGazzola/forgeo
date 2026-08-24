@@ -43,7 +43,7 @@ def state_dir_for(config: ForgeoConfig) -> Path:
     unset.
     """
     if config.state_dir is not None:
-        return Path(config.state_dir)
+        return config.state_dir
     return Path(config.backlog).parent
 
 

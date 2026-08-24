@@ -494,33 +494,41 @@ class JiraBacklogConfig(BaseModel):
 # ------------------------------------------------------------------ #
 
 
-class GithubAuth(BaseModel):
+class _PatAuthBase(BaseModel):
+    """Shared PAT authentication for issue providers."""
+
+    token_env: str
+
+    @field_validator("token_env")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+
+class GithubAuth(_PatAuthBase):
     """PAT authentication for GitHub REST API."""
 
-    token_env: str
-
-    @field_validator("token_env")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
 
 
-class GitlabAuth(BaseModel):
+class GitlabAuth(_PatAuthBase):
     """PAT authentication for GitLab REST API."""
 
-    token_env: str
-
-    @field_validator("token_env")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
 
 
-class GithubWorkflow(BaseModel):
+class _IssueWorkflowBase(BaseModel):
+    """Shared workflow mapping for issue providers."""
+
+    open_statuses: list[str]
+    open_status: str
+    running_status: str | None = None
+    blocked_status: str | None = None
+    completed_status: str = "closed"
+    failed_status: str | None = None
+
+
+class GithubWorkflow(_IssueWorkflowBase):
     """Workflow mapping for GitHub issues.
 
     GitHub issues have states ``open`` / ``closed``; blocked/failed are
@@ -530,13 +538,9 @@ class GithubWorkflow(BaseModel):
 
     open_statuses: list[str] = Field(default_factory=lambda: ["open"])
     open_status: str = "open"
-    running_status: str | None = None
-    blocked_status: str | None = None
-    completed_status: str = "closed"
-    failed_status: str | None = None
 
 
-class GitlabWorkflow(BaseModel):
+class GitlabWorkflow(_IssueWorkflowBase):
     """Workflow mapping for GitLab issues.
 
     GitLab issues have states ``opened`` / ``closed``.
@@ -544,77 +548,68 @@ class GitlabWorkflow(BaseModel):
 
     open_statuses: list[str] = Field(default_factory=lambda: ["opened"])
     open_status: str = "opened"
-    running_status: str | None = None
-    blocked_status: str | None = None
-    completed_status: str = "closed"
-    failed_status: str | None = None
 
 
-class GithubFieldMapping(BaseModel):
+class _IssueFieldMappingBase(BaseModel):
+    """Shared optional field mappings for issue providers."""
+
+    acceptance_criteria: str | None = None
+    dependencies: str | None = None
+    files_to_modify: str | None = None
+    agent_command: str | None = None
+    agent_timeout_seconds: str | None = None
+    run_at: str | None = None
+    retries_left: str | None = None
+
+    @field_validator(
+        "acceptance_criteria",
+        "dependencies",
+        "files_to_modify",
+        "agent_command",
+        "agent_timeout_seconds",
+        "run_at",
+        "retries_left",
+    )
+    @classmethod
+    def _field_names_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("field names must not be blank")
+        return value
+
+
+class GithubFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitHub issues."""
 
-    acceptance_criteria: str | None = None
-    dependencies: str | None = None
-    files_to_modify: str | None = None
-    agent_command: str | None = None
-    agent_timeout_seconds: str | None = None
-    run_at: str | None = None
-    retries_left: str | None = None
-
-    @field_validator(
-        "acceptance_criteria",
-        "dependencies",
-        "files_to_modify",
-        "agent_command",
-        "agent_timeout_seconds",
-        "run_at",
-        "retries_left",
-    )
-    @classmethod
-    def _field_names_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("field names must not be blank")
-        return value
 
 
-class GitlabFieldMapping(BaseModel):
+class GitlabFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitLab issues."""
 
-    acceptance_criteria: str | None = None
-    dependencies: str | None = None
-    files_to_modify: str | None = None
-    agent_command: str | None = None
-    agent_timeout_seconds: str | None = None
-    run_at: str | None = None
-    retries_left: str | None = None
-
-    @field_validator(
-        "acceptance_criteria",
-        "dependencies",
-        "files_to_modify",
-        "agent_command",
-        "agent_timeout_seconds",
-        "run_at",
-        "retries_left",
-    )
-    @classmethod
-    def _field_names_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("field names must not be blank")
-        return value
 
 
-class GithubBacklogConfig(BaseModel):
-    """GitHub-specific settings for an issue backlog."""
+class _IssueBacklogConfigBase(BaseModel):
+    """Shared settings for issue backlogs."""
 
-    auth: GithubAuth
-    repo: str
     label_prefix: str = "forgeo"
     property_key: str = "forgeo"
     page_size: int = Field(default=30, ge=1, le=100)
     max_issues: int = Field(default=1000, ge=1)
     timeout_seconds: float = Field(default=30, gt=0)
     claim_timeout_seconds: float = Field(default=86400, gt=0)
+
+    @field_validator("label_prefix", "property_key")
+    @classmethod
+    def _safe_identifier(cls, value: str) -> str:
+        if any(character.isspace() for character in value):
+            raise ValueError("labels and property keys must not contain whitespace")
+        return value
+
+
+class GithubBacklogConfig(_IssueBacklogConfigBase):
+    """GitHub-specific settings for an issue backlog."""
+
+    auth: GithubAuth
+    repo: str
     workflow: GithubWorkflow = Field(default_factory=GithubWorkflow)
     fields: GithubFieldMapping = Field(default_factory=GithubFieldMapping)
 
@@ -625,25 +620,12 @@ class GithubBacklogConfig(BaseModel):
             raise ValueError("GitHub configuration values must not be blank")
         return value
 
-    @field_validator("label_prefix", "property_key")
-    @classmethod
-    def _safe_identifier(cls, value: str) -> str:
-        if any(character.isspace() for character in value):
-            raise ValueError("labels and property keys must not contain whitespace")
-        return value
 
-
-class GitlabBacklogConfig(BaseModel):
+class GitlabBacklogConfig(_IssueBacklogConfigBase):
     """GitLab-specific settings for an issue backlog."""
 
     auth: GitlabAuth
     repo: str
-    label_prefix: str = "forgeo"
-    property_key: str = "forgeo"
-    page_size: int = Field(default=30, ge=1, le=100)
-    max_issues: int = Field(default=1000, ge=1)
-    timeout_seconds: float = Field(default=30, gt=0)
-    claim_timeout_seconds: float = Field(default=86400, gt=0)
     workflow: GitlabWorkflow = Field(default_factory=GitlabWorkflow)
     fields: GitlabFieldMapping = Field(default_factory=GitlabFieldMapping)
 
@@ -652,13 +634,6 @@ class GitlabBacklogConfig(BaseModel):
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("GitLab configuration values must not be blank")
-        return value
-
-    @field_validator("label_prefix", "property_key")
-    @classmethod
-    def _safe_identifier(cls, value: str) -> str:
-        if any(character.isspace() for character in value):
-            raise ValueError("labels and property keys must not contain whitespace")
         return value
 
 

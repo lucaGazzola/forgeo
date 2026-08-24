@@ -226,11 +226,6 @@ class GitlabBacklog(IssueBacklogBase):
         iid = int(issue.get("iid") or issue.get("id") or issue_id)
         await self._call(self.client.update_issue, iid, {"description": new_body})
 
-    async def _metadata(self, issue_id: str) -> dict[str, Any]:
-        return await self.get_engine_state(issue_id)
-
-    async def _save_metadata(self, issue_id: str, metadata: dict[str, Any]) -> None:
-        await self.put_engine_state(issue_id, metadata)
 
     @staticmethod
     def _issue_iid(issue: dict[str, Any]) -> int | None:
@@ -337,9 +332,9 @@ class GitlabBacklog(IssueBacklogBase):
             labels = self._issue_labels(issue)
             if self._labels["running"] not in labels:
                 await self._update_labels(task.id, add=[self._labels["running"]], remove=[self._labels["blocked"], self._labels["failed"]])
-            state = await self._metadata(task.id)
+            state = await self.get_engine_state(task.id)
             state.update({"claimed_at": datetime.now(UTC).isoformat()})
-            await self._save_metadata(task.id, state)
+            await self.put_engine_state(task.id, state)
             return current
 
     async def recover_claims(self) -> None:
@@ -353,7 +348,7 @@ class GitlabBacklog(IssueBacklogBase):
             if iid is None:
                 continue
             issue_id = str(iid)
-            state = await self._metadata(issue_id)
+            state = await self.get_engine_state(issue_id)
             claimed_at = parse_optional_datetime(state.get("claimed_at"))
             if claimed_at is None:
                 claimed_at = parse_datetime(issue.get("updated_at"))
@@ -361,7 +356,7 @@ class GitlabBacklog(IssueBacklogBase):
                 continue
             await self._update_labels(issue_id, add=[], remove=[self._labels["running"]])
             state.pop("claimed_at", None)
-            await self._save_metadata(issue_id, state)
+            await self.put_engine_state(issue_id, state)
             logger.warning("Recovered stale GitLab claim for task %s.", issue_id)
 
     async def _update_labels(self, issue_id: str, *, add: list[str], remove: list[str]) -> None:
@@ -402,7 +397,7 @@ class GitlabBacklog(IssueBacklogBase):
         if iid is None:
             return None
         issue_id = str(iid)
-        state = await self._metadata(issue_id)
+        state = await self.get_engine_state(issue_id)
         joined = _join_output_logs(result, self._output_cap)
         if joined is not None:
             state["agent_response"] = joined
@@ -413,14 +408,14 @@ class GitlabBacklog(IssueBacklogBase):
             state["blocker_reason"] = []
             await self._transition_state(issue_id, "closed")
             await self._update_labels(issue_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(issue_id, state)
+            await self.put_engine_state(issue_id, state)
             return await self.get_task(issue_id)
         if status is TaskStatus.OPEN:
             state["failure_reason"] = []
             state.pop("claimed_at", None)
             await self._transition_state(issue_id, "opened")
             await self._update_labels(issue_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(issue_id, state)
+            await self.put_engine_state(issue_id, state)
             return await self.get_task(issue_id)
         if status is TaskStatus.BLOCKED:
             state["blocker_reason"] = list(reason or [])
@@ -428,14 +423,14 @@ class GitlabBacklog(IssueBacklogBase):
             state["failure_reason"] = []
             state.pop("claimed_at", None)
             await self._update_labels(issue_id, add=[self._labels["blocked"]], remove=[self._labels["running"], self._labels["failed"]])
-            await self._save_metadata(issue_id, state)
+            await self.put_engine_state(issue_id, state)
             self._comment(iid, "BLOCKED", reason or [])
             return await self.get_task(issue_id)
         state["failure_reason"] = list(reason or [])
         state["failed_wait_cycles"] = 0
         state.pop("claimed_at", None)
         await self._update_labels(issue_id, add=[self._labels["failed"]], remove=[self._labels["running"], self._labels["blocked"]])
-        await self._save_metadata(issue_id, state)
+        await self.put_engine_state(issue_id, state)
         self._comment(iid, "FAILED", reason or [])
         return await self.get_task(issue_id)
 
@@ -487,9 +482,9 @@ class GitlabBacklog(IssueBacklogBase):
             task = await self._task_from_issue(issue)
             if task is None:
                 return None
-            state = await self._metadata(task_id)
+            state = await self.get_engine_state(task_id)
             state["failed_wait_cycles"] = (as_optional_int(state.get("failed_wait_cycles")) or 0) + 1
-            await self._save_metadata(task_id, state)
+            await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
     async def retry_task(self, task_id: str) -> Task | None:
@@ -500,7 +495,7 @@ class GitlabBacklog(IssueBacklogBase):
             task = await self._task_from_issue(issue)
             if task is None or task.status is not TaskStatus.FAILED:
                 return None
-            state = await self._metadata(task_id)
+            state = await self.get_engine_state(task_id)
             state.update(
                 {
                     "state": TaskStatus.OPEN.value,
@@ -511,7 +506,7 @@ class GitlabBacklog(IssueBacklogBase):
             )
             await self._transition_state(task_id, "opened")
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, state)
+            await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
     async def reopen_task(self, task_id: str) -> Task | None:
@@ -522,7 +517,7 @@ class GitlabBacklog(IssueBacklogBase):
             task = await self._task_from_issue(issue)
             if task is None or task.status is not TaskStatus.BLOCKED:
                 return None
-            state = await self._metadata(task_id)
+            state = await self.get_engine_state(task_id)
             state.update(
                 {
                     "state": TaskStatus.OPEN.value,
@@ -532,7 +527,7 @@ class GitlabBacklog(IssueBacklogBase):
             )
             await self._transition_state(task_id, "opened")
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, state)
+            await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
     async def delete_task(self, task_id: str) -> Task | None:
@@ -571,7 +566,7 @@ class GitlabBacklog(IssueBacklogBase):
             if not isinstance(iid, int):
                 raise GitlabRequestError("GitLab create response did not contain an issue iid")
             issue_id = str(iid)
-            await self._save_metadata(issue_id, {"state": TaskStatus.OPEN.value})
+            await self.put_engine_state(issue_id, {"state": TaskStatus.OPEN.value})
             result = await self.get_task(issue_id)
             if result is None:
                 raise GitlabRequestError(f"Created GitLab issue {issue_id} could not be read back")
@@ -599,7 +594,7 @@ class GitlabBacklog(IssueBacklogBase):
             if "title" in updates:
                 fields["title"] = candidate.title
             if any(k in updates for k in ("description", "acceptance_criteria", "dependencies", "files_to_modify", "agent_command", "agent_timeout_seconds", "run_at", "retries_left")):
-                state = await self._metadata(task_id)
+                state = await self.get_engine_state(task_id)
                 state.update(
                     {
                         "acceptance_criteria": candidate.acceptance_criteria,

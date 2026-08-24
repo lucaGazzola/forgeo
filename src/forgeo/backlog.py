@@ -33,7 +33,7 @@ from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -541,10 +541,10 @@ class DocumentBacklogStore(BacklogStore):
         return updated
 
     @staticmethod
-    def _entry_by_id(store: dict[str, Any], task_id: str) -> Any:
+    def _entry_by_id(store: dict[str, Any], task_id: str) -> dict[str, Any] | None:
         for entry in store["tasks"]:
             if entry["id"] == task_id:
-                return entry
+                return cast(dict[str, Any], entry)
         return None
 
 

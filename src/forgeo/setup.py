@@ -162,9 +162,7 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
     if not token_value.strip():
         return
     try:
-        from pathlib import Path as _Path
-
-        cfg_dir = _Path.home() / ".config" / "forgeo"
+        cfg_dir = Path.home() / ".config" / "forgeo"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         env_file = cfg_dir / "github_token_env.sh"
         # Keep existing file if it already has a token for same env? Overwrite with new
@@ -181,7 +179,7 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
         except Exception:  # noqa: BLE001, S110 - chmod is best-effort, ignore failures
             pass
         # Wire bashrc
-        bashrc = _Path.home() / ".bashrc"
+        bashrc = Path.home() / ".bashrc"
         marker = "github_token_env.sh"
         if bashrc.exists():
             content = bashrc.read_text(encoding="utf-8")

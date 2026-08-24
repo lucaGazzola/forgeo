@@ -4,9 +4,10 @@ A standalone server that aggregates every forgeo registered in the instance
 registry (:mod:`forgeo.instances`). It reads each instance's data straight
 from its files (``backlog.json``, ``runs.jsonl``, ``forgeo.log``,
 ``BLOCKER.md``, ``daemon.state.json``), so it works whether or not that
-instance's daemon is running — the daemon binds no ports at all. HTTP and Jira
-backlogs are fetched from their providers instead, and an unavailable remote
-source is reported as such rather than shown as an empty backlog.
+instance's daemon is running — the daemon binds no ports at all. Remote
+backlogs (HTTP, Jira, GitHub, GitLab) are fetched from their providers
+instead, and an unavailable remote source is reported as such rather than
+shown as an empty backlog.
 
 Routes:
 

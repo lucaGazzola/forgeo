@@ -111,6 +111,11 @@ class GithubClient:
             ) from exc
         return data
 
+    def _repo_path(self) -> str:
+        # GitHub API expects owner/repo as two separate path segments;
+        # encode each segment but keep the slash between them.
+        return "/".join(quote(part, safe="") for part in self.config.repo.split("/"))
+
     def search_issues(
         self,
         *,
@@ -118,8 +123,7 @@ class GithubClient:
         per_page: int = 30,
         state: str = "all",
     ) -> list[dict[str, Any]]:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues"
+        path = f"/repos/{self._repo_path()}/issues"
         query: dict[str, Any] = {"state": state, "per_page": per_page, "page": page}
         data = self._request("GET", path, query=query)
         if isinstance(data, list):
@@ -127,28 +131,23 @@ class GithubClient:
         return []
 
     def get_issue(self, issue_number: int) -> dict[str, Any]:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues/{issue_number}"
+        path = f"/repos/{self._repo_path()}/issues/{issue_number}"
         return self._request("GET", path)  # type: ignore[no-any-return]
 
     def create_issue(self, fields: dict[str, Any]) -> dict[str, Any]:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues"
+        path = f"/repos/{self._repo_path()}/issues"
         return self._request("POST", path, payload=fields)  # type: ignore[no-any-return]
 
     def update_issue(self, issue_number: int, fields: dict[str, Any]) -> dict[str, Any]:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues/{issue_number}"
+        path = f"/repos/{self._repo_path()}/issues/{issue_number}"
         return self._request("PATCH", path, payload=fields)  # type: ignore[no-any-return]
 
     def add_comment(self, issue_number: int, body: str) -> None:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues/{issue_number}/comments"
+        path = f"/repos/{self._repo_path()}/issues/{issue_number}/comments"
         self._request("POST", path, payload={"body": body})
 
     def delete_issue(self, issue_number: int) -> None:
-        repo = self.config.repo
-        path = f"/repos/{quote(repo, safe='')}/issues/{issue_number}"
+        path = f"/repos/{self._repo_path()}/issues/{issue_number}"
         self._request("PATCH", path, payload={"state": "closed"})
 
 

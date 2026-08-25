@@ -38,25 +38,13 @@ from forgeo.backlog import (
 )
 from forgeo.backlog_issue_base import (
     adf_to_plain_text,
+    as_nonnegative_int,
+    as_optional_float,
+    as_optional_int,
+    as_string_list,
+    parse_datetime,
+    parse_optional_datetime,
     plain_text_to_adf,
-)
-from forgeo.backlog_issue_base import (
-    as_nonnegative_int as _as_nonnegative_int,
-)
-from forgeo.backlog_issue_base import (
-    as_optional_float as _as_optional_float,
-)
-from forgeo.backlog_issue_base import (
-    as_optional_int as _as_optional_int,
-)
-from forgeo.backlog_issue_base import (
-    as_string_list as _as_string_list,
-)
-from forgeo.backlog_issue_base import (
-    parse_datetime as _parse_datetime,
-)
-from forgeo.backlog_issue_base import (
-    parse_optional_datetime as _parse_optional_datetime,
 )
 from forgeo.models import (
     ExecutionResult,
@@ -384,7 +372,7 @@ class JiraBacklog(IssueBacklogBase):
             else:
                 if len(page_issues) < request_size:
                     break
-                total = _as_optional_int(page.get("total"))
+                total = as_optional_int(page.get("total"))
                 start_at += len(page_issues)
                 if total is not None and start_at >= total:
                     break
@@ -488,11 +476,11 @@ class JiraBacklog(IssueBacklogBase):
         if not description:
             description = title
         mapping = self.config.fields
-        acceptance = _as_string_list(fields.get(mapping.acceptance_criteria))
-        dependencies = _as_string_list(fields.get(mapping.dependencies))
+        acceptance = as_string_list(fields.get(mapping.acceptance_criteria))
+        dependencies = as_string_list(fields.get(mapping.dependencies))
         if mapping.dependencies is None:
             dependencies = self._issue_link_dependencies(fields.get("issuelinks"))
-        files_to_modify = _as_string_list(fields.get(mapping.files_to_modify))
+        files_to_modify = as_string_list(fields.get(mapping.files_to_modify))
         command_value = fields.get(mapping.agent_command)
         command: str | list[str] | None
         if (
@@ -506,12 +494,12 @@ class JiraBacklog(IssueBacklogBase):
             command = command_value
         else:
             command = None
-        timeout = _as_optional_float(fields.get(mapping.agent_timeout_seconds))
+        timeout = as_optional_float(fields.get(mapping.agent_timeout_seconds))
         if timeout is not None and timeout <= 0:
             timeout = None
         run_at_field = mapping.run_at or "duedate"
-        run_at = _parse_optional_datetime(fields.get(run_at_field))
-        retries_left = _as_optional_int(fields.get(mapping.retries_left))
+        run_at = parse_optional_datetime(fields.get(run_at_field))
+        retries_left = as_optional_int(fields.get(mapping.retries_left))
         if retries_left is not None and retries_left < 0:
             retries_left = None
         return Task(
@@ -522,22 +510,22 @@ class JiraBacklog(IssueBacklogBase):
             acceptance_criteria=acceptance,
             files_to_modify=files_to_modify,
             status=status,
-            created_at=_parse_datetime(fields.get("created")),
-            updated_at=_parse_datetime(fields.get("updated")),
+            created_at=parse_datetime(fields.get("created")),
+            updated_at=parse_datetime(fields.get("updated")),
             run_at=run_at,
             agent_command=command,
             agent_timeout_seconds=timeout,
-            blocker_reason=_as_string_list(metadata.get("blocker_reason")),
-            blocked_count=_as_nonnegative_int(metadata.get("blocked_count")),
-            failure_reason=_as_string_list(metadata.get("failure_reason")),
+            blocker_reason=as_string_list(metadata.get("blocker_reason")),
+            blocked_count=as_nonnegative_int(metadata.get("blocked_count")),
+            failure_reason=as_string_list(metadata.get("failure_reason")),
             agent_response=(
                 metadata.get("agent_response")
                 if isinstance(metadata.get("agent_response"), str)
                 else None
             ),
             retries_left=retries_left,
-            retry_count=_as_nonnegative_int(metadata.get("retry_count")),
-            failed_wait_cycles=_as_nonnegative_int(metadata.get("failed_wait_cycles")),
+            retry_count=as_nonnegative_int(metadata.get("retry_count")),
+            failed_wait_cycles=as_nonnegative_int(metadata.get("failed_wait_cycles")),
         )
 
     @staticmethod
@@ -620,9 +608,9 @@ class JiraBacklog(IssueBacklogBase):
             if key is None:
                 continue
             metadata = await self._metadata(key)
-            claimed_at = _parse_optional_datetime(metadata.get("claimed_at"))
+            claimed_at = parse_optional_datetime(metadata.get("claimed_at"))
             if claimed_at is None:
-                claimed_at = _parse_datetime(issue.get("fields", {}).get("updated"))
+                claimed_at = parse_datetime(issue.get("fields", {}).get("updated"))
             if claimed_at > cutoff:
                 continue
             await self._update_labels(key, add=[], remove=[running_label])
@@ -725,7 +713,7 @@ class JiraBacklog(IssueBacklogBase):
             return await self.get_task(key)
         if status is TaskStatus.BLOCKED:
             metadata["blocker_reason"] = list(reason or [])
-            metadata["blocked_count"] = (_as_optional_int(metadata.get("blocked_count")) or 0) + 1
+            metadata["blocked_count"] = (as_optional_int(metadata.get("blocked_count")) or 0) + 1
             metadata["failure_reason"] = []
             metadata.pop("claimed_at", None)
             await self._update_labels(
@@ -813,7 +801,7 @@ class JiraBacklog(IssueBacklogBase):
             if task is None:
                 return None
             metadata = await self._metadata(task_id)
-            metadata["failed_wait_cycles"] = (_as_optional_int(metadata.get("failed_wait_cycles")) or 0) + 1
+            metadata["failed_wait_cycles"] = (as_optional_int(metadata.get("failed_wait_cycles")) or 0) + 1
             await self._save_metadata(task_id, metadata)
             return await self.get_task(task_id)
 
@@ -829,7 +817,7 @@ class JiraBacklog(IssueBacklogBase):
             metadata.update(
                 {
                     "state": TaskStatus.OPEN.value,
-                    "retry_count": (_as_optional_int(metadata.get("retry_count")) or 0) + 1,
+                    "retry_count": (as_optional_int(metadata.get("retry_count")) or 0) + 1,
                     "failed_wait_cycles": 0,
                     "failure_reason": [],
                 }

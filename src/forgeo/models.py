@@ -457,7 +457,24 @@ class JiraFieldMapping(BaseModel):
         return value
 
 
-class JiraBacklogConfig(BaseModel):
+class _IssueBacklogConfigBase(BaseModel):
+    """Shared settings for issue backlogs."""
+
+    label_prefix: str = "forgeo"
+    property_key: str = "forgeo"
+    page_size: int = Field(default=30, ge=1, le=100)
+    max_issues: int = Field(default=1000, ge=1)
+    timeout_seconds: float = Field(default=30, gt=0)
+    claim_timeout_seconds: float = Field(default=86400, gt=0)
+
+    @field_validator("label_prefix", "property_key")
+    @classmethod
+    def _safe_identifier(cls, value: str) -> str:
+        if any(character.isspace() for character in value):
+            raise ValueError("labels and property keys must not contain whitespace")
+        return value
+
+class JiraBacklogConfig(_IssueBacklogConfigBase):
     """Jira-specific settings for a remote task provider."""
 
     auth: JiraAuth
@@ -466,11 +483,6 @@ class JiraBacklogConfig(BaseModel):
     issue_type: str = "Task"
     api_version: Literal[2, 3] = 3
     page_size: int = Field(default=50, ge=1, le=100)
-    max_issues: int = Field(default=1000, ge=1)
-    timeout_seconds: float = Field(default=30, gt=0)
-    claim_timeout_seconds: float = Field(default=86400, gt=0)
-    label_prefix: str = "forgeo"
-    property_key: str = "forgeo"
     workflow: JiraWorkflow = Field(default_factory=JiraWorkflow)
     fields: JiraFieldMapping = Field(default_factory=JiraFieldMapping)
 
@@ -479,13 +491,6 @@ class JiraBacklogConfig(BaseModel):
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Jira configuration values must not be blank")
-        return value
-
-    @field_validator("label_prefix", "property_key")
-    @classmethod
-    def _safe_identifier(cls, value: str) -> str:
-        if any(character.isspace() for character in value):
-            raise ValueError("Jira labels and property keys must not contain whitespace")
         return value
 
 
@@ -533,7 +538,7 @@ class GithubWorkflow(_IssueWorkflowBase):
 
     GitHub issues have states ``open`` / ``closed``; blocked/failed are
     represented by labels. ``open_statuses`` is kept for symmetry but not
-    used; ``completed_state`` defaults to ``closed``.
+    used; ``completed_status`` defaults to ``closed``.
     """
 
     open_statuses: list[str] = Field(default_factory=lambda: ["open"])
@@ -581,28 +586,8 @@ class GithubFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitHub issues."""
 
 
-
 class GitlabFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitLab issues."""
-
-
-
-class _IssueBacklogConfigBase(BaseModel):
-    """Shared settings for issue backlogs."""
-
-    label_prefix: str = "forgeo"
-    property_key: str = "forgeo"
-    page_size: int = Field(default=30, ge=1, le=100)
-    max_issues: int = Field(default=1000, ge=1)
-    timeout_seconds: float = Field(default=30, gt=0)
-    claim_timeout_seconds: float = Field(default=86400, gt=0)
-
-    @field_validator("label_prefix", "property_key")
-    @classmethod
-    def _safe_identifier(cls, value: str) -> str:
-        if any(character.isspace() for character in value):
-            raise ValueError("labels and property keys must not contain whitespace")
-        return value
 
 
 class GithubBacklogConfig(_IssueBacklogConfigBase):

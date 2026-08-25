@@ -2,7 +2,7 @@
 
 Extracts logic that previously lived only in :mod:`forgeo.backlog_jira`:
 label handling, workflow mapping, engine-state persistence helpers,
-datetime parsing, pagination utilities, and output-log capping.
+and datetime parsing.
 
 Issue providers subclass :class:`forgeo.backlog.IssueBacklogBase` and
 implement the abstract engine-state store (Jira issue property vs.
@@ -153,7 +153,7 @@ def as_nonnegative_int(value: Any) -> int:
 # Engine-state hidden marker (GitHub/GitLab)                          #
 # ------------------------------------------------------------------ #
 
-FORGEO_MARKER_RE = re.compile(r"<!--\s*forgeo:\s*(\{.*\})\s*-->", re.DOTALL)
+FORGEO_MARKER_RE = re.compile(r"<!--\s*forgeo:\s*(\{.*?\})\s*-->", re.DOTALL)
 
 
 def embed_engine_state(body: str | None, state: dict[str, Any]) -> str:

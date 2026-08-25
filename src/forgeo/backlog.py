@@ -320,7 +320,13 @@ class BacklogStore(ABC):
         await self.list_tasks()
 
     async def snapshot(self) -> None:
-        """Take a rollback copy before the backlog is written to."""
+        """Take a rollback copy before the backlog is written to.
+
+        Document providers (``JSONBacklog``) write a rotating ``.bak`` snapshot;
+        remote providers (HTTP / issue trackers) own their own history and keep
+        this as a no-op.
+        """
+        return
 
     @abstractmethod
     async def create_task(self, task: Task) -> Task:

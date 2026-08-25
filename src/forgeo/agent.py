@@ -128,6 +128,15 @@ class ShellAgent(BaseAgent):
             text = raw.decode(errors="replace").rstrip("\r\n")
             lines.append(f"[{prefix}] {text}")
 
+    def _subprocess_kwargs(self, cwd: str, env: dict[str, str]) -> dict[str, object]:
+        return {
+            "cwd": cwd,
+            "env": env,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "start_new_session": True,
+        }
+
     async def _spawn(
         self,
         command: str | list[str],
@@ -139,23 +148,10 @@ class ShellAgent(BaseAgent):
         Subclasses (e.g. sandboxes) override this to change *how* the command
         runs; the exit-code contract and output handling stay in ``run_task``.
         """
+        kwargs = self._subprocess_kwargs(cwd, env)
         if isinstance(command, str):
-            return await asyncio.create_subprocess_shell(
-                command,
-                cwd=cwd,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-        return await asyncio.create_subprocess_exec(
-            *command,
-            cwd=cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
+            return await asyncio.create_subprocess_shell(command, **kwargs)  # type: ignore[arg-type]
+        return await asyncio.create_subprocess_exec(*command, **kwargs)  # type: ignore[arg-type]
 
     async def run_task(
         self,
@@ -375,9 +371,5 @@ class DockerSandboxAgent(ShellAgent):
     ) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(
             *self._docker_args(command, cwd, env),
-            cwd=cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            **self._subprocess_kwargs(cwd, env),  # type: ignore[arg-type]
         )

@@ -35,7 +35,7 @@ class GitManager:
         self.timeout_seconds = timeout_seconds
 
     def _run(self, *args: str, check: bool = True) -> str:
-        """Execute ``git -C <repo> <args>`` and return combined output."""
+        """Execute ``git -C <repo> <args>`` and return stdout."""
         if not _git_executable():
             raise GitError("the 'git' executable was not found on PATH")
         try:
@@ -68,18 +68,40 @@ class GitManager:
         except GitError:
             return False
 
-    def ensure_branch(self, branch: str) -> None:
-        """Switch to ``branch``, creating it from HEAD when it does not exist."""
+    def branch_exists(self, branch: str) -> bool:
+        """Return True when ``branch`` exists locally."""
         try:
             self._run("rev-parse", "--verify", f"refs/heads/{branch}")
+            return True
         except GitError:
+            return False
+
+    def has_commits(self) -> bool:
+        """Return True when the repository has at least one commit."""
+        try:
+            self._run("rev-parse", "--verify", "HEAD")
+            return True
+        except GitError:
+            return False
+
+    def remote_url(self, remote: str) -> str:
+        """Return the URL of ``remote`` or raise :class:`GitError`."""
+        return self._run("remote", "get-url", remote)
+
+    def ensure_branch(self, branch: str) -> None:
+        """Switch to ``branch``, creating it from HEAD when it does not exist."""
+        if not self.branch_exists(branch):
             self._run("switch", "-c", branch)
             return
         self._run("switch", branch)
 
     def is_clean(self) -> bool:
         """Return whether the working tree has no changes."""
-        return not bool(self._run("status", "--porcelain"))
+        return not bool(self.status_porcelain())
+
+    def status_porcelain(self) -> str:
+        """Return ``git status --porcelain`` output."""
+        return self._run("status", "--porcelain")
 
     def commit_all(self, message: str) -> str | None:
         """Stage all changes and commit; returns the short sha, or ``None`` if nothing to commit."""

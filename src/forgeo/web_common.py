@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -44,8 +45,6 @@ def tail_lines(path: Path, n: int) -> list[str]:
     if n <= 0 or not path.exists():
         return []
     try:
-        from collections import deque
-
         with path.open(encoding="utf-8", errors="replace") as file:
             return [line.rstrip("\r\n") for line in deque(file, maxlen=n)]
     except OSError:
@@ -58,8 +57,8 @@ def clamp_query_int(
     """Parse a bounded non-negative integer from a query parameter."""
     raw = query.get(key, [str(default)])[0]
     try:
-        value = int(raw)
-    except ValueError:
+        value = int(raw.strip())
+    except (ValueError, AttributeError):
         value = default
     return max(0, min(value, maximum))
 

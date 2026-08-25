@@ -23,6 +23,8 @@ def atomic_write_text(path: str | Path, content: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_name, path)
     except BaseException:
         if os.path.exists(tmp_name):

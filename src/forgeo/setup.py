@@ -27,11 +27,10 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
-from forgeo.models import DEFAULT_REFACTOR_PROMPT
+from forgeo.models import DEFAULT_REFACTOR_PROMPT, PROVIDER_CHOICES
 
 DEFAULT_FORGEO_DIR = ".forgeo"
 DEFAULT_AGENT_COMMAND = "opencode run --auto"
-PROVIDER_CHOICES = ("file", "github", "gitlab", "jira", "http")
 DEFAULT_PROVIDER = "file"
 DEFAULT_GITHUB_API = "https://api.github.com"
 DEFAULT_GITLAB_API = "https://gitlab.com"

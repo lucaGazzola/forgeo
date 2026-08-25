@@ -62,7 +62,6 @@ PROVIDER_CHOICES: tuple[str, ...] = ("file", "http", "jira", "github", "gitlab")
 PROVIDER_LITERAL = Literal["auto", "file", "http", "jira", "github", "gitlab"]
 REMOTE_PROVIDERS: frozenset[str] = frozenset({"http", "jira", "github", "gitlab"})
 ISSUE_PROVIDERS: frozenset[str] = frozenset({"jira", "github", "gitlab"})
-DOCUMENT_PROVIDERS: frozenset[str] = frozenset({"file", "http"})
 
 
 def is_url(value: object) -> bool:

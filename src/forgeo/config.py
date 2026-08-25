@@ -22,6 +22,10 @@ from forgeo.io import atomic_write_text
 from forgeo.models import ForgeoConfig
 
 
+def _resolve_path(value: Path, base: Path) -> Path:
+    return base / value if not value.is_absolute() else value
+
+
 def load_config(path: str | Path) -> ForgeoConfig:
     """Load and validate a Forgeo YAML file.
 
@@ -35,22 +39,22 @@ def load_config(path: str | Path) -> ForgeoConfig:
     base = config_path.parent.resolve()
     updates: dict[str, Path | str] = {}
     if not config.repo.is_absolute():
-        updates["repo"] = base / config.repo
+        updates["repo"] = _resolve_path(config.repo, base)
     if not config.backlog_is_url and not Path(config.backlog).is_absolute():
-        updates["backlog"] = base / config.backlog
+        updates["backlog"] = _resolve_path(Path(config.backlog), base)
     if config.state_dir is None:
         if config.backlog_is_remote:
             # A remote backlog has no file for the locks and the run history
             # to sit beside, so they go next to the config that describes it.
             updates["state_dir"] = base
     elif not config.state_dir.is_absolute():
-        updates["state_dir"] = base / config.state_dir
+        updates["state_dir"] = _resolve_path(config.state_dir, base)
     if not config.blocker_file.is_absolute():
-        updates["blocker_file"] = base / config.blocker_file
+        updates["blocker_file"] = _resolve_path(config.blocker_file, base)
     if config.task_context is not None and not config.task_context.is_absolute():
-        updates["task_context"] = base / config.task_context
+        updates["task_context"] = _resolve_path(config.task_context, base)
     if not Path(config.log_file).is_absolute():
-        updates["log_file"] = str(base / config.log_file)
+        updates["log_file"] = str(_resolve_path(Path(config.log_file), base))
     return config if not updates else config.model_copy(update=updates)
 
 

@@ -109,35 +109,32 @@ def _check_repo(config: ForgeoConfig, report: ValidationReport) -> GitManager | 
 
 
 def _check_branch(config: ForgeoConfig, git: GitManager, report: ValidationReport) -> None:
-    try:
-        git._run("rev-parse", "--verify", f"refs/heads/{config.branch}")
-    except GitError:
-        # The daemon creates a missing branch from HEAD on its first cycle.
-        # With no commits at all the branch can still be created on the
-        # unborn HEAD (git switch -c works), and the first cycle's commit
-        # anchors it — but only a clean tree can run: a repository with no
-        # commits has every file untracked, so any file at all would make
-        # every cycle refuse as dirty.
-        try:
-            git._run("rev-parse", "--verify", "HEAD")
-        except GitError:
-            if git._run("status", "--porcelain"):
-                report.problems.append(
-                    "repository has no commits yet and the working tree is "
-                    "not clean; make an initial commit first "
-                    "(`git add -A && git commit -m \"Initial commit\"`) — "
-                    "forgeo never commits uncommitted work"
-                )
-            else:
-                report.warnings.append(
-                    "repository has no commits yet; the first cycle will "
-                    "create the initial commit"
-                )
+    if git.branch_exists(config.branch):
+        return
+    # The daemon creates a missing branch from HEAD on its first cycle.
+    # With no commits at all the branch can still be created on the
+    # unborn HEAD (git switch -c works), and the first cycle's commit
+    # anchors it — but only a clean tree can run: a repository with no
+    # commits has every file untracked, so any file at all would make
+    # every cycle refuse as dirty.
+    if not git.has_commits():
+        if git.status_porcelain():
+            report.problems.append(
+                "repository has no commits yet and the working tree is "
+                "not clean; make an initial commit first "
+                "(`git add -A && git commit -m \"Initial commit\"`) — "
+                "forgeo never commits uncommitted work"
+            )
         else:
             report.warnings.append(
-                f"branch {config.branch!r} does not exist yet; it will be "
-                "created on the first cycle"
+                "repository has no commits yet; the first cycle will "
+                "create the initial commit"
             )
+    else:
+        report.warnings.append(
+            f"branch {config.branch!r} does not exist yet; it will be "
+            "created on the first cycle"
+        )
 
 
 def _check_remote(
@@ -148,7 +145,7 @@ def _check_remote(
     if git is None:
         return
     try:
-        url = git._run("remote", "get-url", config.remote)
+        url = git.remote_url(config.remote)
     except GitError:
         report.problems.append(f"remote {config.remote!r} is not configured")
     else:

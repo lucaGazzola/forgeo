@@ -61,6 +61,19 @@ EDITABLE_TASK_FIELDS = frozenset(
 )
 
 
+def _require_string(updates: dict[str, Any], field: str) -> None:
+    if field in updates and not isinstance(updates[field], str):
+        raise ValueError(f"{field} must be a string")
+
+
+def _require_string_list(updates: dict[str, Any], field: str) -> None:
+    if field in updates and (
+        not isinstance(updates[field], list)
+        or not all(isinstance(item, str) for item in updates[field])
+    ):
+        raise ValueError(f"{field} must be a list of strings")
+
+
 def validate_task_updates(updates: dict[str, Any]) -> None:
     """Validate fields accepted by the task-editing API.
 
@@ -71,19 +84,14 @@ def validate_task_updates(updates: dict[str, Any]) -> None:
     unknown = set(updates) - EDITABLE_TASK_FIELDS
     if unknown:
         raise ValueError(f"unknown task field(s): {', '.join(sorted(unknown))}")
-    for field in ("title", "description"):
-        if field in updates and not isinstance(updates[field], str):
-            raise ValueError(f"{field} must be a string")
+    _require_string(updates, "title")
+    _require_string(updates, "description")
     if "title" in updates and not updates["title"].strip():
         raise ValueError("title must be a non-blank string")
     if "description" in updates and not updates["description"].strip():
         raise ValueError("description must be a non-blank string")
     for field in ("acceptance_criteria", "dependencies", "files_to_modify"):
-        if field in updates and (
-            not isinstance(updates[field], list)
-            or not all(isinstance(item, str) for item in updates[field])
-        ):
-            raise ValueError(f"{field} must be a list of strings")
+        _require_string_list(updates, field)
     if "retries_left" in updates and updates["retries_left"] is not None and (
         not isinstance(updates["retries_left"], int)
         or isinstance(updates["retries_left"], bool)
@@ -101,7 +109,8 @@ def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | 
 
     ``BacklogStore`` persists agent output as a single string field, so the
     agent's ``list[str]`` (its ``[stdout]``/``[stderr]``-prefixed lines) is
-    flattened here, prefixes stripped. An empty result means "nothing to
+    flattened here, prefixes stripped. Lines without a known prefix (e.g.
+    ``[shell]`` headers) are ignored. An empty result means "nothing to
     record" and must stay ``None`` — the caller then leaves any previously
     stored response untouched rather than wiping it. ``cap`` bounds the number
     of kept lines, mirroring ``agent_response_lines`` (``None`` = unbounded;
@@ -110,10 +119,8 @@ def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | 
 
     out: list[str] = []
     for line in result.output_logs:
-        for prefix in ("[stdout]", "[stderr]"):
-            if line.startswith(prefix):
-                out.append(line[len(prefix) + 1 :])
-                break
+        if line.startswith(("[stdout] ", "[stderr] ")):
+            out.append(line[9:])
     if cap is not None:
         if cap <= 0:
             return None
@@ -130,6 +137,10 @@ def _set_agent_response(
         entry["agent_response"] = joined
 
 
+def _status_by_id(tasks: list[Task]) -> dict[str, TaskStatus]:
+    return {t.id: t.status for t in tasks}
+
+
 def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, str]]:
     """The dependencies of ``task`` that are not yet satisfied.
 
@@ -138,7 +149,7 @@ def unsatisfied_dependencies(tasks: list[Task], task: Task) -> list[dict[str, st
     dependency id and its current status (``missing`` when no task with that
     id exists), in ``task.dependencies`` order.
     """
-    status_by_id = {t.id: t.status for t in tasks}
+    status_by_id = _status_by_id(tasks)
     unmet: list[dict[str, str]] = []
     for dep_id in task.dependencies:
         status = status_by_id.get(dep_id)
@@ -160,7 +171,7 @@ def _runnable_open_tasks(tasks: list[Task]) -> list[Task]:
     is ``COMPLETED``; tasks referencing missing or still-pending tasks are
     skipped. Tasks without dependencies are always runnable when OPEN.
     """
-    status_by_id = {t.id: t.status for t in tasks}
+    status_by_id = _status_by_id(tasks)
     return [
         task
         for task in tasks
@@ -199,6 +210,7 @@ def oldest_open_task(tasks: list[Task], *, now: datetime | None = None) -> Task 
         if task.run_at is not None:
             if task.run_at <= now:
                 due.append(task)
+            # future run_at: skip until that moment (neither due nor normal)
         else:
             normal.append(task)
     if due:
@@ -674,27 +686,26 @@ class JSONBacklog(DocumentBacklogStore):
 
 def _provider_factory(config: ForgeoConfig) -> BacklogStore:
     provider = config.effective_backlog_provider
-    backlog = str(config.backlog)
     cap = config.agent_response_lines
     if provider == "jira":
         from forgeo.backlog_jira import JiraBacklog
 
         assert config.jira is not None
-        return JiraBacklog(backlog, config.jira, output_cap=cap)
+        return JiraBacklog(str(config.backlog), config.jira, output_cap=cap)
     if provider == "github":
         from forgeo.backlog_github import GithubBacklog
 
         assert config.github is not None
-        return GithubBacklog(backlog, config.github, output_cap=cap)
+        return GithubBacklog(str(config.backlog), config.github, output_cap=cap)
     if provider == "gitlab":
         from forgeo.backlog_gitlab import GitlabBacklog
 
         assert config.gitlab is not None
-        return GitlabBacklog(backlog, config.gitlab, output_cap=cap)
+        return GitlabBacklog(str(config.backlog), config.gitlab, output_cap=cap)
     if provider == "http":
         from forgeo.backlog_http import HttpBacklog
 
-        return HttpBacklog(backlog, auth=config.backlog_auth, output_cap=cap)
+        return HttpBacklog(str(config.backlog), auth=config.backlog_auth, output_cap=cap)
     return JSONBacklog(Path(config.backlog), output_cap=cap)
 
 

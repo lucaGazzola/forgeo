@@ -187,18 +187,11 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
-_REMOTE_PREFIX: dict[str, str] = {
-    "jira": "Jira backlog could not be read",
-    "github": "GitHub backlog could not be read",
-    "gitlab": "GitLab backlog could not be read",
-    "http": "backlog endpoint could not be read",
-}
-
-_REMOTE_OK_NOTE: dict[str, str] = {
-    "jira": "Jira backlog answers",
-    "github": "GitHub backlog answers",
-    "gitlab": "GitLab backlog answers",
-    "http": "backlog endpoint answers",
+_REMOTE_MESSAGES: dict[str, tuple[str, str]] = {
+    "jira": ("Jira backlog could not be read", "Jira backlog answers"),
+    "github": ("GitHub backlog could not be read", "GitHub backlog answers"),
+    "gitlab": ("GitLab backlog could not be read", "GitLab backlog answers"),
+    "http": ("backlog endpoint could not be read", "backlog endpoint answers"),
 }
 
 
@@ -214,11 +207,11 @@ def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> Non
             return
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
         provider = config.effective_backlog_provider
-        prefix = _REMOTE_PREFIX.get(provider, "backlog could not be read")
+        prefix = _REMOTE_MESSAGES.get(provider, ("backlog could not be read", ""))[0]
         report.problems.append(f"{prefix}: {exc}")
         return
     provider = config.effective_backlog_provider
-    note_prefix = _REMOTE_OK_NOTE.get(provider, "backlog endpoint answers")
+    note_prefix = _REMOTE_MESSAGES.get(provider, ("", "backlog endpoint answers"))[1]
     report.notes.append(f"{note_prefix} ({config.backlog})")
 
 

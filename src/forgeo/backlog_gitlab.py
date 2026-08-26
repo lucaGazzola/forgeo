@@ -29,6 +29,9 @@ from forgeo.backlog_issue_base import (
     bump_state_counter,
     embed_engine_state,
     extract_engine_state,
+    extract_issue_labels,
+    extract_issue_number,
+    forgeo_labels,
     format_state_comment,
     next_reopen_state,
     next_retry_state,
@@ -168,12 +171,7 @@ class GitlabBacklog(IssueBacklogBase):
 
     @property
     def _labels(self) -> dict[str, str]:
-        prefix = self.config.label_prefix
-        return {
-            "running": f"{prefix}-running",
-            "blocked": f"{prefix}-blocked",
-            "failed": f"{prefix}-failed",
-        }
+        return forgeo_labels(self.config.label_prefix)
 
     async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(function, *args, **kwargs)
@@ -230,22 +228,11 @@ class GitlabBacklog(IssueBacklogBase):
 
     @staticmethod
     def _issue_iid(issue: dict[str, Any]) -> int | None:
-        iid = issue.get("iid")
-        if isinstance(iid, int):
-            return iid
-        if isinstance(iid, str) and iid.isdigit():
-            return int(iid)
-        iid = issue.get("id")
-        if isinstance(iid, int):
-            return iid
-        return None
+        return extract_issue_number(issue)
 
     @staticmethod
     def _issue_labels(issue: dict[str, Any]) -> list[str]:
-        labels = issue.get("labels", [])
-        if isinstance(labels, list):
-            return [label for label in labels if isinstance(label, str)]
-        return []
+        return extract_issue_labels(issue)
 
     def _state_from_issue(self, issue: dict[str, Any]) -> TaskStatus | None:
         labels = set(self._issue_labels(issue))

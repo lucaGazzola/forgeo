@@ -168,13 +168,23 @@ def _gitlab_issues_root(base: str, repo: str) -> str:
     return f"{base}/{stripped}/-/issues"
 
 
-def _external_board_url(config: ForgeoConfig | None) -> str | None:
-    """The native backlog URL for an issue provider, or ``None`` for documents."""
+def _issue_provider_base(config: ForgeoConfig | None) -> tuple[str, str] | None:
+    """Issue provider and base URL, or ``None`` for document providers."""
     pb = _provider_base(config)
     if pb is None:
         return None
+    provider, _ = pb
+    if provider not in ISSUE_PROVIDERS:
+        return None
+    return pb
+
+
+def _external_board_url(config: ForgeoConfig | None) -> str | None:
+    """The native backlog URL for an issue provider, or ``None`` for documents."""
+    pb = _issue_provider_base(config)
+    if pb is None or config is None:
+        return None
     provider, base = pb
-    assert config is not None
     if provider == "jira":
         if config.jira is None:
             return base
@@ -193,11 +203,10 @@ def _external_issue_url(config: ForgeoConfig | None, task_id: str) -> str | None
     """The native issue URL for one task, or ``None`` for document providers."""
     if not task_id:
         return None
-    pb = _provider_base(config)
-    if pb is None:
+    pb = _issue_provider_base(config)
+    if pb is None or config is None:
         return None
     provider, base = pb
-    assert config is not None
     if provider == "jira":
         return f"{base}/browse/{quote(task_id, safe='')}"
     if provider == "github":

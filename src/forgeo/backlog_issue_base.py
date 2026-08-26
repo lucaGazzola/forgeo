@@ -233,4 +233,43 @@ def next_reopen_state(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def forgeo_labels(prefix: str) -> dict[str, str]:
+    """Standard forgeo labels for a prefix (running / blocked / failed)."""
+    return {
+        "running": f"{prefix}-running",
+        "blocked": f"{prefix}-blocked",
+        "failed": f"{prefix}-failed",
+    }
+
+
+def extract_issue_labels(issue: dict[str, Any]) -> list[str]:
+    """Extract label names from a GitHub or GitLab issue dict.
+
+    GitHub may return labels as ``[{\"name\": \"x\"}, ...]`` or ``[\"x\"]``;
+    GitLab returns ``[\"x\"]`` and nests under ``fields.labels`` for Jira;
+    this handles the GitHub/GitLab shapes (plain ``labels`` key).
+    """
+    labels = issue.get("labels", [])
+    if isinstance(labels, list):
+        result: list[str] = []
+        for label in labels:
+            if isinstance(label, str):
+                result.append(label)
+            elif isinstance(label, dict) and isinstance(label.get("name"), str):
+                result.append(label["name"])
+        return result
+    return []
+
+
+def extract_issue_number(issue: dict[str, Any]) -> int | None:
+    """Extract a numeric issue number/iid from a GitHub or GitLab issue dict."""
+    for key in ("number", "iid", "id"):
+        value = issue.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    return None
+
+
 

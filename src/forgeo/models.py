@@ -429,8 +429,25 @@ class JiraWorkflow(BaseModel):
         return value
 
 
-class JiraFieldMapping(BaseModel):
-    """Optional Jira custom fields carrying Forgeo task attributes."""
+def _field_names_not_blank(value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError("field names must not be blank")
+    return value
+
+
+_ISSUE_FIELD_NAMES: tuple[str, ...] = (
+    "acceptance_criteria",
+    "dependencies",
+    "files_to_modify",
+    "agent_command",
+    "agent_timeout_seconds",
+    "run_at",
+    "retries_left",
+)
+
+
+class _IssueFieldMappingBase(BaseModel):
+    """Shared optional field mappings for issue providers."""
 
     acceptance_criteria: str | None = None
     dependencies: str | None = None
@@ -440,17 +457,18 @@ class JiraFieldMapping(BaseModel):
     run_at: str | None = None
     retries_left: str | None = None
 
-    @field_validator(
-        "acceptance_criteria",
-        "dependencies",
-        "files_to_modify",
-        "agent_command",
-        "agent_timeout_seconds",
-        "run_at",
-        "retries_left",
-    )
+    @field_validator(*_ISSUE_FIELD_NAMES)
     @classmethod
-    def _field_names_not_blank(cls, value: str | None) -> str | None:
+    def _check_field_names(cls, value: str | None) -> str | None:
+        return _field_names_not_blank(value)
+
+
+class JiraFieldMapping(_IssueFieldMappingBase):
+    """Optional Jira custom fields carrying Forgeo task attributes."""
+
+    @field_validator(*_ISSUE_FIELD_NAMES)
+    @classmethod
+    def _check_field_names(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("Jira field names must not be blank")
         return value
@@ -554,37 +572,6 @@ class GitlabWorkflow(_IssueWorkflowBase):
     open_status: str = "opened"
 
 
-def _field_names_not_blank(value: str | None) -> str | None:
-    if value is not None and not value.strip():
-        raise ValueError("field names must not be blank")
-    return value
-
-
-class _IssueFieldMappingBase(BaseModel):
-    """Shared optional field mappings for issue providers."""
-
-    acceptance_criteria: str | None = None
-    dependencies: str | None = None
-    files_to_modify: str | None = None
-    agent_command: str | None = None
-    agent_timeout_seconds: str | None = None
-    run_at: str | None = None
-    retries_left: str | None = None
-
-    @field_validator(
-        "acceptance_criteria",
-        "dependencies",
-        "files_to_modify",
-        "agent_command",
-        "agent_timeout_seconds",
-        "run_at",
-        "retries_left",
-    )
-    @classmethod
-    def _check_field_names(cls, value: str | None) -> str | None:
-        return _field_names_not_blank(value)
-
-
 class GithubFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitHub issues."""
 
@@ -599,14 +586,6 @@ def _require_non_blank(value: str, message: str) -> str:
     return value
 
 
-def _validate_repo_field(value: str) -> str:
-    return _require_non_blank(value, "GitHub configuration values must not be blank")
-
-
-def _validate_gitlab_repo_field(value: str) -> str:
-    return _require_non_blank(value, "GitLab configuration values must not be blank")
-
-
 class GithubBacklogConfig(_IssueBacklogConfigBase):
     """GitHub-specific settings for an issue backlog."""
 
@@ -618,7 +597,7 @@ class GithubBacklogConfig(_IssueBacklogConfigBase):
     @field_validator("repo", "label_prefix", "property_key")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        return _validate_repo_field(value)
+        return _require_non_blank(value, "GitHub configuration values must not be blank")
 
 
 class GitlabBacklogConfig(_IssueBacklogConfigBase):
@@ -632,7 +611,7 @@ class GitlabBacklogConfig(_IssueBacklogConfigBase):
     @field_validator("repo", "label_prefix", "property_key")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        return _validate_gitlab_repo_field(value)
+        return _require_non_blank(value, "GitLab configuration values must not be blank")
 
 
 class ForgeoConfig(BaseModel):

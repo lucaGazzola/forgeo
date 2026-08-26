@@ -16,14 +16,12 @@ acceptance criteria and dependencies.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
 import os
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -292,15 +290,6 @@ class JiraBacklog(IssueBacklogBase):
     def __repr__(self) -> str:
         return f"JiraBacklog({self.url!r})"
 
-    @property
-    def _labels(self) -> dict[str, str]:
-        prefix = self.config.label_prefix
-        return {
-            "running": f"{prefix}-running",
-            "blocked": f"{prefix}-blocked",
-            "failed": f"{prefix}-failed",
-        }
-
     def _fields(self) -> list[str]:
         fields = [
             "summary",
@@ -327,10 +316,6 @@ class JiraBacklog(IssueBacklogBase):
             if field is not None
         )
         return list(dict.fromkeys(fields))
-
-    async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """Run one blocking Jira client call without blocking the event loop."""
-        return await asyncio.to_thread(function, *args, **kwargs)
 
     async def _get_issue(self, issue_key: str) -> dict[str, Any] | None:
         """Fetch an issue, translating Jira's not-found response to ``None``."""

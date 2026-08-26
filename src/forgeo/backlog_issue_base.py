@@ -1,14 +1,4 @@
-"""Shared helpers for issue-backed providers (Jira, GitHub, GitLab).
-
-Extracts logic that previously lived only in :mod:`forgeo.backlog_jira`:
-label handling, workflow mapping, engine-state persistence helpers,
-and datetime parsing.
-
-Issue providers subclass :class:`forgeo.backlog.IssueBacklogBase` and
-implement the abstract engine-state store (Jira issue property vs.
-GitHub/GitLab hidden body comment). Shared retry/blocked/claim logic
-stays provider-agnostic here.
-"""
+"""Shared helpers for issue-backed providers (Jira, GitHub, GitLab)."""
 
 from __future__ import annotations
 

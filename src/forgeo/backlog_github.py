@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -31,7 +29,6 @@ from forgeo.backlog_issue_base import (
     extract_engine_state,
     extract_issue_labels,
     extract_issue_number,
-    forgeo_labels,
     format_state_comment,
     next_reopen_state,
     next_retry_state,
@@ -179,13 +176,6 @@ class GithubBacklog(IssueBacklogBase):
     def __repr__(self) -> str:
         return f"GithubBacklog({self.url!r})"
 
-    @property
-    def _labels(self) -> dict[str, str]:
-        return forgeo_labels(self.config.label_prefix)
-
-    async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        return await asyncio.to_thread(function, *args, **kwargs)
-
     async def _get_issue(self, issue_id: str) -> dict[str, Any] | None:
         number = parse_numeric_issue_id(issue_id)
         if number is None:
@@ -234,7 +224,7 @@ class GithubBacklog(IssueBacklogBase):
         body = issue.get("body") if isinstance(issue.get("body"), str) else ""
         _, visible = extract_engine_state(body)
         new_body = embed_engine_state(visible, state)
-        number = self._issue_number(issue)
+        number = extract_issue_number(issue)
         if number is None:
             try:
                 number = int(issue_id)
@@ -242,16 +232,8 @@ class GithubBacklog(IssueBacklogBase):
                 return
         await self._call(self.client.update_issue, number, {"body": new_body})
 
-    @staticmethod
-    def _issue_number(issue: dict[str, Any]) -> int | None:
-        return extract_issue_number(issue)
-
-    @staticmethod
-    def _issue_labels(issue: dict[str, Any]) -> list[str]:
-        return extract_issue_labels(issue)
-
     def _state_from_issue(self, issue: dict[str, Any]) -> TaskStatus | None:
-        labels = set(self._issue_labels(issue))
+        labels = set(extract_issue_labels(issue))
         cfg = self._labels
         if cfg["blocked"] in labels:
             return TaskStatus.BLOCKED
@@ -267,7 +249,7 @@ class GithubBacklog(IssueBacklogBase):
         return None
 
     async def _task_from_issue(self, issue: dict[str, Any]) -> Task | None:
-        number = self._issue_number(issue)
+        number = extract_issue_number(issue)
         if number is None:
             return None
         status = self._state_from_issue(issue)
@@ -333,9 +315,9 @@ class GithubBacklog(IssueBacklogBase):
             current = await self._task_from_issue(issue)
             if current is None or current.status is not TaskStatus.OPEN:
                 return None
-            number = self._issue_number(issue)
+            number = extract_issue_number(issue)
             assert number is not None
-            labels = self._issue_labels(issue)
+            labels = extract_issue_labels(issue)
             if self._labels["running"] not in labels:
                 await self._update_labels(task.id, add=[self._labels["running"]], remove=[self._labels["blocked"], self._labels["failed"]])
             state = await self.get_engine_state(task.id)
@@ -347,10 +329,10 @@ class GithubBacklog(IssueBacklogBase):
         issues = await self._search_all()
         cutoff = datetime.now(UTC) - timedelta(seconds=self.config.claim_timeout_seconds)
         for issue in issues:
-            labels = self._issue_labels(issue)
+            labels = extract_issue_labels(issue)
             if self._labels["running"] not in labels:
                 continue
-            number = self._issue_number(issue)
+            number = extract_issue_number(issue)
             if number is None:
                 continue
             issue_id = str(number)
@@ -369,9 +351,9 @@ class GithubBacklog(IssueBacklogBase):
         issue = await self._get_issue(issue_id)
         if issue is None:
             return
-        number = self._issue_number(issue)
+        number = extract_issue_number(issue)
         assert number is not None
-        labels = set(self._issue_labels(issue))
+        labels = set(extract_issue_labels(issue))
         for label in add:
             labels.add(label)
         for label in remove:
@@ -382,7 +364,7 @@ class GithubBacklog(IssueBacklogBase):
         issue = await self._get_issue(issue_id)
         if issue is None:
             return
-        number = self._issue_number(issue)
+        number = extract_issue_number(issue)
         assert number is not None
         if issue.get("state") == state:
             return
@@ -396,7 +378,7 @@ class GithubBacklog(IssueBacklogBase):
         *,
         reason: list[str] | None = None,
     ) -> Task | None:
-        number = self._issue_number(issue)
+        number = extract_issue_number(issue)
         if number is None:
             return None
         issue_id = str(number)
@@ -529,7 +511,7 @@ class GithubBacklog(IssueBacklogBase):
             task = await self._task_from_issue(issue)
             if task is None:
                 return None
-            number = self._issue_number(issue)
+            number = extract_issue_number(issue)
             assert number is not None
             # Try to delete via client; fallback to close if not supported
             try:
@@ -580,7 +562,7 @@ class GithubBacklog(IssueBacklogBase):
                 candidate = Task.model_validate(candidate.model_dump(mode="python"))
             except ValidationError as exc:
                 raise ValueError(f"invalid task field(s): {exc}") from exc
-            number = self._issue_number(issue)
+            number = extract_issue_number(issue)
             assert number is not None
             fields: dict[str, Any] = {}
             if "title" in updates:

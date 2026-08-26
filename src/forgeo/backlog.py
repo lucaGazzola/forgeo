@@ -463,9 +463,11 @@ class DocumentBacklogStore(BacklogStore):
         self, task_id: str, reason: list[str], result: ExecutionResult
     ) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
+            from forgeo.backlog_issue_base import bump_state_counter
+
             entry["status"] = TaskStatus.BLOCKED.value
             entry["blocker_reason"] = list(reason)
-            entry["blocked_count"] = int(entry.get("blocked_count", 0)) + 1
+            bump_state_counter(entry, "blocked_count")
             entry["failure_reason"] = []
             _set_agent_response(entry, result, self._output_cap)
 
@@ -484,14 +486,18 @@ class DocumentBacklogStore(BacklogStore):
 
     async def bump_failed_wait(self, task_id: str) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
-            entry["failed_wait_cycles"] = int(entry.get("failed_wait_cycles", 0)) + 1
+            from forgeo.backlog_issue_base import bump_state_counter
+
+            bump_state_counter(entry, "failed_wait_cycles")
 
         return await self._update_entry(task_id, mutate)
 
     async def retry_task(self, task_id: str) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
+            from forgeo.backlog_issue_base import bump_state_counter
+
             entry["status"] = TaskStatus.OPEN.value
-            entry["retry_count"] = int(entry.get("retry_count", 0)) + 1
+            bump_state_counter(entry, "retry_count")
             entry["failed_wait_cycles"] = 0
             entry["failure_reason"] = []
 
@@ -573,6 +579,18 @@ class IssueBacklogBase(BacklogStore):
     (issue property) and GitHub/GitLab (hidden body marker) can share the same
     retry/blocked lease logic.
     """
+
+    @property
+    def _labels(self) -> dict[str, str]:
+        """Forgeo labels derived from ``self.config.label_prefix``."""
+        from forgeo.backlog_issue_base import forgeo_labels
+
+        # All issue configs expose ``label_prefix``; duck-type for shared base.
+        return forgeo_labels(self.config.label_prefix)  # type: ignore[attr-defined]
+
+    async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Run a blocking client call without blocking the event loop."""
+        return await asyncio.to_thread(function, *args, **kwargs)
 
     @abstractmethod
     async def get_engine_state(self, issue_id: str) -> dict[str, Any]:

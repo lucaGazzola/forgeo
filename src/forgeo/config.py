@@ -41,13 +41,10 @@ def load_config(path: str | Path) -> ForgeoConfig:
     base = config_path.parent.resolve()
     updates: dict[str, Path | str] = {}
     for field in ("repo", "blocker_file"):
-        value: Path = getattr(config, field)
-        if resolved := _maybe_resolve(value, base):
+        if resolved := _maybe_resolve(getattr(config, field), base):
             updates[field] = resolved
-    if not config.backlog_is_url:
-        backlog_path = Path(config.backlog)
-        if resolved := _maybe_resolve(backlog_path, base):
-            updates["backlog"] = resolved
+    if not config.backlog_is_url and (resolved := _maybe_resolve(Path(config.backlog), base)):
+        updates["backlog"] = resolved
     if config.state_dir is None:
         if config.backlog_is_remote:
             # A remote backlog has no file for the locks and the run history
@@ -55,10 +52,10 @@ def load_config(path: str | Path) -> ForgeoConfig:
             updates["state_dir"] = base
     elif resolved := _maybe_resolve(config.state_dir, base):
         updates["state_dir"] = resolved
-    if resolved := _maybe_resolve(config.task_context, base):
-        updates["task_context"] = resolved
-    log_path = Path(config.log_file)
-    if resolved := _maybe_resolve(log_path, base):
+    for field in ("task_context",):
+        if resolved := _maybe_resolve(getattr(config, field), base):
+            updates[field] = resolved
+    if resolved := _maybe_resolve(Path(config.log_file), base):
         updates["log_file"] = str(resolved)
     return config if not updates else config.model_copy(update=updates)
 

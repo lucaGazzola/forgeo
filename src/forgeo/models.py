@@ -593,16 +593,18 @@ class GitlabFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitLab issues."""
 
 
-def _validate_repo_field(value: str) -> str:
+def _require_non_blank(value: str, message: str) -> str:
     if not value.strip():
-        raise ValueError("GitHub configuration values must not be blank")
+        raise ValueError(message)
     return value
+
+
+def _validate_repo_field(value: str) -> str:
+    return _require_non_blank(value, "GitHub configuration values must not be blank")
 
 
 def _validate_gitlab_repo_field(value: str) -> str:
-    if not value.strip():
-        raise ValueError("GitLab configuration values must not be blank")
-    return value
+    return _require_non_blank(value, "GitLab configuration values must not be blank")
 
 
 class GithubBacklogConfig(_IssueBacklogConfigBase):
@@ -879,15 +881,13 @@ class ForgeoConfig(BaseModel):
     def backlog_is_issue_provider(self) -> bool:
         return self.effective_backlog_provider in ISSUE_PROVIDERS
 
-    @model_validator(mode="after")
-    def _docker_requires_image(self) -> ForgeoConfig:
+    def _check_sandbox(self) -> None:
         if self.agent_sandbox is SandboxMode.DOCKER and not (self.agent_sandbox_image or "").strip():
             raise ValueError("agent_sandbox_image is required when agent_sandbox is 'docker'")
         if self.no_changes_exit_code == self.blocked_exit_code:
-            raise ValueError(
-                "no_changes_exit_code must differ from blocked_exit_code"
-            )
-        provider = self.effective_backlog_provider
+            raise ValueError("no_changes_exit_code must differ from blocked_exit_code")
+
+    def _check_provider_url(self, provider: str) -> None:
         if provider in REMOTE_PROVIDERS and not self.backlog_is_url:
             raise ValueError(
                 f"backlog must be an http:// or https:// URL when backlog_provider is "
@@ -902,6 +902,8 @@ class ForgeoConfig(BaseModel):
                 "backlog_auth is only valid when backlog is an http:// or https:// URL "
                 "and backlog_provider is 'http'"
             )
+
+    def _check_provider_blocks(self, provider: str) -> None:
         if provider == "jira" and self.jira is None:
             raise ValueError("jira configuration is required when backlog_provider is 'jira'")
         if provider != "jira" and self.jira is not None:
@@ -923,4 +925,11 @@ class ForgeoConfig(BaseModel):
                 "gitlab configuration is only valid when backlog_provider is 'gitlab' "
                 "or 'auto' with a GitLab backlog"
             )
+
+    @model_validator(mode="after")
+    def _docker_requires_image(self) -> ForgeoConfig:
+        self._check_sandbox()
+        provider = self.effective_backlog_provider
+        self._check_provider_url(provider)
+        self._check_provider_blocks(provider)
         return self

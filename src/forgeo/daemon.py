@@ -75,22 +75,17 @@ def _config_mtime_ns(config_path: Path | None) -> int | None:
         return None
 
 
-_fcntl_module: Any | None = None
-_fcntl_checked = False
+_fcntl_module: Any | None
+try:
+    import fcntl as _fcntl_imported
+
+    _fcntl_module = _fcntl_imported
+except ImportError:  # pragma: no cover - Windows
+    _fcntl_module = None
 
 
 def _fcntl() -> Any | None:
     """The ``fcntl`` module, or ``None`` on platforms without it (Windows)."""
-    global _fcntl_module, _fcntl_checked
-    if _fcntl_checked:
-        return _fcntl_module
-    _fcntl_checked = True
-    try:
-        import fcntl
-
-        _fcntl_module = fcntl
-    except ImportError:
-        _fcntl_module = None
     return _fcntl_module
 
 

@@ -22,8 +22,10 @@ from forgeo.io import atomic_write_text
 from forgeo.models import ForgeoConfig
 
 
-def _resolve_path(value: Path, base: Path) -> Path:
-    return base / value if not value.is_absolute() else value
+def _maybe_resolve(path: Path | None, base: Path) -> Path | None:
+    if path is None or path.is_absolute():
+        return None
+    return base / path
 
 
 def load_config(path: str | Path) -> ForgeoConfig:
@@ -38,23 +40,26 @@ def load_config(path: str | Path) -> ForgeoConfig:
     config = ForgeoConfig.model_validate(payload)
     base = config_path.parent.resolve()
     updates: dict[str, Path | str] = {}
-    if not config.repo.is_absolute():
-        updates["repo"] = _resolve_path(config.repo, base)
-    if not config.backlog_is_url and not Path(config.backlog).is_absolute():
-        updates["backlog"] = _resolve_path(Path(config.backlog), base)
+    for field in ("repo", "blocker_file"):
+        value: Path = getattr(config, field)
+        if resolved := _maybe_resolve(value, base):
+            updates[field] = resolved
+    if not config.backlog_is_url:
+        backlog_path = Path(config.backlog)
+        if resolved := _maybe_resolve(backlog_path, base):
+            updates["backlog"] = resolved
     if config.state_dir is None:
         if config.backlog_is_remote:
             # A remote backlog has no file for the locks and the run history
             # to sit beside, so they go next to the config that describes it.
             updates["state_dir"] = base
-    elif not config.state_dir.is_absolute():
-        updates["state_dir"] = _resolve_path(config.state_dir, base)
-    if not config.blocker_file.is_absolute():
-        updates["blocker_file"] = _resolve_path(config.blocker_file, base)
-    if config.task_context is not None and not config.task_context.is_absolute():
-        updates["task_context"] = _resolve_path(config.task_context, base)
-    if not Path(config.log_file).is_absolute():
-        updates["log_file"] = str(_resolve_path(Path(config.log_file), base))
+    elif resolved := _maybe_resolve(config.state_dir, base):
+        updates["state_dir"] = resolved
+    if resolved := _maybe_resolve(config.task_context, base):
+        updates["task_context"] = resolved
+    log_path = Path(config.log_file)
+    if resolved := _maybe_resolve(log_path, base):
+        updates["log_file"] = str(resolved)
     return config if not updates else config.model_copy(update=updates)
 
 

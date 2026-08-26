@@ -187,6 +187,21 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
+_REMOTE_PREFIX: dict[str, str] = {
+    "jira": "Jira backlog could not be read",
+    "github": "GitHub backlog could not be read",
+    "gitlab": "GitLab backlog could not be read",
+    "http": "backlog endpoint could not be read",
+}
+
+_REMOTE_OK_NOTE: dict[str, str] = {
+    "jira": "Jira backlog answers",
+    "github": "GitHub backlog answers",
+    "gitlab": "GitLab backlog answers",
+    "http": "backlog endpoint answers",
+}
+
+
 def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     """Fetch a remote backlog once to prove it answers before a cycle needs it."""
     try:
@@ -199,23 +214,12 @@ def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> Non
             return
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
         provider = config.effective_backlog_provider
-        prefix = {
-            "jira": "Jira backlog could not be read",
-            "github": "GitHub backlog could not be read",
-            "gitlab": "GitLab backlog could not be read",
-            "http": "backlog endpoint could not be read",
-        }.get(provider, "backlog could not be read")
+        prefix = _REMOTE_PREFIX.get(provider, "backlog could not be read")
         report.problems.append(f"{prefix}: {exc}")
         return
     provider = config.effective_backlog_provider
-    if provider == "jira":
-        report.notes.append(f"Jira backlog answers ({config.backlog})")
-    elif provider == "github":
-        report.notes.append(f"GitHub backlog answers ({config.backlog})")
-    elif provider == "gitlab":
-        report.notes.append(f"GitLab backlog answers ({config.backlog})")
-    else:
-        report.notes.append(f"backlog endpoint answers ({config.backlog})")
+    note_prefix = _REMOTE_OK_NOTE.get(provider, "backlog endpoint answers")
+    report.notes.append(f"{note_prefix} ({config.backlog})")
 
 
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:

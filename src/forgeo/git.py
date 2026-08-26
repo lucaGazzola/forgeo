@@ -106,7 +106,7 @@ class GitManager:
     def commit_all(self, message: str) -> str | None:
         """Stage all changes and commit; returns the short sha, or ``None`` if nothing to commit."""
         self._run("add", "-A")
-        if not bool(self._run("status", "--porcelain")):
+        if not self._run("status", "--porcelain"):
             return None
         self._run("commit", "-m", message)
         return self._run("rev-parse", "--short", "HEAD")

@@ -67,10 +67,11 @@ class RunRecorder:
             lines = self.path.read_text(encoding="utf-8", errors="replace").splitlines()
             if len(lines) < self.keep:
                 return False
-            room = self.keep - 1
-            lines = lines[-room:] if room > 0 else []
-            lines.append(record.model_dump_json())
-            atomic_write_text(self.path, "\n".join(lines) + "\n")
+            # Keep the newest keep-1 existing lines, then append the new record.
+            keep_existing = self.keep - 1
+            trimmed = lines[-keep_existing:] if keep_existing > 0 else []
+            trimmed.append(record.model_dump_json())
+            atomic_write_text(self.path, "\n".join(trimmed) + "\n")
             return True
         except OSError as exc:
             logger.error(

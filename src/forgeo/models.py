@@ -554,6 +554,12 @@ class GitlabWorkflow(_IssueWorkflowBase):
     open_status: str = "opened"
 
 
+def _field_names_not_blank(value: str | None) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError("field names must not be blank")
+    return value
+
+
 class _IssueFieldMappingBase(BaseModel):
     """Shared optional field mappings for issue providers."""
 
@@ -575,10 +581,8 @@ class _IssueFieldMappingBase(BaseModel):
         "retries_left",
     )
     @classmethod
-    def _field_names_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("field names must not be blank")
-        return value
+    def _check_field_names(cls, value: str | None) -> str | None:
+        return _field_names_not_blank(value)
 
 
 class GithubFieldMapping(_IssueFieldMappingBase):
@@ -587,6 +591,18 @@ class GithubFieldMapping(_IssueFieldMappingBase):
 
 class GitlabFieldMapping(_IssueFieldMappingBase):
     """Optional field mappings for GitLab issues."""
+
+
+def _validate_repo_field(value: str) -> str:
+    if not value.strip():
+        raise ValueError("GitHub configuration values must not be blank")
+    return value
+
+
+def _validate_gitlab_repo_field(value: str) -> str:
+    if not value.strip():
+        raise ValueError("GitLab configuration values must not be blank")
+    return value
 
 
 class GithubBacklogConfig(_IssueBacklogConfigBase):
@@ -600,9 +616,7 @@ class GithubBacklogConfig(_IssueBacklogConfigBase):
     @field_validator("repo", "label_prefix", "property_key")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("GitHub configuration values must not be blank")
-        return value
+        return _validate_repo_field(value)
 
 
 class GitlabBacklogConfig(_IssueBacklogConfigBase):
@@ -616,9 +630,7 @@ class GitlabBacklogConfig(_IssueBacklogConfigBase):
     @field_validator("repo", "label_prefix", "property_key")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("GitLab configuration values must not be blank")
-        return value
+        return _validate_gitlab_repo_field(value)
 
 
 class ForgeoConfig(BaseModel):

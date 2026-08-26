@@ -26,9 +26,14 @@ from forgeo.backlog_issue_base import (
     as_optional_float,
     as_optional_int,
     as_string_list,
+    bump_state_counter,
     embed_engine_state,
     extract_engine_state,
+    format_state_comment,
+    next_reopen_state,
+    next_retry_state,
     parse_datetime,
+    parse_numeric_issue_id,
     parse_optional_datetime,
 )
 from forgeo.models import ExecutionResult, GitlabBacklogConfig, Task, TaskStatus
@@ -174,13 +179,9 @@ class GitlabBacklog(IssueBacklogBase):
         return await asyncio.to_thread(function, *args, **kwargs)
 
     async def _get_issue(self, issue_id: str) -> dict[str, Any] | None:
-        try:
-            iid = int(issue_id)
-        except ValueError:
-            try:
-                iid = int(issue_id.split("-")[-1])
-            except ValueError:
-                return None
+        iid = parse_numeric_issue_id(issue_id)
+        if iid is None:
+            return None
         try:
             issue = await self._call(self.client.get_issue, iid)
         except GitlabRequestError as exc:
@@ -419,7 +420,7 @@ class GitlabBacklog(IssueBacklogBase):
             return await self.get_task(issue_id)
         if status is TaskStatus.BLOCKED:
             state["blocker_reason"] = list(reason or [])
-            state["blocked_count"] = (as_optional_int(state.get("blocked_count")) or 0) + 1
+            bump_state_counter(state, "blocked_count")
             state["failure_reason"] = []
             state.pop("claimed_at", None)
             await self._update_labels(issue_id, add=[self._labels["blocked"]], remove=[self._labels["running"], self._labels["failed"]])
@@ -435,8 +436,7 @@ class GitlabBacklog(IssueBacklogBase):
         return await self.get_task(issue_id)
 
     def _comment(self, iid: int, state: str, reason: list[str]) -> None:
-        text = "\n".join(reason[-20:]) if reason else "No reason was provided."
-        self._pending_comments.append((iid, f"[forgeo] {state}\n{text}"))
+        self._pending_comments.append((iid, format_state_comment(state, reason)))
 
     async def _flush_comments(self) -> None:
         comments = getattr(self, "_pending_comments", [])
@@ -483,7 +483,7 @@ class GitlabBacklog(IssueBacklogBase):
             if task is None:
                 return None
             state = await self.get_engine_state(task_id)
-            state["failed_wait_cycles"] = (as_optional_int(state.get("failed_wait_cycles")) or 0) + 1
+            bump_state_counter(state, "failed_wait_cycles")
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
@@ -496,14 +496,8 @@ class GitlabBacklog(IssueBacklogBase):
             if task is None or task.status is not TaskStatus.FAILED:
                 return None
             state = await self.get_engine_state(task_id)
-            state.update(
-                {
-                    "state": TaskStatus.OPEN.value,
-                    "retry_count": (as_optional_int(state.get("retry_count")) or 0) + 1,
-                    "failed_wait_cycles": 0,
-                    "failure_reason": [],
-                }
-            )
+            state["state"] = TaskStatus.OPEN.value
+            next_retry_state(state)
             await self._transition_state(task_id, "opened")
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self.put_engine_state(task_id, state)
@@ -518,13 +512,8 @@ class GitlabBacklog(IssueBacklogBase):
             if task is None or task.status is not TaskStatus.BLOCKED:
                 return None
             state = await self.get_engine_state(task_id)
-            state.update(
-                {
-                    "state": TaskStatus.OPEN.value,
-                    "blocker_reason": [],
-                    "failure_reason": [],
-                }
-            )
+            state["state"] = TaskStatus.OPEN.value
+            next_reopen_state(state)
             await self._transition_state(task_id, "opened")
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self.put_engine_state(task_id, state)

@@ -954,79 +954,84 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if config is None:
                 return
             lock = lock_path(config)
-
             if action == "start":
-                if is_lock_held(lock):
-                    self._send_json(
-                        409,
-                        {
-                            "status": "already_running",
-                            "error": "daemon already running",
-                            "message": f"Forgeo {config.name!r} is already running.",
-                            "daemon_running": True,
-                            "pid": read_lock_pid(lock),
-                        },
-                    )
-                    return
-                try:
-                    pid = daemon_control.start_daemon(info.config_path, config)
-                except daemon_control.DaemonError as exc:
-                    self._send_json(
-                        500,
-                        {
-                            "status": "start_failed",
-                            "error": str(exc),
-                            "daemon_running": is_lock_held(lock),
-                        },
-                    )
-                    return
+                self._daemon_start(info, config, lock)
+            elif action == "stop":
+                self._daemon_stop(config, lock)
+            else:
+                self._daemon_restart(info, config, lock)
+
+        def _daemon_start(self, info: Any, config: ForgeoConfig, lock: Path) -> None:
+            if is_lock_held(lock):
                 self._send_json(
-                    200,
+                    409,
                     {
-                        "status": "started",
-                        "message": (
-                            f"Forgeo {config.name!r} started "
-                            f"(pid {pid}, interval {config.interval_minutes} min)."
-                        ),
+                        "status": "already_running",
+                        "error": "daemon already running",
+                        "message": f"Forgeo {config.name!r} is already running.",
                         "daemon_running": True,
-                        "pid": pid,
+                        "pid": read_lock_pid(lock),
                     },
                 )
                 return
+            try:
+                pid = daemon_control.start_daemon(info.config_path, config)
+            except daemon_control.DaemonError as exc:
+                self._send_json(
+                    500,
+                    {
+                        "status": "start_failed",
+                        "error": str(exc),
+                        "daemon_running": is_lock_held(lock),
+                    },
+                )
+                return
+            self._send_json(
+                200,
+                {
+                    "status": "started",
+                    "message": (
+                        f"Forgeo {config.name!r} started "
+                        f"(pid {pid}, interval {config.interval_minutes} min)."
+                    ),
+                    "daemon_running": True,
+                    "pid": pid,
+                },
+            )
 
-            if action == "stop":
-                if not is_lock_held(lock):
-                    self._send_json(
-                        200,
-                        {
-                            "status": "not_running",
-                            "message": f"Forgeo {config.name!r} is not running.",
-                            "daemon_running": False,
-                        },
-                    )
-                    return
-                try:
-                    daemon_control.stop_daemon(config)
-                except daemon_control.DaemonError as exc:
-                    self._send_json(
-                        500,
-                        {
-                            "status": "stop_failed",
-                            "error": str(exc),
-                            "daemon_running": is_lock_held(lock),
-                        },
-                    )
-                    return
+        def _daemon_stop(self, config: ForgeoConfig, lock: Path) -> None:
+            if not is_lock_held(lock):
                 self._send_json(
                     200,
                     {
-                        "status": "stopped",
-                        "message": f"Forgeo {config.name!r} stopped.",
+                        "status": "not_running",
+                        "message": f"Forgeo {config.name!r} is not running.",
                         "daemon_running": False,
                     },
                 )
                 return
+            try:
+                daemon_control.stop_daemon(config)
+            except daemon_control.DaemonError as exc:
+                self._send_json(
+                    500,
+                    {
+                        "status": "stop_failed",
+                        "error": str(exc),
+                        "daemon_running": is_lock_held(lock),
+                    },
+                )
+                return
+            self._send_json(
+                200,
+                {
+                    "status": "stopped",
+                    "message": f"Forgeo {config.name!r} stopped.",
+                    "daemon_running": False,
+                },
+            )
 
+        def _daemon_restart(self, info: Any, config: ForgeoConfig, lock: Path) -> None:
             try:
                 pid = daemon_control.restart_daemon(info.config_path, config)
             except daemon_control.DaemonError as exc:

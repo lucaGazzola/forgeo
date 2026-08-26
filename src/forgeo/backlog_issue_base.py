@@ -185,4 +185,52 @@ def extract_engine_state(body: str | None) -> tuple[dict[str, Any], str]:
     return state, visible
 
 
+# ------------------------------------------------------------------ #
+# Shared helpers for GitHub / GitLab issue providers                  #
+# ------------------------------------------------------------------ #
+
+
+def parse_numeric_issue_id(issue_id: str) -> int | None:
+    """Parse a numeric issue id, handling ``WEB-123`` style prefixes."""
+    try:
+        return int(issue_id)
+    except ValueError:
+        try:
+            return int(issue_id.split("-")[-1])
+        except ValueError:
+            return None
+
+
+def format_state_comment(state: str, reason: list[str]) -> str:
+    """One-line comment body the forgeo leaves on a blocked/failed issue."""
+    text = "\n".join(reason[-20:]) if reason else "No reason was provided."
+    return f"[forgeo] {state}\n{text}"
+
+
+def bump_state_counter(state: dict[str, Any], key: str) -> int:
+    """Increment ``state[key]`` as a non-negative int and return the new value."""
+    current = as_optional_int(state.get(key)) or 0
+    new_value = current + 1
+    state[key] = new_value
+    return new_value
+
+
+def next_retry_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Mutate ``state`` for a retry transition and return it."""
+    state.update(
+        {
+            "retry_count": (as_optional_int(state.get("retry_count")) or 0) + 1,
+            "failed_wait_cycles": 0,
+            "failure_reason": [],
+        }
+    )
+    return state
+
+
+def next_reopen_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Mutate ``state`` for a reopen transition and return it."""
+    state.update({"blocker_reason": [], "failure_reason": []})
+    return state
+
+
 

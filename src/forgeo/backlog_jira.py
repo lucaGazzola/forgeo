@@ -42,6 +42,9 @@ from forgeo.backlog_issue_base import (
     as_optional_float,
     as_optional_int,
     as_string_list,
+    bump_state_counter,
+    next_reopen_state,
+    next_retry_state,
     parse_datetime,
     parse_optional_datetime,
     plain_text_to_adf,
@@ -713,7 +716,7 @@ class JiraBacklog(IssueBacklogBase):
             return await self.get_task(key)
         if status is TaskStatus.BLOCKED:
             metadata["blocker_reason"] = list(reason or [])
-            metadata["blocked_count"] = (as_optional_int(metadata.get("blocked_count")) or 0) + 1
+            bump_state_counter(metadata, "blocked_count")
             metadata["failure_reason"] = []
             metadata.pop("claimed_at", None)
             await self._update_labels(
@@ -801,7 +804,7 @@ class JiraBacklog(IssueBacklogBase):
             if task is None:
                 return None
             metadata = await self._metadata(task_id)
-            metadata["failed_wait_cycles"] = (as_optional_int(metadata.get("failed_wait_cycles")) or 0) + 1
+            bump_state_counter(metadata, "failed_wait_cycles")
             await self._save_metadata(task_id, metadata)
             return await self.get_task(task_id)
 
@@ -814,14 +817,8 @@ class JiraBacklog(IssueBacklogBase):
             if task is None or task.status is not TaskStatus.FAILED:
                 return None
             metadata = await self._metadata(task_id)
-            metadata.update(
-                {
-                    "state": TaskStatus.OPEN.value,
-                    "retry_count": (as_optional_int(metadata.get("retry_count")) or 0) + 1,
-                    "failed_wait_cycles": 0,
-                    "failure_reason": [],
-                }
-            )
+            metadata["state"] = TaskStatus.OPEN.value
+            next_retry_state(metadata)
             await self._transition_to(issue, self.config.workflow.open_status)
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self._save_metadata(task_id, metadata)
@@ -836,13 +833,8 @@ class JiraBacklog(IssueBacklogBase):
             if task is None or task.status is not TaskStatus.BLOCKED:
                 return None
             metadata = await self._metadata(task_id)
-            metadata.update(
-                {
-                    "state": TaskStatus.OPEN.value,
-                    "blocker_reason": [],
-                    "failure_reason": [],
-                }
-            )
+            metadata["state"] = TaskStatus.OPEN.value
+            next_reopen_state(metadata)
             await self._transition_to(issue, self.config.workflow.open_status)
             await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
             await self._save_metadata(task_id, metadata)

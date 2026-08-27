@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import urllib.error
 from datetime import UTC, datetime
 from typing import Any
 
@@ -260,6 +262,44 @@ def extract_issue_number(issue: dict[str, Any]) -> int | None:
         if isinstance(value, str) and value.isdigit():
             return int(value)
     return None
+
+
+ENGINE_STATE_FIELDS: frozenset[str] = frozenset(
+    {
+        "description",
+        "acceptance_criteria",
+        "dependencies",
+        "files_to_modify",
+        "agent_command",
+        "agent_timeout_seconds",
+        "run_at",
+        "retries_left",
+    }
+)
+
+
+# ------------------------------------------------------------------ #
+# Shared HTTP / auth helpers                                          #
+# ------------------------------------------------------------------ #
+
+ERROR_DETAIL_LIMIT = 500
+
+
+def http_error_detail_suffix(exc: urllib.error.HTTPError) -> str:
+    """Truncated detail suffix for an HTTPError (empty when no detail)."""
+    try:
+        detail = exc.read().decode("utf-8", errors="replace")
+    except OSError:
+        detail = ""
+    return f" {detail[:ERROR_DETAIL_LIMIT]}" if detail else ""
+
+
+def require_env_token(token_env: str, label: str, error_cls: type) -> str:
+    """Return the env token or raise ``error_cls`` with a standard message."""
+    token = os.environ.get(token_env)
+    if not token:
+        raise error_cls(f"{label} token environment variable {token_env!r} is not set")
+    return token
 
 
 

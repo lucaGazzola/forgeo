@@ -37,6 +37,7 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
+from forgeo.backlog_issue_base import bump_state_counter, forgeo_labels
 from forgeo.io import atomic_write_text
 from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
 
@@ -463,8 +464,6 @@ class DocumentBacklogStore(BacklogStore):
         self, task_id: str, reason: list[str], result: ExecutionResult
     ) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
-            from forgeo.backlog_issue_base import bump_state_counter
-
             entry["status"] = TaskStatus.BLOCKED.value
             entry["blocker_reason"] = list(reason)
             bump_state_counter(entry, "blocked_count")
@@ -486,16 +485,12 @@ class DocumentBacklogStore(BacklogStore):
 
     async def bump_failed_wait(self, task_id: str) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
-            from forgeo.backlog_issue_base import bump_state_counter
-
             bump_state_counter(entry, "failed_wait_cycles")
 
         return await self._update_entry(task_id, mutate)
 
     async def retry_task(self, task_id: str) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
-            from forgeo.backlog_issue_base import bump_state_counter
-
             entry["status"] = TaskStatus.OPEN.value
             bump_state_counter(entry, "retry_count")
             entry["failed_wait_cycles"] = 0
@@ -583,8 +578,6 @@ class IssueBacklogBase(BacklogStore):
     @property
     def _labels(self) -> dict[str, str]:
         """Forgeo labels derived from ``self.config.label_prefix``."""
-        from forgeo.backlog_issue_base import forgeo_labels
-
         # All issue configs expose ``label_prefix``; duck-type for shared base.
         return forgeo_labels(self.config.label_prefix)  # type: ignore[attr-defined]
 

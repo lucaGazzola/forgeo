@@ -41,11 +41,14 @@ from forgeo.backlog_issue_base import (
     as_optional_int,
     as_string_list,
     bump_state_counter,
+    format_state_comment,
+    http_error_detail_suffix,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
     parse_optional_datetime,
     plain_text_to_adf,
+    require_env_token,
 )
 from forgeo.models import (
     ExecutionResult,
@@ -87,11 +90,7 @@ class JiraClient:
         return url
 
     def _auth_header(self) -> str:
-        token = os.environ.get(self.config.auth.token_env)
-        if not token:
-            raise JiraRequestError(
-                f"Jira token environment variable {self.config.auth.token_env!r} is not set"
-            )
+        token = require_env_token(self.config.auth.token_env, "Jira", JiraRequestError)
         if self.config.auth.scheme == "bearer":
             return f"Bearer {token}"
         username = self.config.auth.username
@@ -129,11 +128,7 @@ class JiraClient:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
                 raw = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-            except OSError:
-                detail = ""
-            suffix = f" {detail[:500]}" if detail else ""
+            suffix = http_error_detail_suffix(exc)
             raise JiraRequestError(
                 f"{method} {request.full_url} failed with HTTP {exc.code} "
                 f"{exc.reason}.{suffix}",
@@ -731,8 +726,7 @@ class JiraBacklog(IssueBacklogBase):
 
     def _comment(self, issue_key: str, state: str, reason: list[str]) -> None:
         """Add a bounded, clearly marked Jira comment without affecting the run."""
-        text = "\n".join(reason[-20:]) if reason else "No reason was provided."
-        self._pending_comments.append((issue_key, f"{DEFAULT_COMMENT_MARKER} {state}\n{text}"))
+        self._pending_comments.append((issue_key, format_state_comment(state, reason)))
 
     async def _flush_comments(self) -> None:
         comments = getattr(self, "_pending_comments", [])

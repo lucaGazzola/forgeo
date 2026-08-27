@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -20,6 +19,7 @@ from forgeo.backlog import (
     validate_task_updates,
 )
 from forgeo.backlog_issue_base import (
+    ENGINE_STATE_FIELDS,
     as_nonnegative_int,
     as_optional_float,
     as_optional_int,
@@ -30,11 +30,13 @@ from forgeo.backlog_issue_base import (
     extract_issue_labels,
     extract_issue_number,
     format_state_comment,
+    http_error_detail_suffix,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
     parse_numeric_issue_id,
     parse_optional_datetime,
+    require_env_token,
 )
 from forgeo.models import ExecutionResult, GitlabBacklogConfig, Task, TaskStatus
 
@@ -55,11 +57,7 @@ class GitlabClient:
         self.config = config
 
     def _auth_headers(self) -> dict[str, str]:
-        token = os.environ.get(self.config.auth.token_env)
-        if not token:
-            raise GitlabRequestError(
-                f"GitLab token environment variable {self.config.auth.token_env!r} is not set"
-            )
+        token = require_env_token(self.config.auth.token_env, "GitLab", GitlabRequestError)
         # GitLab prefers PRIVATE-TOKEN, but also accepts Bearer
         return {"PRIVATE-TOKEN": token, "Authorization": f"Bearer {token}"}
 
@@ -96,11 +94,7 @@ class GitlabClient:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
                 raw = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-            except OSError:
-                detail = ""
-            suffix = f" {detail[:500]}" if detail else ""
+            suffix = http_error_detail_suffix(exc)
             raise GitlabRequestError(
                 f"{method} {request.full_url} failed with HTTP {exc.code} {exc.reason}.{suffix}",
                 status=exc.code,
@@ -550,7 +544,7 @@ class GitlabBacklog(IssueBacklogBase):
             fields: dict[str, Any] = {}
             if "title" in updates:
                 fields["title"] = candidate.title
-            if any(k in updates for k in ("description", "acceptance_criteria", "dependencies", "files_to_modify", "agent_command", "agent_timeout_seconds", "run_at", "retries_left")):
+            if not ENGINE_STATE_FIELDS.isdisjoint(updates):
                 state = await self.get_engine_state(task_id)
                 state.update(
                     {

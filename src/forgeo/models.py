@@ -466,13 +466,6 @@ class _IssueFieldMappingBase(BaseModel):
 class JiraFieldMapping(_IssueFieldMappingBase):
     """Optional Jira custom fields carrying Forgeo task attributes."""
 
-    @field_validator(*_ISSUE_FIELD_NAMES)
-    @classmethod
-    def _check_field_names(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("Jira field names must not be blank")
-        return value
-
 
 class _IssueBacklogConfigBase(BaseModel):
     """Shared settings for issue backlogs."""

@@ -40,7 +40,7 @@ def load_config(path: str | Path) -> ForgeoConfig:
     config = ForgeoConfig.model_validate(payload)
     base = config_path.parent.resolve()
     updates: dict[str, Path | str] = {}
-    for field in ("repo", "blocker_file"):
+    for field in ("repo", "blocker_file", "task_context"):
         if resolved := _maybe_resolve(getattr(config, field), base):
             updates[field] = resolved
     if not config.backlog_is_url and (resolved := _maybe_resolve(Path(config.backlog), base)):
@@ -52,9 +52,6 @@ def load_config(path: str | Path) -> ForgeoConfig:
             updates["state_dir"] = base
     elif resolved := _maybe_resolve(config.state_dir, base):
         updates["state_dir"] = resolved
-    for field in ("task_context",):
-        if resolved := _maybe_resolve(getattr(config, field), base):
-            updates[field] = resolved
     if resolved := _maybe_resolve(Path(config.log_file), base):
         updates["log_file"] = str(resolved)
     return config if not updates else config.model_copy(update=updates)

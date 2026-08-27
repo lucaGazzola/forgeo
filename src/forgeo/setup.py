@@ -18,6 +18,8 @@ The result is written as ``forgeo.yaml`` next to the project.
 
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -128,8 +130,6 @@ def _ask_multiline(input_fn: SetupInput | None, prompt: str, console: Console) -
 def _detect_github_repo(project_root: Path) -> str | None:
     """Try to infer owner/repo from git remote origin."""
     try:
-        import subprocess
-
         url = subprocess.check_output(
             ["git", "remote", "get-url", "origin"],
             cwd=project_root,
@@ -172,8 +172,6 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
             encoding="utf-8",
         )
         try:
-            import os
-
             os.chmod(env_file, 0o600)
         except Exception:  # noqa: BLE001, S110 - chmod is best-effort, ignore failures
             pass
@@ -196,6 +194,150 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
         console.print(f"[dim]Run: source {env_file}  or  export {token_env}=xxx  before forgeo start/validate[/dim]")
     except Exception as exc:  # noqa: BLE001 - token persistence is best-effort, never fail setup
         console.print(f"[yellow]Could not persist token: {exc}[/yellow]")
+
+
+def _ask_forgeo_dir(input_fn: SetupInput | None, out: Console) -> str | None:
+    """Prompt for the forgeo folder; returns None when aborted on absolute path."""
+    forgeo_dir = _ask_text(
+        input_fn,
+        f"[bold]Forgeo folder[/bold] for backlog, BLOCKER.md and logs "
+        f"[default {DEFAULT_FORGEO_DIR}]",
+        default=DEFAULT_FORGEO_DIR,
+    ).strip()
+    forgeo_dir = forgeo_dir.removeprefix("./").rstrip("/") or DEFAULT_FORGEO_DIR
+    if Path(forgeo_dir).is_absolute():
+        out.print("[red]Forgeo folder must live inside the project. Aborting.[/red]")
+        return None
+    if ".." in Path(forgeo_dir).parts:
+        out.print(
+            "[yellow]Note: Forgeo folder escapes the project root — the "
+            "gitignore rule will not protect it.[/yellow]"
+        )
+    return forgeo_dir
+
+
+def _ask_provider(input_fn: SetupInput | None, out: Console) -> str:
+    """Prompt for the backlog provider, normalising unknown values to default."""
+    provider_raw = _ask_text(
+        input_fn,
+        "[bold]Backlog provider[/bold] [file/github/gitlab/jira/http] [default file]",
+        default=DEFAULT_PROVIDER,
+    ).strip().lower() or DEFAULT_PROVIDER
+    provider = provider_raw if provider_raw in PROVIDER_CHOICES else DEFAULT_PROVIDER
+    if provider_raw not in PROVIDER_CHOICES:
+        out.print(f"[yellow]Unknown provider {provider_raw!r}, using {DEFAULT_PROVIDER}.[/yellow]")
+    return provider
+
+
+def _setup_github(
+    root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
+) -> tuple[str, str, dict[str, object], str, str]:
+    """Collect GitHub provider details; returns (backlog, provider, cfg, state_dir, token_env)."""
+    detected = _detect_github_repo(root)
+    default_repo = detected or ""
+    github_repo = ""
+    while not github_repo.strip() or "/" not in github_repo:
+        github_repo = _ask_text(
+            input_fn,
+            "[bold]GitHub repository[/bold] (owner/repo)" + (f" [default {default_repo}]" if default_repo else ""),
+            default=default_repo or None,
+        ).strip()
+        if not github_repo and default_repo:
+            github_repo = default_repo
+        if not github_repo or "/" not in github_repo:
+            out.print("[red]Repository must be owner/repo (e.g. owner/repo).[/red]")
+    github_repo = github_repo.strip()
+    token_env = _ask_text(
+        input_fn,
+        "[bold]GitHub token env var[/bold] [default GITHUB_TOKEN]",
+        default=DEFAULT_TOKEN_ENV_GITHUB,
+    ).strip() or DEFAULT_TOKEN_ENV_GITHUB
+    github_cfg: dict[str, object] = {"repo": github_repo, "auth": {"token_env": token_env}}
+    if input_fn is None:
+        if _ask_yes_no(
+            input_fn,
+            f"[bold]Paste GitHub token now to save to {token_env}?[/bold] (stored in ~/.config/forgeo/github_token_env.sh, 600)",
+            default=False,
+        ):
+            from rich.prompt import Prompt as _Prompt
+
+            token_value = _Prompt.ask(f"[bold]{token_env}[/bold]", password=True, default="").strip()
+            if token_value:
+                _persist_token(token_env, token_value, out)
+            else:
+                out.print(f"[dim]Set {token_env} before forgeo validate/start: export {token_env}=ghp_...[/dim]")
+        else:
+            out.print(f"[dim]Create a classic PAT at https://github.com/settings/tokens/new (scope repo), then: export {token_env}=ghp_...[/dim]")
+    return DEFAULT_GITHUB_API, "github", github_cfg, forgeo_dir, token_env
+
+
+def _setup_gitlab(
+    root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
+) -> tuple[str, str, dict[str, object], str]:
+    """Collect GitLab provider details; returns (backlog, provider, cfg, state_dir)."""
+    default_repo = _detect_github_repo(root) or ""
+    gitlab_repo = _ask_text(
+        input_fn,
+        "[bold]GitLab project[/bold] (group/project or numeric id)" + (f" [default {default_repo}]" if default_repo else ""),
+        default=default_repo or None,
+    ).strip()
+    while not gitlab_repo.strip():
+        out.print("[red]Project must not be blank.[/red]")
+        gitlab_repo = _ask_text(input_fn, "[bold]GitLab project[/bold] (group/project or numeric id)", default=None).strip()
+    token_env = _ask_text(
+        input_fn,
+        "[bold]GitLab token env var[/bold] [default GITLAB_TOKEN]",
+        default=DEFAULT_TOKEN_ENV_GITLAB,
+    ).strip() or DEFAULT_TOKEN_ENV_GITLAB
+    gitlab_api = _ask_text(
+        input_fn,
+        "[bold]GitLab base URL[/bold] [default https://gitlab.com]",
+        default=DEFAULT_GITLAB_API,
+    ).strip() or DEFAULT_GITLAB_API
+    gitlab_cfg: dict[str, object] = {"repo": gitlab_repo, "auth": {"token_env": token_env}}
+    return gitlab_api.rstrip("/"), "gitlab", gitlab_cfg, forgeo_dir
+
+
+def _setup_jira(
+    forgeo_dir: str, input_fn: SetupInput | None, out: Console
+) -> tuple[str, str, dict[str, object], str]:
+    """Collect Jira provider details; returns (backlog, provider, cfg, state_dir)."""
+    jira_url = _ask_text(
+        input_fn,
+        "[bold]Jira base URL[/bold] (e.g. https://jira.example.com)",
+        default=None,
+    ).strip()
+    while not jira_url.strip():
+        out.print("[red]Jira URL must not be blank.[/red]")
+        jira_url = _ask_text(input_fn, "[bold]Jira base URL[/bold]", default=None).strip()
+    jql = _ask_text(
+        input_fn,
+        "[bold]Jira JQL[/bold] [default project = APP AND labels = forgeo]",
+        default="project = APP AND labels = forgeo",
+    ).strip() or "project = APP AND labels = forgeo"
+    token_env = _ask_text(
+        input_fn,
+        "[bold]Jira token env var[/bold] [default JIRA_TOKEN]",
+        default="JIRA_TOKEN",
+    ).strip() or "JIRA_TOKEN"
+    jira_cfg: dict[str, object] = {"jql": jql, "auth": {"token_env": token_env, "scheme": "bearer"}}
+    out.print("[dim]Complete Jira workflow/fields in forgeo.yaml (see config/forgeo.yaml example).[/dim]")
+    return jira_url.rstrip("/"), "jira", jira_cfg, forgeo_dir
+
+
+def _setup_http(
+    forgeo_dir: str, input_fn: SetupInput | None, out: Console
+) -> tuple[str, str, str]:
+    """Collect HTTP provider details; returns (backlog, provider, state_dir)."""
+    http_url = _ask_text(
+        input_fn,
+        "[bold]HTTP backlog URL[/bold] (https://...)",
+        default=None,
+    ).strip()
+    while not http_url.strip():
+        out.print("[red]URL must not be blank.[/red]")
+        http_url = _ask_text(input_fn, "[bold]HTTP backlog URL[/bold]", default=None).strip()
+    return http_url.strip(), "http", forgeo_dir
 
 
 def add_gitignore(project_root: Path, line: str) -> bool:
@@ -238,141 +380,34 @@ def run_setup(
             "repository.[/yellow]"
         )
 
-    forgeo_dir = _ask_text(
-        input_fn,
-        f"[bold]Forgeo folder[/bold] for backlog, BLOCKER.md and logs "
-        f"[default {DEFAULT_FORGEO_DIR}]",
-        default=DEFAULT_FORGEO_DIR,
-    ).strip()
-    forgeo_dir = forgeo_dir.removeprefix("./").rstrip("/") or DEFAULT_FORGEO_DIR
-    if Path(forgeo_dir).is_absolute():
-        out.print("[red]Forgeo folder must live inside the project. Aborting.[/red]")
+    forgeo_dir = _ask_forgeo_dir(input_fn, out)
+    if forgeo_dir is None:
         return None
-    if ".." in Path(forgeo_dir).parts:
-        out.print(
-            "[yellow]Note: Forgeo folder escapes the project root — the "
-            "gitignore rule will not protect it.[/yellow]"
-        )
 
-    # --- Backlog provider (new: file is historical default) ---
-    provider_raw = _ask_text(
-        input_fn,
-        "[bold]Backlog provider[/bold] [file/github/gitlab/jira/http] [default file]",
-        default=DEFAULT_PROVIDER,
-    ).strip().lower() or DEFAULT_PROVIDER
-    provider = provider_raw if provider_raw in PROVIDER_CHOICES else DEFAULT_PROVIDER
-    if provider_raw not in PROVIDER_CHOICES:
-        out.print(f"[yellow]Unknown provider {provider_raw!r}, using {DEFAULT_PROVIDER}.[/yellow]")
+    provider = _ask_provider(input_fn, out)
 
     backlog = f"{forgeo_dir}/backlog.json"
     backlog_provider = provider if provider != "file" else "file"
-    github_cfg = None
-    gitlab_cfg = None
-    jira_cfg = None
-    state_dir = None
+    github_cfg: dict[str, object] | None = None
+    gitlab_cfg: dict[str, object] | None = None
+    jira_cfg: dict[str, object] | None = None
+    state_dir: str | None = None
     github_token_env: str | None = None
 
     if provider == "github":
-        detected = _detect_github_repo(root)
-        default_repo = detected or ""
-        github_repo = ""
-        while not github_repo.strip() or "/" not in github_repo:
-            github_repo = _ask_text(
-                input_fn,
-                "[bold]GitHub repository[/bold] (owner/repo)" + (f" [default {default_repo}]" if default_repo else ""),
-                default=default_repo or None,
-            ).strip()
-            if not github_repo and default_repo:
-                github_repo = default_repo
-            if not github_repo or "/" not in github_repo:
-                out.print("[red]Repository must be owner/repo (e.g. owner/repo).[/red]")
-        github_repo = github_repo.strip()
-        token_env = _ask_text(
-            input_fn,
-            "[bold]GitHub token env var[/bold] [default GITHUB_TOKEN]",
-            default=DEFAULT_TOKEN_ENV_GITHUB,
-        ).strip() or DEFAULT_TOKEN_ENV_GITHUB
-        backlog = DEFAULT_GITHUB_API
-        backlog_provider = "github"
-        github_cfg = {"repo": github_repo, "auth": {"token_env": token_env}}
-        github_token_env = token_env
-        state_dir = forgeo_dir
-        # Offer to persist token value immediately (interactive only)
-        if input_fn is None:
-            if _ask_yes_no(input_fn, f"[bold]Paste GitHub token now to save to {token_env}?[/bold] (stored in ~/.config/forgeo/github_token_env.sh, 600)", default=False):
-                from rich.prompt import Prompt as _Prompt
-
-                token_value = _Prompt.ask(f"[bold]{token_env}[/bold]", password=True, default="").strip()
-                if token_value:
-                    _persist_token(token_env, token_value, out)
-                else:
-                    out.print(f"[dim]Set {token_env} before forgeo validate/start: export {token_env}=ghp_...[/dim]")
-            else:
-                out.print(f"[dim]Create a classic PAT at https://github.com/settings/tokens/new (scope repo), then: export {token_env}=ghp_...[/dim]")
-        else:
-            # In tests, do not consume an extra answer — the wizard's token persistence
-            # is interactive-only to keep the answer queue aligned.
-            pass
+        backlog, backlog_provider, github_cfg, state_dir, github_token_env = _setup_github(
+            root, forgeo_dir, input_fn, out
+        )
     elif provider == "gitlab":
-        default_repo = _detect_github_repo(root) or ""
-        gitlab_repo = _ask_text(
-            input_fn,
-            "[bold]GitLab project[/bold] (group/project or numeric id)" + (f" [default {default_repo}]" if default_repo else ""),
-            default=default_repo or None,
-        ).strip()
-        while not gitlab_repo.strip():
-            out.print("[red]Project must not be blank.[/red]")
-            gitlab_repo = _ask_text(input_fn, "[bold]GitLab project[/bold] (group/project or numeric id)", default=None).strip()
-        token_env = _ask_text(
-            input_fn,
-            "[bold]GitLab token env var[/bold] [default GITLAB_TOKEN]",
-            default=DEFAULT_TOKEN_ENV_GITLAB,
-        ).strip() or DEFAULT_TOKEN_ENV_GITLAB
-        gitlab_api = _ask_text(
-            input_fn,
-            "[bold]GitLab base URL[/bold] [default https://gitlab.com]",
-            default=DEFAULT_GITLAB_API,
-        ).strip() or DEFAULT_GITLAB_API
-        backlog = gitlab_api.rstrip("/")
-        backlog_provider = "gitlab"
-        gitlab_cfg = {"repo": gitlab_repo, "auth": {"token_env": token_env}}
-        state_dir = forgeo_dir
+        backlog, backlog_provider, gitlab_cfg, state_dir = _setup_gitlab(
+            root, forgeo_dir, input_fn, out
+        )
     elif provider == "jira":
-        jira_url = _ask_text(
-            input_fn,
-            "[bold]Jira base URL[/bold] (e.g. https://jira.example.com)",
-            default=None,
-        ).strip()
-        while not jira_url.strip():
-            out.print("[red]Jira URL must not be blank.[/red]")
-            jira_url = _ask_text(input_fn, "[bold]Jira base URL[/bold]", default=None).strip()
-        jql = _ask_text(
-            input_fn,
-            "[bold]Jira JQL[/bold] [default project = APP AND labels = forgeo]",
-            default="project = APP AND labels = forgeo",
-        ).strip() or "project = APP AND labels = forgeo"
-        token_env = _ask_text(
-            input_fn,
-            "[bold]Jira token env var[/bold] [default JIRA_TOKEN]",
-            default="JIRA_TOKEN",
-        ).strip() or "JIRA_TOKEN"
-        backlog = jira_url.rstrip("/")
-        backlog_provider = "jira"
-        jira_cfg = {"jql": jql, "auth": {"token_env": token_env, "scheme": "bearer"}}
-        state_dir = forgeo_dir
-        out.print("[dim]Complete Jira workflow/fields in forgeo.yaml (see config/forgeo.yaml example).[/dim]")
+        backlog, backlog_provider, jira_cfg, state_dir = _setup_jira(
+            forgeo_dir, input_fn, out
+        )
     elif provider == "http":
-        http_url = _ask_text(
-            input_fn,
-            "[bold]HTTP backlog URL[/bold] (https://...)",
-            default=None,
-        ).strip()
-        while not http_url.strip():
-            out.print("[red]URL must not be blank.[/red]")
-            http_url = _ask_text(input_fn, "[bold]HTTP backlog URL[/bold]", default=None).strip()
-        backlog = http_url.strip()
-        backlog_provider = "http"
-        state_dir = forgeo_dir
+        backlog, backlog_provider, state_dir = _setup_http(forgeo_dir, input_fn, out)
     else:
         backlog = f"{forgeo_dir}/backlog.json"
         backlog_provider = "file"

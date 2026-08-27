@@ -487,6 +487,8 @@ class _IssueBacklogConfigBase(BaseModel):
     @field_validator("label_prefix", "property_key")
     @classmethod
     def _safe_identifier(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("labels and property keys must not be blank")
         if any(character.isspace() for character in value):
             raise ValueError("labels and property keys must not contain whitespace")
         return value
@@ -503,7 +505,7 @@ class JiraBacklogConfig(_IssueBacklogConfigBase):
     workflow: JiraWorkflow = Field(default_factory=JiraWorkflow)
     fields: JiraFieldMapping = Field(default_factory=JiraFieldMapping)
 
-    @field_validator("jql", "issue_type", "label_prefix", "property_key")
+    @field_validator("jql", "issue_type")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         if not value.strip():
@@ -594,7 +596,7 @@ class GithubBacklogConfig(_IssueBacklogConfigBase):
     workflow: GithubWorkflow = Field(default_factory=GithubWorkflow)
     fields: GithubFieldMapping = Field(default_factory=GithubFieldMapping)
 
-    @field_validator("repo", "label_prefix", "property_key")
+    @field_validator("repo")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         return _require_non_blank(value, "GitHub configuration values must not be blank")
@@ -608,7 +610,7 @@ class GitlabBacklogConfig(_IssueBacklogConfigBase):
     workflow: GitlabWorkflow = Field(default_factory=GitlabWorkflow)
     fields: GitlabFieldMapping = Field(default_factory=GitlabFieldMapping)
 
-    @field_validator("repo", "label_prefix", "property_key")
+    @field_validator("repo")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         return _require_non_blank(value, "GitLab configuration values must not be blank")

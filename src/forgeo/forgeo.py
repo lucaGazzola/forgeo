@@ -717,6 +717,10 @@ class Forgeo:
     # Blocker file                                                        #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _blocked_notice(task: Task, reason: str) -> BlockedNotice:
+        return BlockedNotice(task_id=task.id, task_title=task.title, reason=reason)
+
     def _notify_blocked(self, entry: BlockerEntry) -> None:
         """Send notifications for a newly blocked task or refactor pass.
 
@@ -724,12 +728,8 @@ class Forgeo:
         first lines of the blocker reason. Notifications are optional and never
         change the outcome of the cycle: a failure is only logged.
         """
-        reason = entry.result.reason
-        notice = BlockedNotice(
-            task_id=entry.task.id,
-            task_title=entry.task.title,
-            reason="\n".join(reason) if reason else NO_BLOCKER_REASON,
-        )
+        reason = "\n".join(entry.result.reason) if entry.result.reason else NO_BLOCKER_REASON
+        notice = self._blocked_notice(entry.task, reason)
         send_blocked_notice(self.config, notice)
         send_webhook_notice(self.config, "blocked", notice)
 
@@ -741,11 +741,7 @@ class Forgeo:
         Notifications are optional and never change the outcome of the cycle:
         a failure is only logged.
         """
-        send_webhook_notice(
-            self.config,
-            outcome,
-            BlockedNotice(task_id=task.id, task_title=task.title, reason=reason),
-        )
+        send_webhook_notice(self.config, outcome, self._blocked_notice(task, reason))
 
     async def _render_blocker(self, blocked: list[Task]) -> None:
         """Render ``BLOCKER.md`` as a derived view of the backlog's BLOCKED tasks.

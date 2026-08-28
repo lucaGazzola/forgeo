@@ -38,6 +38,7 @@ class GitManager:
         """Execute ``git -C <repo> <args>`` and return stdout."""
         if not _git_executable():
             raise GitError("the 'git' executable was not found on PATH")
+        cmd = " ".join(["git", *args])
         try:
             proc = subprocess.run(
                 ["git", "-C", str(self.repo_path), *args],
@@ -47,10 +48,10 @@ class GitManager:
                 timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            raise GitError(f"git {args[0]} timed out") from exc
+            raise GitError(f"{cmd} timed out") from exc
         if check and proc.returncode != 0:
             raise GitError(
-                f"git {args[0]} failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+                f"{cmd} failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
             )
         return proc.stdout.strip()
 

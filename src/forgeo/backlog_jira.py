@@ -60,7 +60,6 @@ from forgeo.models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_VERSION = 3
-DEFAULT_COMMENT_MARKER = "[forgeo]"
 
 
 class JiraRequestError(BacklogUnavailableError):

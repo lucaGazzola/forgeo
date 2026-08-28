@@ -140,9 +140,7 @@ def _check_branch(config: ForgeoConfig, git: GitManager, report: ValidationRepor
 def _check_remote(
     config: ForgeoConfig, git: GitManager | None, report: ValidationReport
 ) -> None:
-    if not config.remote:
-        return
-    if git is None:
+    if not config.remote or git is None:
         return
     try:
         url = git.remote_url(config.remote)
@@ -197,6 +195,7 @@ _REMOTE_MESSAGES: dict[str, tuple[str, str]] = {
 
 def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     """Fetch a remote backlog once to prove it answers before a cycle needs it."""
+    provider = config.effective_backlog_provider
     try:
         # Use validate_connection for issue providers to avoid listing all tasks twice
         if config.backlog_is_issue_provider:
@@ -206,11 +205,9 @@ def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> Non
             report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
             return
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
-        provider = config.effective_backlog_provider
         prefix = _REMOTE_MESSAGES.get(provider, ("backlog could not be read", ""))[0]
         report.problems.append(f"{prefix}: {exc}")
         return
-    provider = config.effective_backlog_provider
     note_prefix = _REMOTE_MESSAGES.get(provider, ("", "backlog endpoint answers"))[1]
     report.notes.append(f"{note_prefix} ({config.backlog})")
 

@@ -1337,7 +1337,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                         return
                 self._send_not_found()
                 return
-            if len(parts) > 2:
+            if len(parts) != 2:
                 self._send_not_found()
                 return
 

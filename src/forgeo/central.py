@@ -146,13 +146,6 @@ def _github_web_base(api_base: str) -> str:
     return base
 
 
-def _provider_base(config: ForgeoConfig | None) -> tuple[str, str] | None:
-    """The provider and stripped base URL for an issue-backed config, or ``None``."""
-    if config is None or not isinstance(config.backlog, str):
-        return None
-    return config.effective_backlog_provider, config.backlog.rstrip("/")
-
-
 def _github_repo_root(config: ForgeoConfig, base: str) -> str | None:
     """The ``<web_base>/<repo>`` root for a GitHub config, or ``None``."""
     if config.github is None:
@@ -170,13 +163,12 @@ def _gitlab_issues_root(base: str, repo: str) -> str:
 
 def _issue_provider_base(config: ForgeoConfig | None) -> tuple[str, str] | None:
     """Issue provider and base URL, or ``None`` for document providers."""
-    pb = _provider_base(config)
-    if pb is None:
+    if config is None or not isinstance(config.backlog, str):
         return None
-    provider, _ = pb
+    provider = config.effective_backlog_provider
     if provider not in ISSUE_PROVIDERS:
         return None
-    return pb
+    return provider, config.backlog.rstrip("/")
 
 
 def _external_board_url(config: ForgeoConfig | None) -> str | None:

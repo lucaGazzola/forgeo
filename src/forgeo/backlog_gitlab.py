@@ -264,24 +264,6 @@ class GitlabBacklog(IssueBacklogBase):
             failed_wait_cycles=as_nonnegative_int(state.get("failed_wait_cycles")),
         )
 
-    async def list_tasks(self) -> list[Task]:
-        issues = await self._search_all()
-        tasks: list[Task] = []
-        for issue in issues:
-            task = await self._task_from_issue(issue)
-            if task is not None:
-                tasks.append(task)
-        return tasks
-
-    async def get_task(self, task_id: str) -> Task | None:
-        issue = await self._get_issue(task_id)
-        if issue is None:
-            return None
-        return await self._task_from_issue(issue)
-
-    async def validate_connection(self) -> None:
-        await self._search_all()
-
     async def claim_task(self, task: Task) -> Task | None:
         async with self._lock:
             issue = await self._get_issue(task.id)
@@ -435,19 +417,6 @@ class GitlabBacklog(IssueBacklogBase):
             updated = await self._transition_metadata(issue, TaskStatus.FAILED, result, reason=reason)
             await self._flush_comments()
             return updated
-
-    async def bump_failed_wait(self, task_id: str) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            bump_state_counter(state, "failed_wait_cycles")
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
 
     async def retry_task(self, task_id: str) -> Task | None:
         async with self._lock:

@@ -593,6 +593,55 @@ class IssueBacklogBase(BacklogStore):
     async def put_engine_state(self, issue_id: str, state: dict[str, Any]) -> None:
         """Persist engine-managed state for ``issue_id``."""
 
+    # --- shared helpers for issue providers ---
+
+    async def _get_issue(self, issue_id: str) -> dict[str, Any] | None:  # type: ignore[no-redef]
+        """Fetch raw issue by id, or ``None`` when not found."""
+        raise NotImplementedError
+
+    async def _search_all(self) -> list[dict[str, Any]]:  # type: ignore[no-redef]
+        """Fetch all raw issues for this provider."""
+        raise NotImplementedError
+
+    async def _task_from_issue(self, issue: dict[str, Any]) -> Task | None:  # type: ignore[no-redef]
+        """Convert a raw issue to a :class:`Task`, or ``None`` when not runnable."""
+        raise NotImplementedError
+
+    async def list_tasks(self) -> list[Task]:
+        """Shared listing: fetch all issues and convert runnable ones to tasks."""
+        issues = await self._search_all()
+        tasks: list[Task] = []
+        for issue in issues:
+            task = await self._task_from_issue(issue)
+            if task is not None:
+                tasks.append(task)
+        return tasks
+
+    async def get_task(self, task_id: str) -> Task | None:
+        """Shared lookup: fetch one issue and convert it."""
+        issue = await self._get_issue(task_id)
+        if issue is None:
+            return None
+        return await self._task_from_issue(issue)
+
+    async def validate_connection(self) -> None:
+        """Shared health check: a search must succeed."""
+        await self._search_all()
+
+    async def bump_failed_wait(self, task_id: str) -> Task | None:
+        """Shared FAILED wait-counter bump via engine state."""
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            task = await self._task_from_issue(issue)
+            if task is None:
+                return None
+            state = await self.get_engine_state(task_id)
+            bump_state_counter(state, "failed_wait_cycles")
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
 
 class JSONBacklog(DocumentBacklogStore):
     """A backlog stored in a single JSON document on disk."""

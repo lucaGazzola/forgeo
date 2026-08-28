@@ -430,9 +430,9 @@ class JiraWorkflow(BaseModel):
 
 
 def _field_names_not_blank(value: str | None) -> str | None:
-    if value is not None and not value.strip():
-        raise ValueError("field names must not be blank")
-    return value
+    if value is None:
+        return None
+    return _require_non_blank(value, "field names must not be blank")
 
 
 _ISSUE_FIELD_NAMES: tuple[str, ...] = (
@@ -581,32 +581,31 @@ def _require_non_blank(value: str, message: str) -> str:
     return value
 
 
-class GithubBacklogConfig(_IssueBacklogConfigBase):
+class _RepoBacklogConfigBase(_IssueBacklogConfigBase):
+    """Shared ``repo`` field for GitHub/GitLab issue providers."""
+
+    repo: str
+
+    @field_validator("repo")
+    @classmethod
+    def _repo_not_blank(cls, value: str) -> str:
+        return _require_non_blank(value, "repo must not be blank")
+
+
+class GithubBacklogConfig(_RepoBacklogConfigBase):
     """GitHub-specific settings for an issue backlog."""
 
     auth: GithubAuth
-    repo: str
     workflow: GithubWorkflow = Field(default_factory=GithubWorkflow)
     fields: GithubFieldMapping = Field(default_factory=GithubFieldMapping)
 
-    @field_validator("repo")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "GitHub configuration values must not be blank")
 
-
-class GitlabBacklogConfig(_IssueBacklogConfigBase):
+class GitlabBacklogConfig(_RepoBacklogConfigBase):
     """GitLab-specific settings for an issue backlog."""
 
     auth: GitlabAuth
-    repo: str
     workflow: GitlabWorkflow = Field(default_factory=GitlabWorkflow)
     fields: GitlabFieldMapping = Field(default_factory=GitlabFieldMapping)
-
-    @field_validator("repo")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "GitLab configuration values must not be blank")
 
 
 class ForgeoConfig(BaseModel):

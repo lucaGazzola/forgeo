@@ -877,27 +877,15 @@ class ForgeoConfig(BaseModel):
             )
 
     def _check_provider_blocks(self, provider: str) -> None:
-        if provider == "jira" and self.jira is None:
-            raise ValueError("jira configuration is required when backlog_provider is 'jira'")
-        if provider != "jira" and self.jira is not None:
-            raise ValueError(
-                "jira configuration is only valid when backlog_provider is 'jira' "
-                "or 'auto' with a Jira backlog"
-            )
-        if provider == "github" and self.github is None:
-            raise ValueError("github configuration is required when backlog_provider is 'github'")
-        if provider != "github" and self.github is not None:
-            raise ValueError(
-                "github configuration is only valid when backlog_provider is 'github' "
-                "or 'auto' with a GitHub backlog"
-            )
-        if provider == "gitlab" and self.gitlab is None:
-            raise ValueError("gitlab configuration is required when backlog_provider is 'gitlab'")
-        if provider != "gitlab" and self.gitlab is not None:
-            raise ValueError(
-                "gitlab configuration is only valid when backlog_provider is 'gitlab' "
-                "or 'auto' with a GitLab backlog"
-            )
+        for name, label in (("jira", "Jira"), ("github", "GitHub"), ("gitlab", "GitLab")):
+            cfg = getattr(self, name)
+            if provider == name and cfg is None:
+                raise ValueError(f"{name} configuration is required when backlog_provider is {name!r}")
+            if provider != name and cfg is not None:
+                raise ValueError(
+                    f"{name} configuration is only valid when backlog_provider is {name!r} "
+                    f"or 'auto' with a {label} backlog"
+                )
 
     @model_validator(mode="after")
     def _docker_requires_image(self) -> ForgeoConfig:

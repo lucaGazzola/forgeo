@@ -595,14 +595,17 @@ class IssueBacklogBase(BacklogStore):
 
     # --- shared helpers for issue providers ---
 
+    @abstractmethod
     async def _get_issue(self, issue_id: str) -> dict[str, Any] | None:
         """Fetch raw issue by id, or ``None`` when not found."""
         raise NotImplementedError
 
+    @abstractmethod
     async def _search_all(self) -> list[dict[str, Any]]:
         """Fetch all raw issues for this provider."""
         raise NotImplementedError
 
+    @abstractmethod
     async def _task_from_issue(self, issue: dict[str, Any]) -> Task | None:
         """Convert a raw issue to a :class:`Task`, or ``None`` when not runnable."""
         raise NotImplementedError

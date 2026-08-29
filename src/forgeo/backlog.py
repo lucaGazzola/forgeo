@@ -37,7 +37,12 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from forgeo.backlog_issue_base import bump_state_counter, forgeo_labels
+from forgeo.backlog_issue_base import (
+    bump_state_counter,
+    extract_issue_labels,
+    extract_issue_number,
+    forgeo_labels,
+)
 from forgeo.io import atomic_write_text
 from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
 
@@ -644,6 +649,20 @@ class IssueBacklogBase(BacklogStore):
             bump_state_counter(state, "failed_wait_cycles")
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
+
+    async def _update_issue_labels(
+        self, issue_id: str, *, add: list[str], remove: list[str]
+    ) -> None:
+        """Update GitHub/GitLab issue labels by merging ``add``/``remove``."""
+        issue = await self._get_issue(issue_id)
+        if issue is None:
+            return
+        number = extract_issue_number(issue)
+        assert number is not None
+        labels = set(extract_issue_labels(issue))
+        labels.update(add)
+        labels.difference_update(remove)
+        await self._call(self.client.update_issue, number, {"labels": list(labels)})  # type: ignore[attr-defined]
 
 
 class JSONBacklog(DocumentBacklogStore):

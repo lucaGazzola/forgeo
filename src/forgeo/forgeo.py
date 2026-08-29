@@ -762,19 +762,22 @@ class Forgeo:
             self.config.blocker_file,
         )
 
+    def _render_block(self, reason_section: str, footer: list[str]) -> str:
+        """Render a blocker entry from a reason section and footer lines."""
+        return "\n".join([reason_section, "", "### What you must do", "", *footer])
+
     def _render_blocked_task(self, task: Task) -> str:
         """Render the explanation and required human action for one blocked task."""
-        sections = [self._render_reason_sections(task, task.instruction, task.blocker_reason)]
-        sections += [
-            "",
-            "### What you must do",
-            "",
-            "1. Decide what the agent needs (edit the repository directly if required).",
-            "2. Reopen the task from the web console so Forgeo retries it on the next",
-            f"   scheduled run{self._reopen_by_hand(task)}",
-            "3. Or delete the task from the web console if it should not be done.",
-        ]
-        return "\n".join(sections)
+        reason = self._render_reason_sections(task, task.instruction, task.blocker_reason)
+        return self._render_block(
+            reason,
+            [
+                "1. Decide what the agent needs (edit the repository directly if required).",
+                "2. Reopen the task from the web console so Forgeo retries it on the next",
+                f"   scheduled run{self._reopen_by_hand(task)}",
+                "3. Or delete the task from the web console if it should not be done.",
+            ],
+        )
 
     def _reopen_by_hand(self, task: Task) -> str:
         """How to reopen a blocked task without the web console.
@@ -838,15 +841,16 @@ class Forgeo:
 
     def _render_entry(self, entry: BlockerEntry) -> str:
         """Render the explanation and required human action for one refactor block."""
-        sections = [self._render_reason_sections(entry.task, entry.instruction, entry.result.reason)]
-        sections += [
-            "",
-            "### What you must do",
-            "",
-            "Decide how to handle this refactoring question, then delete this file.",
-            "Forgeo will continue on the next scheduled run.",
-        ]
-        return "\n".join(sections)
+        reason = self._render_reason_sections(
+            entry.task, entry.instruction, entry.result.reason
+        )
+        return self._render_block(
+            reason,
+            [
+                "Decide how to handle this refactoring question, then delete this file.",
+                "Forgeo will continue on the next scheduled run.",
+            ],
+        )
 
     @staticmethod
     def _render_reason_sections(

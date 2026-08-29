@@ -111,29 +111,25 @@ def _check_repo(config: ForgeoConfig, report: ValidationReport) -> GitManager | 
 def _check_branch(config: ForgeoConfig, git: GitManager, report: ValidationReport) -> None:
     if git.branch_exists(config.branch):
         return
-    # The daemon creates a missing branch from HEAD on its first cycle.
-    # With no commits at all the branch can still be created on the
-    # unborn HEAD (git switch -c works), and the first cycle's commit
-    # anchors it — but only a clean tree can run: a repository with no
-    # commits has every file untracked, so any file at all would make
-    # every cycle refuse as dirty.
-    if not git.has_commits():
-        if git.status_porcelain():
-            report.problems.append(
-                "repository has no commits yet and the working tree is "
-                "not clean; make an initial commit first "
-                "(`git add -A && git commit -m \"Initial commit\"`) — "
-                "forgeo never commits uncommitted work"
-            )
-        else:
-            report.warnings.append(
-                "repository has no commits yet; the first cycle will "
-                "create the initial commit"
-            )
-    else:
+    if git.has_commits():
         report.warnings.append(
             f"branch {config.branch!r} does not exist yet; it will be "
             "created on the first cycle"
+        )
+        return
+    # No commits yet: the daemon can create the branch from unborn HEAD,
+    # but only when the tree is clean (every file is untracked otherwise).
+    if git.status_porcelain():
+        report.problems.append(
+            "repository has no commits yet and the working tree is "
+            "not clean; make an initial commit first "
+            "(`git add -A && git commit -m \"Initial commit\"`) — "
+            "forgeo never commits uncommitted work"
+        )
+    else:
+        report.warnings.append(
+            "repository has no commits yet; the first cycle will "
+            "create the initial commit"
         )
 
 
@@ -197,19 +193,16 @@ def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> Non
     """Fetch a remote backlog once to prove it answers before a cycle needs it."""
     provider = config.effective_backlog_provider
     try:
-        # Use validate_connection for issue providers to avoid listing all tasks twice
         if config.backlog_is_issue_provider:
             asyncio.run(open_backlog(config).validate_connection())
+            note = _REMOTE_MESSAGES.get(provider, ("", "backlog endpoint answers"))[1]
+            report.notes.append(f"{note} ({config.backlog})")
         else:
             tasks = asyncio.run(open_backlog(config).list_tasks())
             report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
-            return
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
         prefix = _REMOTE_MESSAGES.get(provider, ("backlog could not be read", ""))[0]
         report.problems.append(f"{prefix}: {exc}")
-        return
-    note_prefix = _REMOTE_MESSAGES.get(provider, ("", "backlog endpoint answers"))[1]
-    report.notes.append(f"{note_prefix} ({config.backlog})")
 
 
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:

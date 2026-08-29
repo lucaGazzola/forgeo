@@ -6,6 +6,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 
@@ -300,6 +301,45 @@ def require_env_token(token_env: str, label: str, error_cls: type) -> str:
     if not token:
         raise error_cls(f"{label} token environment variable {token_env!r} is not set")
     return token
+
+
+def execute_json_request(
+    request: urllib.request.Request,
+    timeout: float,
+    error_cls: type[Exception],
+    method: str,
+) -> Any:
+    """Execute ``request`` and decode its JSON body, mapping errors to ``error_cls``.
+
+    Shared by GitHub, GitLab and Jira clients: a successful empty body yields
+    ``{}``, a non-JSON body raises ``error_cls``, and HTTP/IO errors are
+    wrapped with the request URL and status. Callers that require an object
+    payload validate the returned type themselves.
+    """
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        suffix = http_error_detail_suffix(exc)
+        try:
+            raise error_cls(  # type: ignore[call-arg]
+                f"{method} {request.full_url} failed with HTTP {exc.code} {exc.reason}.{suffix}",
+                status=exc.code,
+            ) from exc
+        except TypeError:
+            raise error_cls(
+                f"{method} {request.full_url} failed with HTTP {exc.code} {exc.reason}.{suffix}",
+            ) from exc
+    except OSError as exc:
+        raise error_cls(f"{method} {request.full_url} failed: {exc}") from exc
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise error_cls(
+            f"{method} {request.full_url} returned a body that is not JSON: {exc}"
+        ) from exc
 
 
 

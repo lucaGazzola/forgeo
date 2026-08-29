@@ -26,11 +26,11 @@ from forgeo.backlog_issue_base import (
     as_string_list,
     bump_state_counter,
     embed_engine_state,
+    execute_json_request,
     extract_engine_state,
     extract_issue_labels,
     extract_issue_number,
     format_state_comment,
-    http_error_detail_suffix,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
@@ -89,26 +89,9 @@ class GithubClient:
                 **({"Content-Type": "application/json"} if body is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            suffix = http_error_detail_suffix(exc)
-            raise GithubRequestError(
-                f"{method} {request.full_url} failed with HTTP {exc.code} {exc.reason}.{suffix}",
-                status=exc.code,
-            ) from exc
-        except OSError as exc:
-            raise GithubRequestError(f"{method} {request.full_url} failed: {exc}") from exc
-        if not raw.strip():
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise GithubRequestError(
-                f"{method} {request.full_url} returned a body that is not JSON: {exc}"
-            ) from exc
-        return data
+        return execute_json_request(
+            request, self.config.timeout_seconds, GithubRequestError, method
+        )
 
     def _repo_path(self) -> str:
         # GitHub API expects owner/repo as two separate path segments;
@@ -324,17 +307,7 @@ class GithubBacklog(IssueBacklogBase):
             logger.warning("Recovered stale GitHub claim for task %s.", issue_id)
 
     async def _update_labels(self, issue_id: str, *, add: list[str], remove: list[str]) -> None:
-        issue = await self._get_issue(issue_id)
-        if issue is None:
-            return
-        number = extract_issue_number(issue)
-        assert number is not None
-        labels = set(extract_issue_labels(issue))
-        for label in add:
-            labels.add(label)
-        for label in remove:
-            labels.discard(label)
-        await self._call(self.client.update_issue, number, {"labels": list(labels)})
+        await self._update_issue_labels(issue_id, add=add, remove=remove)
 
     async def _transition_state(self, issue_id: str, state: str) -> None:
         issue = await self._get_issue(issue_id)

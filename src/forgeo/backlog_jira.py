@@ -41,8 +41,8 @@ from forgeo.backlog_issue_base import (
     as_optional_int,
     as_string_list,
     bump_state_counter,
+    execute_json_request,
     format_state_comment,
-    http_error_detail_suffix,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
@@ -123,26 +123,9 @@ class JiraClient:
                 **({"Content-Type": "application/json"} if body is not None else {}),
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            suffix = http_error_detail_suffix(exc)
-            raise JiraRequestError(
-                f"{method} {request.full_url} failed with HTTP {exc.code} "
-                f"{exc.reason}.{suffix}",
-                status=exc.code,
-            ) from exc
-        except OSError as exc:
-            raise JiraRequestError(f"{method} {request.full_url} failed: {exc}") from exc
-        if not raw.strip():
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise JiraRequestError(
-                f"{method} {request.full_url} returned a body that is not JSON: {exc}"
-            ) from exc
+        data = execute_json_request(
+            request, self.config.timeout_seconds, JiraRequestError, method
+        )
         if not isinstance(data, dict):
             raise JiraRequestError(f"{method} {request.full_url} returned a non-object JSON body")
         return data

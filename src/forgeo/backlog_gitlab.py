@@ -6,7 +6,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -25,12 +25,14 @@ from forgeo.backlog_issue_base import (
     as_optional_int,
     as_string_list,
     bump_state_counter,
+    claim_cutoff,
     embed_engine_state,
     execute_json_request,
     extract_engine_state,
     extract_issue_labels,
     extract_issue_number,
     format_state_comment,
+    is_claim_stale,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
@@ -267,7 +269,7 @@ class GitlabBacklog(IssueBacklogBase):
 
     async def recover_claims(self) -> None:
         issues = await self._search_all()
-        cutoff = datetime.now(UTC) - timedelta(seconds=self.config.claim_timeout_seconds)
+        cutoff = claim_cutoff(self.config.claim_timeout_seconds)
         for issue in issues:
             labels = extract_issue_labels(issue)
             if self._labels["running"] not in labels:
@@ -277,10 +279,7 @@ class GitlabBacklog(IssueBacklogBase):
                 continue
             issue_id = str(iid)
             state = await self.get_engine_state(issue_id)
-            claimed_at = parse_optional_datetime(state.get("claimed_at"))
-            if claimed_at is None:
-                claimed_at = parse_datetime(issue.get("updated_at"))
-            if claimed_at > cutoff:
+            if not is_claim_stale(state, issue, cutoff):
                 continue
             await self._update_labels(issue_id, add=[], remove=[self._labels["running"]])
             state.pop("claimed_at", None)

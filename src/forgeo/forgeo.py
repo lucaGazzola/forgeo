@@ -743,6 +743,14 @@ class Forgeo:
         """
         send_webhook_notice(self.config, outcome, self._blocked_notice(task, reason))
 
+    def _blocker_sections(self, rendered: list[str], *, include_marker: bool) -> list[str]:
+        """Build the full blocker file sections from rendered blocks."""
+        sections = self._blocker_header(include_marker=include_marker)
+        for block in rendered:
+            sections.append(block)
+            sections.append("")
+        return sections
+
     async def _render_blocker(self, blocked: list[Task]) -> None:
         """Render ``BLOCKER.md`` as a derived view of the backlog's BLOCKED tasks.
 
@@ -751,11 +759,8 @@ class Forgeo:
         text). Once the last BLOCKED task is resolved, :meth:`_run_cycle`
         removes the file because it carries the derived-view marker.
         """
-        sections = self._blocker_header(include_marker=True)
-        for task in blocked:
-            sections.append(self._render_blocked_task(task))
-            sections.append("")
-        self._persist_blocker(sections)
+        rendered = [self._render_blocked_task(task) for task in blocked]
+        self._persist_blocker(self._blocker_sections(rendered, include_marker=True))
         logger.info(
             "Blocker file rendered from %d BLOCKED task(s) to %s",
             len(blocked),
@@ -832,11 +837,8 @@ class Forgeo:
         the derived-view model: the file is written once at block time and
         Forgeo stays paused until the human deletes it.
         """
-        sections = self._blocker_header(include_marker=False)
-        for entry in entries:
-            sections.append(self._render_entry(entry))
-            sections.append("")
-        self._persist_blocker(sections)
+        rendered = [self._render_entry(entry) for entry in entries]
+        self._persist_blocker(self._blocker_sections(rendered, include_marker=False))
         logger.info("Blocker file written to %s", self.config.blocker_file)
 
     def _render_entry(self, entry: BlockerEntry) -> str:

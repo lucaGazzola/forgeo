@@ -838,14 +838,6 @@ class ForgeoConfig(BaseModel):
         return self.effective_backlog_provider == "jira"
 
     @property
-    def backlog_is_github(self) -> bool:
-        return self.effective_backlog_provider == "github"
-
-    @property
-    def backlog_is_gitlab(self) -> bool:
-        return self.effective_backlog_provider == "gitlab"
-
-    @property
     def backlog_is_remote(self) -> bool:
         """True when the backlog has no local task document."""
         return self.effective_backlog_provider in REMOTE_PROVIDERS

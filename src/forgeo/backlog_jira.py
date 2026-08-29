@@ -22,7 +22,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -41,8 +41,10 @@ from forgeo.backlog_issue_base import (
     as_optional_int,
     as_string_list,
     bump_state_counter,
+    claim_cutoff,
     execute_json_request,
     format_state_comment,
+    is_claim_stale,
     next_reopen_state,
     next_retry_state,
     parse_datetime,
@@ -567,16 +569,13 @@ class JiraBacklog(IssueBacklogBase):
         running_label = self._labels["running"]
         recovery_jql = f"({self.config.jql}) AND labels = \"{running_label}\""
         issues = await self._search_all(recovery_jql)
-        cutoff = datetime.now(UTC) - timedelta(seconds=self.config.claim_timeout_seconds)
+        cutoff = claim_cutoff(self.config.claim_timeout_seconds)
         for issue in issues:
             key = self._issue_key(issue)
             if key is None:
                 continue
             metadata = await self._metadata(key)
-            claimed_at = parse_optional_datetime(metadata.get("claimed_at"))
-            if claimed_at is None:
-                claimed_at = parse_datetime(issue.get("fields", {}).get("updated"))
-            if claimed_at > cutoff:
+            if not is_claim_stale(metadata, issue, cutoff):
                 continue
             await self._update_labels(key, add=[], remove=[running_label])
             metadata.update({"state": TaskStatus.OPEN.value})

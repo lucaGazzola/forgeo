@@ -7,7 +7,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -224,6 +224,23 @@ def next_reopen_state(state: dict[str, Any]) -> dict[str, Any]:
     """Mutate ``state`` for a reopen transition and return it."""
     state.update({"blocker_reason": [], "failure_reason": []})
     return state
+
+
+def claim_cutoff(timeout_seconds: float) -> datetime:
+    """Expiry instant for a claim lease."""
+    return datetime.now(UTC) - timedelta(seconds=timeout_seconds)
+
+
+def is_claim_stale(
+    state: dict[str, Any], issue: dict[str, Any], cutoff: datetime
+) -> bool:
+    """True when the ``claimed_at`` in ``state`` (or the issue's update time) is stale."""
+    claimed_at = parse_optional_datetime(state.get("claimed_at"))
+    if claimed_at is None:
+        # Fallback to the issue's last update — covers claims from older forgeo versions
+        # or providers that never wrote ``claimed_at``.
+        claimed_at = parse_datetime(issue.get("updated_at") or issue.get("updated") or issue.get("fields", {}).get("updated"))
+    return claimed_at <= cutoff
 
 
 def forgeo_labels(prefix: str) -> dict[str, str]:

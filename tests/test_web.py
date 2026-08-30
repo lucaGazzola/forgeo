@@ -1046,7 +1046,7 @@ def test_delete_task_non_open_400(web_env):
     url = f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks/TASK-002"
     status, data = _delete(url)
     assert status == 400
-    assert data["error"] == "only OPEN or BLOCKED tasks can be deleted"
+    assert data["error"] == "only OPEN, BLOCKED or REVIEW tasks can be deleted"
 
     status, tasks = _get(f"http://127.0.0.1:{server.port}/api/instances/alpha/tasks")
     assert status == 200

@@ -520,7 +520,7 @@ class GithubBacklog(IssueBacklogBase):
             return task
 
     async def create_task(self, task: Task) -> Task:
-        engine = {
+        engine: dict[str, Any] = {
             "state": TaskStatus.OPEN.value,
             "acceptance_criteria": task.acceptance_criteria,
             "dependencies": task.dependencies,

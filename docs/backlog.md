@@ -31,11 +31,11 @@ Default is a file wherever `backlog:` points (`backlog.json` or `.forgeo/backlog
 | `id` | string | — | Unique task ID. Duplicates rejected. |
 | `title` | string | — | Short title (logs, commits, status). |
 | `description` | string | — | Full instruction for the agent. Must be non-blank. |
-| `status` | `OPEN`/`BLOCKED`/`COMPLETED`/`FAILED` | `OPEN` | Task state. |
+| `status` | `OPEN`/`REVIEW`/`BLOCKED`/`COMPLETED`/`FAILED` | `OPEN` | Task state. |
 | `created_at` | ISO-8601 | now (UTC) | Creation time; controls oldest-first order. |
 | `updated_at` | ISO-8601 | now (UTC) | Bumped on status changes. |
 | `run_at` | ISO-8601 / `null` | `null` | One-shot schedule — earliest pick time. Past = fire now; future = wait. |
-| `dependencies` | string[] | `[]` | Task IDs that must be `COMPLETED` first. |
+| `dependencies` | string[] | `[]` | Task IDs that must be `COMPLETED` first (`REVIEW` not satisfied). |
 | `acceptance_criteria` | string[] | `[]` | Rendered under "Acceptance criteria:" in `FORGEO_TASK`. |
 | `files_to_modify` | string[] | `[]` | Hint for the agent. |
 | `agent_command` | string / string[] | — | Per-task agent override. |
@@ -47,6 +47,9 @@ Default is a file wherever `backlog:` points (`backlog.json` or `.forgeo/backlog
 | `retries_left` | int / `null` | `null` | Per-task retry budget override (`null` = config default, `0` = no retries). |
 | `retry_count` | int | `0` | Engine-managed: retries already attempted. |
 | `failed_wait_cycles` | int | `0` | Engine-managed: cycles waiting for retry. |
+| `review_required` | bool / `null` | `null` | Per-task review override (`null` = inherit `review_mode`). |
+| `review_branch` | string / `null` | `null` | Engine-managed: feature branch for `REVIEW`. |
+| `review_commit_sha` | string / `null` | `null` | Engine-managed: commit SHA on review branch. |
 
 Only `id`, `title`, `description` are required.
 
@@ -66,9 +69,16 @@ Only `id`, `title`, `description` are required.
 | Status | Meaning |
 | --- | --- |
 | `OPEN` | To be picked. |
+| `REVIEW` | Awaiting human review on feature branch; blocks dependants, not independent tasks. |
 | `BLOCKED` | Needs human decision; Forgeo pauses. |
-| `COMPLETED` | Agent finished, committed and pushed. |
+| `COMPLETED` | Agent finished, committed and pushed (or review approved). |
 | `FAILED` | Agent errored; changes discarded, `failure_reason` recorded. |
+
+### Review workflow
+
+With `review_mode: branch` (and per-task `review_required` override) a successful task is committed on `review_branch_prefix + id` (default `forgeo/review/TASK-001`), pushed if `remote` set, and marked `REVIEW`. Independent `OPEN` tasks continue; dependants wait until `REVIEW` → `COMPLETED`.
+
+Human merges the branch manually (PR or `git merge`), then marks **Complete** (`POST .../tasks/<id>/complete-review` → `COMPLETED`, clears `review_branch/sha`) or **Request changes** (`POST .../tasks/<id>/request-changes` → `OPEN`). `REVIEW` tasks are deletable and show `review_branch`/`review_commit_sha`. Issue providers use label `forgeo-review`.
 
 ### Retrying failed tasks
 
@@ -89,9 +99,13 @@ On `BLOCKED`, Forgeo commits partial work as `[partial]` and records `blocker_re
 
 Reopen via dashboard (**Reopen** button) or `POST /api/.../tasks/<id>/reopen` — clears `blocker_reason`, keeps `blocked_count`. Editing the file's `status` back to `OPEN` does *not* clear `blocker_reason`; prefer the Reopen action.
 
+### Resolving review tasks
+
+On `REVIEW`, code is on the feature branch. Merge manually, then **Complete** (`POST .../tasks/<id>/complete-review`) or **Request changes** (`POST .../tasks/<id>/request-changes` → `OPEN`). Webhook `review` event fires on entry to `REVIEW` when enabled.
+
 ## Picking order
 
-Forgeo picks the **oldest runnable `OPEN` task** — smallest `created_at` whose dependencies are all `COMPLETED` and whose `run_at` is not in the future.
+Forgeo picks the **oldest runnable `OPEN` task** — smallest `created_at` whose dependencies are all `COMPLETED` (`REVIEW` does not satisfy) and whose `run_at` is not in the future.
 
 - `run_at` in the **past** → picked before tasks without `run_at` (most overdue first); daemon wakes early for it.
 - `run_at` in the **future** → skipped until that moment; daemon sleeps only until then.
@@ -200,4 +214,4 @@ gitlab: {repo: group/project, token_env: GITLAB_TOKEN}
 
 ## Managing tasks
 
-Edit the file directly, or use the dashboard: **Create** form (`POST /api/instances/<name>/tasks` → auto `WEB-###` ID), task modal **Edit** (`PATCH`), **Delete** (`DELETE` for `OPEN`/`BLOCKED`), **Reopen** for `BLOCKED`. For `jira`/`github`/`gitlab` the dashboard is a read-mostly mirror with links to native issues and banners to the native board.
+Edit the file directly, or use the dashboard: **Create** form (`POST /api/instances/<name>/tasks` → auto `WEB-###` ID, `review_required` checkbox), task modal **Edit** (`PATCH` including `review_required`), **Delete** (`DELETE` for `OPEN`/`BLOCKED`/`REVIEW`), **Reopen** for `BLOCKED`, **Complete** / **Request changes** for `REVIEW`. For `jira`/`github`/`gitlab` the dashboard is a read-mostly mirror with links to native issues and banners to the native board.

@@ -32,7 +32,7 @@ Token stored in `~/.config/forgeo/web.toml` (0600). Once present, every `/api/*`
 - **`GET /instances/<name>/`** — kanban board, **Create** tab (with *Run at* for one-shot schedule), plus **Logs**, **History**, **Blocker**, **Config** tabs. Header has daemon Start/Stop/Restart buttons.
   - For `file`/`http` this is the primary editor; for `jira`/`github`/`gitlab` it is a read-mostly mirror — banner links to native board, each card/modal links to the native issue, but Forgeo-specific state (`blocker_reason`, `failure_reason`, `agent_response`, retry budget) is shown here.
   - **History** tab lists `runs.jsonl` (paginated, newest first) with collapsible agent output (`run_output_lines`). **Config** tab edits `forgeo.yaml` via `PUT .../config`.
-  - Task click opens a modal (description, criteria, dependencies, timestamps, `run_at`). **Edit** patches fields, **Reopen** retries `BLOCKED`, **Delete** removes `OPEN`/`BLOCKED`. `BLOCKED`/`FAILED` banners show reasons and retry counts. *Waiting on dependencies* banner lists unmet deps.
+  - Task click opens a modal (description, criteria, dependencies, timestamps, `run_at`, `review_branch`/`sha`). **Edit** patches fields (including `review_required`), **Reopen** retries `BLOCKED`, **Complete** / **Request changes** for `REVIEW`, **Delete** removes `OPEN`/`BLOCKED`/`REVIEW`. `REVIEW`/`BLOCKED`/`FAILED` banners show branch/reasons and retry counts. *Waiting on dependencies* banner lists unmet deps (`REVIEW` not satisfied).
   - Columns auto-collapse (`OPEN` stays expanded, others behind "show …" after a few tasks, max 20 cards with "show more"). Search box and status filter are client-side, reflected in `?q=…&status=…`.
 - `GET /style.css`, `/central/central.js`, `/central/central.css` — shared theme (no frameworks).
 
@@ -47,8 +47,10 @@ All return `application/json` with `Cache-Control: no-store`. Per-instance paths
 | `GET /api/instances/<name>/tasks/{id}` | Single task. `404` if not found. |
 | `POST /api/instances/<name>/tasks` | Create task (auto `WEB-###` ID). |
 | `POST /api/instances/<name>/tasks/{id}/reopen` | Reopen `BLOCKED` → `OPEN`. |
+| `POST /api/instances/<name>/tasks/{id}/complete-review` | Complete `REVIEW` → `COMPLETED` (after manual merge). |
+| `POST /api/instances/<name>/tasks/{id}/request-changes` | `REVIEW` → `OPEN`. |
 | `PATCH /api/instances/<name>/tasks/{id}` | Edit task fields. |
-| `DELETE /api/instances/<name>/tasks/{id}` | Delete `OPEN`/`BLOCKED` task. |
+| `DELETE /api/instances/<name>/tasks/{id}` | Delete `OPEN`/`BLOCKED`/`REVIEW` task. |
 | `GET /api/instances/<name>/status` | Daemon status + provider metadata. |
 | `GET /api/instances/<name>/config` | Resolved `forgeo.yaml` as JSON. |
 | `PUT /api/instances/<name>/config` | Validate and persist config. |
@@ -98,7 +100,7 @@ Each task includes:
 
 ### `POST /api/instances/<name>/tasks`
 
-Body requires non-blank `title` + `description`; optional `acceptance_criteria` (string[]), `agent_command` (string/`null`), `run_at` (ISO-8601/`null`).
+Body requires non-blank `title` + `description`; optional `acceptance_criteria` (string[]), `agent_command` (string/`null`), `run_at` (ISO-8601/`null`), `review_required` (bool/`null`).
 
 ```bash
 curl -X POST http://127.0.0.1:8790/api/instances/my-repo/tasks \
@@ -120,7 +122,7 @@ Returns `200`. Errors: `400` if not `BLOCKED`, `404` unknown instance/task.
 
 ### `PATCH /api/instances/<name>/tasks/{id}`
 
-Editable: `title`, `description`, `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`, `agent_timeout_seconds`, `retries_left`, `run_at`. Omitted fields unchanged; engine fields (`status`, `blocker_reason`, etc.) are rejected. Bumps `updated_at`.
+Editable: `title`, `description`, `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`, `agent_timeout_seconds`, `retries_left`, `run_at`, `review_required`. Omitted fields unchanged; engine fields (`status`, `blocker_reason`, `review_branch`, etc.) are rejected. Bumps `updated_at`.
 
 ```bash
 curl -X PATCH http://127.0.0.1:8790/api/instances/my-repo/tasks/TASK-001 \
@@ -132,7 +134,11 @@ Returns `200`. Errors: `400` bad body/unknown field, `404` not found.
 
 ### `DELETE /api/instances/<name>/tasks/{id}`
 
-Only `OPEN` or `BLOCKED` (400 otherwise). Returns `200` with deleted task.
+Only `OPEN`, `BLOCKED` or `REVIEW` (400 otherwise). Returns `200` with deleted task.
+
+### `POST /api/instances/<name>/tasks/{id}/complete-review` / `request-changes`
+
+No body. `complete-review`: `REVIEW` → `COMPLETED` (after manual merge, clears `review_branch/sha`). `request-changes`: `REVIEW` → `OPEN`. Errors: `400` if not `REVIEW`, `404` unknown task.
 
 ### `GET /api/instances/<name>/status`
 

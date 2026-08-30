@@ -17,10 +17,11 @@
 
 Give it a backlog and an agent CLI — Forgeo picks the next runnable task, runs the agent, and commits the result. It tracks progress in plain files and a web dashboard, and only interrupts you when a human decision is needed.
 
-- **One task at a time** — oldest `OPEN` task whose dependencies are `COMPLETED` (or a `run_at` schedule), committed on a single branch. No PRs, no branch juggling.
+- **One task at a time** — oldest `OPEN` task whose dependencies are `COMPLETED` (or a `run_at` schedule). `REVIEW` blocks dependants but not independent tasks.
 - **Agent-agnostic** — any CLI that reads `FORGEO_TASK` (aider, Claude, custom script).
 - **Refactors when idle** — runs a refactoring pass when the backlog is empty.
 - **Handles failure gracefully** — `BLOCKED` for human input (`BLOCKER.md`), `FAILED` with retry policy, snapshots for file backlogs, Telegram/webhook notifications.
+- **Optional review** — `review_mode: branch` commits to `forgeo/review/TASK-001`, marks `REVIEW`, pushes and waits for human merge → `Complete`.
 
 Requires a terminal, a git repo, and an agent CLI.
 
@@ -66,7 +67,7 @@ forgeo validate   # dry run: config, repo, backlog, agent, locks
 forgeo start      # daemon in background, one cycle per interval_minutes
 ```
 
-Each cycle: pick task → run agent → commit/push. Empty backlog → refactoring pass.
+Each cycle: pick task → run agent → commit/push (or `REVIEW` branch when `review_mode: branch`). Empty backlog → refactoring pass.
 
 ### Day-to-day
 

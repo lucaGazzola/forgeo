@@ -37,10 +37,12 @@ Forgeo reads `forgeo.yaml` from the current directory (`--config <file>` to over
 | `failed_retry_max` | `0` | Auto-retries for `FAILED` tasks (0 = manual reopen). |
 | `failed_retry_wait_cycles` | `1` | Backoff cycles before retry. |
 | `no_changes_retry_max` | `0` | Immediate re-runs when agent exits 0 with no changes. |
+| `review_mode` | `off` | `off` = commit to `branch` → `COMPLETED`; `branch` = feature branch `review_branch_prefix + id` → `REVIEW`. |
+| `review_branch_prefix` | `forgeo/review/` | Prefix for review branches when `review_mode: branch`. |
 | `git_timeout_seconds` | `120` | Timeout for git subprocesses. |
 | `telegram_bot_token` / `telegram_chat_id` | — | Telegram blocked-run notifications (both required). |
 | `notify_webhook_url` | — | Webhook URL for run outcomes. |
-| `notify_webhook_events` | `["blocked"]` | Which outcomes to POST (`blocked`/`completed`/`failed`). |
+| `notify_webhook_events` | `["blocked"]` | Which outcomes to POST (`blocked`/`completed`/`failed`/`review`). |
 
 ## Minimal example
 
@@ -207,6 +209,16 @@ no_changes_retry_max: 2       # immediate re-runs for silent no-change
 - `failed_retry_max: 0` (default) → `FAILED` stays until human reopens.
 - Per-task `retries_left` overrides the global budget (see [Backlog](backlog.md)).
 - `BLOCKED` is never auto-retried.
+
+### Review
+
+```yaml
+review_mode: branch                      # off (default) or branch
+review_branch_prefix: forgeo/review/     # + TASK-001 → forgeo/review/TASK-001
+```
+
+- `off` → success commits to `branch` → `COMPLETED`.
+- `branch` → success commits to feature branch, pushes if `remote` set, marks `REVIEW` (webhook `review` event if enabled). Dependants remain blocked until human merges and clicks **Complete** (`REVIEW` → `COMPLETED`) or **Request changes** (`REVIEW` → `OPEN`). Per-task `review_required: true|false|null` (`null` inherits `review_mode`).
 
 ### Notifications
 

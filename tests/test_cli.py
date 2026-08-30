@@ -327,6 +327,7 @@ def test_run_does_not_register_instance(git_repo, tmp_path, monkeypatch, capsys)
 def test_backlog_status_counts_empty():
     assert backlog_status_counts([]) == {
         "OPEN": 0,
+        "REVIEW": 0,
         "BLOCKED": 0,
         "COMPLETED": 0,
         "FAILED": 0,
@@ -343,6 +344,7 @@ def test_backlog_status_counts_by_status():
     ]
     assert backlog_status_counts(tasks) == {
         "OPEN": 2,
+        "REVIEW": 0,
         "BLOCKED": 1,
         "COMPLETED": 1,
         "FAILED": 1,

@@ -244,11 +244,12 @@ def is_claim_stale(
 
 
 def forgeo_labels(prefix: str) -> dict[str, str]:
-    """Standard forgeo labels for a prefix (running / blocked / failed)."""
+    """Standard forgeo labels for a prefix (running / blocked / failed / review)."""
     return {
         "running": f"{prefix}-running",
         "blocked": f"{prefix}-blocked",
         "failed": f"{prefix}-failed",
+        "review": f"{prefix}-review",
     }
 
 
@@ -292,6 +293,9 @@ ENGINE_STATE_FIELDS: frozenset[str] = frozenset(
         "agent_timeout_seconds",
         "run_at",
         "retries_left",
+        "review_required",
+        "review_branch",
+        "review_commit_sha",
     }
 )
 

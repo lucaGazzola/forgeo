@@ -23,7 +23,7 @@ DEFAULT_REFACTOR_PROMPT = (
 )
 
 #: The run outcomes the generic webhook notification can report.
-WEBHOOK_EVENTS = ("blocked", "completed", "failed")
+WEBHOOK_EVENTS = ("blocked", "completed", "failed", "review")
 
 #: Fallback shown to the human when a blocked agent gave no explanation.
 NO_BLOCKER_REASON = "The agent did not explain what it needs."
@@ -86,6 +86,7 @@ def _utcnow() -> datetime:
 
 class TaskStatus(str, enum.Enum):
     OPEN = "OPEN"
+    REVIEW = "REVIEW"
     BLOCKED = "BLOCKED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -229,6 +230,21 @@ class Task(BaseModel):
         ge=0,
         description="Engine-managed: how many cycles this task has been FAILED "
         "awaiting a retry (backed off by ``failed_retry_wait_cycles``).",
+    )
+    review_branch: str | None = Field(
+        default=None,
+        description="Engine-managed: the feature branch created for a REVIEW task "
+        "(set when the task moves to REVIEW, cleared when it leaves).",
+    )
+    review_commit_sha: str | None = Field(
+        default=None,
+        description="Engine-managed: the commit SHA pushed on the review branch.",
+    )
+    review_required: bool | None = Field(
+        default=None,
+        description="Per-task override of the review workflow: ``True`` forces a "
+        "feature branch + REVIEW, ``False`` forces direct COMPLETED, ``None`` "
+        "inherits from the config's ``review_mode``.",
     )
 
     @property
@@ -747,6 +763,17 @@ class ForgeoConfig(BaseModel):
     failed_retry_max: int = Field(default=0, ge=0)
     failed_retry_wait_cycles: int = Field(default=1, ge=1)
     no_changes_retry_max: int = Field(default=0, ge=0)
+    review_mode: Literal["off", "branch"] = Field(
+        default="off",
+        description="Whether completed tasks go to REVIEW on a feature branch. "
+        "``off`` (default) commits directly to ``branch`` and marks COMPLETED; "
+        "``branch`` creates ``review_branch_prefix + task.id`` and marks REVIEW.",
+    )
+    review_branch_prefix: str = Field(
+        default="forgeo/review/",
+        description="Prefix for feature branches created when ``review_mode`` is "
+        "``branch``. The task id is appended, e.g. ``forgeo/review/TASK-001``.",
+    )
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     notify_webhook_url: str | None = None
@@ -809,6 +836,15 @@ class ForgeoConfig(BaseModel):
         for mount in value:
             if not mount.strip():
                 raise ValueError("agent_sandbox_mounts must not contain blank paths")
+        return value
+
+    @field_validator("review_branch_prefix")
+    @classmethod
+    def _review_prefix_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("review_branch_prefix must not be blank")
+        if any(ch.isspace() for ch in value):
+            raise ValueError("review_branch_prefix must not contain whitespace")
         return value
 
     @property
@@ -879,9 +915,14 @@ class ForgeoConfig(BaseModel):
                     f"or 'auto' with a {label} backlog"
                 )
 
+    def _check_review(self) -> None:
+        if self.review_mode not in ("off", "branch"):
+            raise ValueError("review_mode must be 'off' or 'branch'")
+
     @model_validator(mode="after")
     def _docker_requires_image(self) -> ForgeoConfig:
         self._check_sandbox()
+        self._check_review()
         provider = self.effective_backlog_provider
         self._check_provider_url(provider)
         self._check_provider_blocks(provider)

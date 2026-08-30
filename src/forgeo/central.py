@@ -934,6 +934,12 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 4 and parts[3] == "reopen":
                 self._reopen_instance_task(path)
                 return
+            if len(parts) == 4 and parts[3] == "complete-review":
+                self._complete_review_instance_task(path)
+                return
+            if len(parts) == 4 and parts[3] == "request-changes":
+                self._request_changes_instance_task(path)
+                return
             self._send_not_found()
 
         def _post_instance_daemon_action(self, path: str, action: str) -> None:
@@ -1110,6 +1116,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     )
                     return
 
+            review_required = payload.get("review_required")
+            if review_required is not None and not isinstance(review_required, bool):
+                self._send_json(400, {"error": "review_required must be a boolean or null"})
+                return
+
             backlog = open_backlog(config)
             existing = asyncio.run(backlog.list_tasks())
             try:
@@ -1120,6 +1131,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     acceptance_criteria=acceptance_criteria,
                     agent_command=agent_command.strip() if agent_command else None,
                     run_at=run_at_dt,
+                    review_required=review_required if isinstance(review_required, bool) else None,
                 )
             except ValidationError as exc:
                 self._send_json(400, {"error": f"invalid task field(s): {exc}"})
@@ -1193,7 +1205,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_json(200, reopened.model_dump(mode="json"))
 
         def _delete_instance_task(self, path: str) -> None:
-            """Delete an OPEN or BLOCKED task from an instance's backlog."""
+            """Delete an OPEN, BLOCKED or REVIEW task from an instance's backlog."""
             target = self._resolve_task_target(path, with_task_id=True)
             if target is None:
                 return
@@ -1205,15 +1217,67 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if task is None:
                 self._send_not_found()
                 return
-            if task.status not in (TaskStatus.OPEN, TaskStatus.BLOCKED):
+            if task.status not in (TaskStatus.OPEN, TaskStatus.BLOCKED, TaskStatus.REVIEW):
                 self._send_json(
                     400,
-                    {"error": "only OPEN or BLOCKED tasks can be deleted"},
+                    {"error": "only OPEN, BLOCKED or REVIEW tasks can be deleted"},
                 )
                 return
             deleted = asyncio.run(backlog.delete_task(task_id))
             assert deleted is not None  # task was just found in the backlog
             self._send_json(200, deleted.model_dump(mode="json"))
+
+        def _complete_review_instance_task(self, path: str) -> None:
+            """Mark a REVIEW task COMPLETED after human merged the branch."""
+            parts = _instance_parts(path)
+            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "complete-review":
+                self._send_not_found()
+                return
+            name = unquote(parts[0])
+            info = self._resolve_instance(name)
+            if info is None:
+                return
+            config = self._instance_config(info)
+            if config is None:
+                return
+            task_id = unquote(parts[2])
+            backlog = open_backlog(config)
+            task = asyncio.run(backlog.get_task(task_id))
+            if task is None:
+                self._send_not_found()
+                return
+            if task.status is not TaskStatus.REVIEW:
+                self._send_json(400, {"error": "only REVIEW tasks can be completed"})
+                return
+            completed = asyncio.run(backlog.complete_review(task_id))
+            assert completed is not None
+            self._send_json(200, completed.model_dump(mode="json"))
+
+        def _request_changes_instance_task(self, path: str) -> None:
+            """Move a REVIEW task back to OPEN for rework."""
+            parts = _instance_parts(path)
+            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "request-changes":
+                self._send_not_found()
+                return
+            name = unquote(parts[0])
+            info = self._resolve_instance(name)
+            if info is None:
+                return
+            config = self._instance_config(info)
+            if config is None:
+                return
+            task_id = unquote(parts[2])
+            backlog = open_backlog(config)
+            task = asyncio.run(backlog.get_task(task_id))
+            if task is None:
+                self._send_not_found()
+                return
+            if task.status is not TaskStatus.REVIEW:
+                self._send_json(400, {"error": "only REVIEW tasks can be sent back"})
+                return
+            reopened = asyncio.run(backlog.request_changes(task_id))
+            assert reopened is not None
+            self._send_json(200, reopened.model_dump(mode="json"))
 
         def _put_instance_api(self, path: str) -> None:
             """Route a PUT under ``/api/instances/`` to its handler."""

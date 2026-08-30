@@ -63,6 +63,7 @@ EDITABLE_TASK_FIELDS = frozenset(
         "agent_timeout_seconds",
         "retries_left",
         "run_at",
+        "review_required",
     }
 )
 
@@ -108,6 +109,10 @@ def validate_task_updates(updates: dict[str, Any]) -> None:
         updates["run_at"], str
     ):
         raise ValueError("run_at must be an ISO-8601 datetime string or null")
+    if "review_required" in updates and updates["review_required"] is not None and not isinstance(
+        updates["review_required"], bool
+    ):
+        raise ValueError("review_required must be a boolean or null")
 
 
 def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | None:
@@ -381,6 +386,20 @@ class BacklogStore(ABC):
         """Reopen a blocked task."""
 
     @abstractmethod
+    async def set_review(
+        self, task_id: str, branch: str, sha: str | None, result: ExecutionResult
+    ) -> Task | None:
+        """Mark a task ``REVIEW`` with its feature branch."""
+
+    @abstractmethod
+    async def complete_review(self, task_id: str) -> Task | None:
+        """Mark a ``REVIEW`` task ``COMPLETED`` after human merge."""
+
+    @abstractmethod
+    async def request_changes(self, task_id: str) -> Task | None:
+        """Move a ``REVIEW`` task back to ``OPEN`` for rework."""
+
+    @abstractmethod
     async def delete_task(self, task_id: str) -> Task | None:
         """Remove a task from the backlog."""
 
@@ -508,6 +527,35 @@ class DocumentBacklogStore(BacklogStore):
             entry["status"] = TaskStatus.OPEN.value
             entry["blocker_reason"] = []
             entry["failure_reason"] = []
+
+        return await self._update_entry(task_id, mutate)
+
+    async def set_review(
+        self, task_id: str, branch: str, sha: str | None, result: ExecutionResult
+    ) -> Task | None:
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["status"] = TaskStatus.REVIEW.value
+            entry["review_branch"] = branch
+            entry["review_commit_sha"] = sha
+            entry["failure_reason"] = []
+            entry["blocker_reason"] = []
+            _set_agent_response(entry, result, self._output_cap)
+
+        return await self._update_entry(task_id, mutate)
+
+    async def complete_review(self, task_id: str) -> Task | None:
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["status"] = TaskStatus.COMPLETED.value
+            entry["review_branch"] = None
+            entry["review_commit_sha"] = None
+
+        return await self._update_entry(task_id, mutate)
+
+    async def request_changes(self, task_id: str) -> Task | None:
+        def mutate(entry: dict[str, Any]) -> None:
+            entry["status"] = TaskStatus.OPEN.value
+            entry["review_branch"] = None
+            entry["review_commit_sha"] = None
 
         return await self._update_entry(task_id, mutate)
 

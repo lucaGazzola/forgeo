@@ -11,6 +11,7 @@
   --accent-dim: rgba(124, 140, 255, 0.14);
 
   --open: #8fb7ff;
+  --review: #a78bfa;
   --blocked: #f0a84d;
   --completed: #6fce93;
   --failed: #e06c75;
@@ -260,7 +261,7 @@ body {
   flex: 1;
   padding: 32px 0 40px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 18px;
   align-items: start;
 }
@@ -322,6 +323,10 @@ body {
 .status-col[data-status="OPEN"] .status-col__dot {
   background: var(--open);
 }
+.status-col[data-status="REVIEW"] .status-col__dot {
+  background: var(--review);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.15);
+}
 .status-col[data-status="BLOCKED"] .status-col__dot {
   background: var(--blocked);
   box-shadow: 0 0 0 4px rgba(240, 168, 77, 0.15);
@@ -382,6 +387,11 @@ body {
 .badge--OPEN {
   color: var(--open);
   background: rgba(143, 183, 255, 0.1);
+}
+.badge--REVIEW {
+  color: var(--review);
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.35);
 }
 .badge--BLOCKED {
   color: var(--blocked);
@@ -643,6 +653,11 @@ body {
 
 /* ---------- Responsive ---------- */
 
+@media (max-width: 1100px) {
+  .board {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 @media (max-width: 960px) {
   .board {
     grid-template-columns: repeat(2, minmax(0, 1fr));

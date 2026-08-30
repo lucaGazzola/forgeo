@@ -7,7 +7,7 @@
 
   var REFRESH_MS = 30000;
   var TIMEOUT_MS = 5000;
-  var STATUS_ORDER = ["OPEN", "BLOCKED", "COMPLETED", "FAILED"];
+  var STATUS_ORDER = ["OPEN", "REVIEW", "BLOCKED", "COMPLETED", "FAILED"];
   var TABS = ["backlog", "create", "logs", "history", "blocker", "config"];
 
   /* Optional bearer auth: the token lives in localStorage under TOKEN_KEY.
@@ -23,7 +23,7 @@
      clicked. Expanded state survives the 30s auto-refresh. */
   var COLLAPSE_MIN_TASKS = 4;
   var MAX_VISIBLE_PER_COLUMN = 20;
-  var COLLAPSED_BY_DEFAULT = { BLOCKED: true, COMPLETED: true, FAILED: true };
+  var COLLAPSED_BY_DEFAULT = { REVIEW: true, BLOCKED: true, COMPLETED: true, FAILED: true };
   var expandedColumns = {};
   var showAllColumns = {};
 
@@ -627,9 +627,13 @@
     var status = (modalTask.status || "OPEN").toUpperCase();
     showModalSection("task-modal-edit", isOpenOrBlocked(status));
     var deleteBtn = document.getElementById("task-modal-delete");
-    if (deleteBtn) deleteBtn.hidden = !isOpenOrBlocked(status);
+    if (deleteBtn) deleteBtn.hidden = !(status === "OPEN" || status === "BLOCKED" || status === "REVIEW");
     var reopenBtn = document.getElementById("task-modal-reopen");
     if (reopenBtn) reopenBtn.hidden = status !== "BLOCKED";
+    var completeBtn = document.getElementById("task-modal-complete-review");
+    if (completeBtn) completeBtn.hidden = status !== "REVIEW";
+    var requestBtn = document.getElementById("task-modal-request-changes");
+    if (requestBtn) requestBtn.hidden = status !== "REVIEW";
   }
 
   function renderModal(task) {
@@ -785,6 +789,15 @@
       Boolean(retries && retries.textContent)
     );
     showModalSection("task-modal-run-at-section", Boolean(task.run_at));
+    var needsReview = task.review_required === true || task.review_required === false ? (task.review_required ? "yes" : "no") : (task.review_required === null ? "inherit" : "");
+    var reviewRequiredEl = document.getElementById("task-modal-review-required");
+    if (reviewRequiredEl) reviewRequiredEl.textContent = task.review_required === null || task.review_required === undefined ? "inherit from config" : (task.review_required ? "required" : "not required");
+    showModalSection("task-modal-review-required-section", true);
+    var reviewBranchEl = document.getElementById("task-modal-review-branch");
+    if (reviewBranchEl) reviewBranchEl.textContent = task.review_branch ? "branch: " + task.review_branch : "";
+    var reviewShaEl = document.getElementById("task-modal-review-sha");
+    if (reviewShaEl) reviewShaEl.textContent = task.review_commit_sha ? "sha: " + task.review_commit_sha : "";
+    showModalSection("task-modal-review-section", Boolean(task.review_branch || status === "REVIEW"));
   }
 
   function splitLines(value) {
@@ -826,6 +839,12 @@
         : String(modalTask.retries_left)
     );
     setValue("task-edit-run-at", toLocalInputValue(modalTask.run_at));
+    var reviewRequiredCb = document.getElementById("task-edit-review-required");
+    if (reviewRequiredCb) {
+      if (modalTask.review_required === true) { reviewRequiredCb.checked = true; reviewRequiredCb.indeterminate = false; }
+      else if (modalTask.review_required === false) { reviewRequiredCb.checked = false; reviewRequiredCb.indeterminate = false; }
+      else { reviewRequiredCb.checked = false; reviewRequiredCb.indeterminate = true; }
+    }
 
     showModalSection("task-modal-view", false);
     showModalSection("task-modal-edit-form", true);
@@ -834,6 +853,10 @@
     if (deleteBtn) deleteBtn.hidden = true;
     var reopenBtn = document.getElementById("task-modal-reopen");
     if (reopenBtn) reopenBtn.hidden = true;
+    var completeBtn2 = document.getElementById("task-modal-complete-review");
+    if (completeBtn2) completeBtn2.hidden = true;
+    var requestBtn2 = document.getElementById("task-modal-request-changes");
+    if (requestBtn2) requestBtn2.hidden = true;
     var error = document.getElementById("task-modal-error");
     if (error) error.hidden = true;
   }
@@ -855,6 +878,12 @@
     var timeout = value("task-edit-timeout").trim();
     var retries = value("task-edit-retries").trim();
     var runAt = value("task-edit-run-at").trim();
+    var reviewCb = document.getElementById("task-edit-review-required");
+    var reviewRequired = null;
+    if (reviewCb) {
+      if (reviewCb.indeterminate) reviewRequired = null;
+      else reviewRequired = reviewCb.checked;
+    }
     var updates = {
       title: value("task-edit-title").trim(),
       description: value("task-edit-description").trim(),
@@ -865,6 +894,7 @@
       agent_timeout_seconds: timeout === "" ? null : Number(timeout),
       retries_left: retries === "" ? null : parseInt(retries, 10),
       run_at: runAt ? new Date(runAt).toISOString() : null,
+      review_required: reviewRequired,
     };
     return updates;
   }
@@ -998,6 +1028,50 @@
       .finally(function () {
         if (reopenBtn) reopenBtn.disabled = false;
       });
+  }
+
+  function completeReviewTask() {
+    if (!API || !modalTaskId) return;
+    var error = document.getElementById("task-modal-error");
+    if (error) error.hidden = true;
+    var btn = document.getElementById("task-modal-complete-review");
+    if (btn) btn.disabled = true;
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/complete-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (data) { throw new Error((data && data.error) || "HTTP " + resp.status); });
+        }
+        return resp.json();
+      })
+      .then(function (task) { renderModal(task); return fetchJSON(API + "tasks"); })
+      .then(function (tasks) { renderTasks(tasks || []); })
+      .catch(function (err) { if (error) { error.textContent = err.message || "failed to complete review"; error.hidden = false; } })
+      .finally(function () { if (btn) btn.disabled = false; });
+  }
+
+  function requestChangesTask() {
+    if (!API || !modalTaskId) return;
+    var error = document.getElementById("task-modal-error");
+    if (error) error.hidden = true;
+    var btn = document.getElementById("task-modal-request-changes");
+    if (btn) btn.disabled = true;
+    apiFetch(API + "tasks/" + encodeURIComponent(modalTaskId) + "/request-changes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (data) { throw new Error((data && data.error) || "HTTP " + resp.status); });
+        }
+        return resp.json();
+      })
+      .then(function (task) { renderModal(task); return fetchJSON(API + "tasks"); })
+      .then(function (tasks) { renderTasks(tasks || []); })
+      .catch(function (err) { if (error) { error.textContent = err.message || "failed to request changes"; error.hidden = false; } })
+      .finally(function () { if (btn) btn.disabled = false; });
   }
 
   function openModal(task, opener) {
@@ -1305,6 +1379,8 @@
     { key: "agent_sandbox_network", label: "Sandbox network", type: "text", hint: "Docker network for the sandboxed agent (--network). Default none = networking disabled." },
     { key: "agent_sandbox_mounts", label: "Sandbox mounts", type: "textarea", rows: 2, optional: true, hint: "Host paths mounted read-only into the container, one per line." },
     { key: "agent_env", label: "Agent environment", type: "textarea", rows: 3, optional: true, hint: "Extra environment variables for the agent process, one KEY=VALUE per line." },
+    { key: "review_mode", label: "Review mode", type: "select", options: ["off", "branch"], hint: "off = commit directly to branch and mark COMPLETED; branch = create feature branch review_branch_prefix+TASK-ID and mark REVIEW." },
+    { key: "review_branch_prefix", label: "Review branch prefix", type: "text", hint: "Prefix for feature branches when review_mode is branch, e.g. forgeo/review/." },
     { key: "telegram_chat_id", label: "Telegram chat id", type: "text", optional: true },
     { key: "telegram_bot_token", label: "Telegram bot token", type: "readonly", hint: "Protected: not editable through the web console." }
   ];
@@ -1726,6 +1802,8 @@
       var command = commandInput ? commandInput.value.trim() : "";
       var runAtInput = document.getElementById("task-run-at");
       var runAt = runAtInput ? runAtInput.value.trim() : "";
+      var reviewRequiredInput = document.getElementById("task-review-required");
+      var reviewRequired = reviewRequiredInput ? reviewRequiredInput.checked : false;
 
       apiFetch(API + "tasks", {
         method: "POST",
@@ -1736,6 +1814,7 @@
           acceptance_criteria: criteria.slice(),
           agent_command: command ? command : null,
           run_at: runAt ? new Date(runAt).toISOString() : null,
+          review_required: reviewRequired === true ? true : null,
         }),
       })
         .then(function (resp) {
@@ -1790,6 +1869,10 @@
       if (editBtn) editBtn.addEventListener("click", enterEditMode);
       var reopenBtn = document.getElementById("task-modal-reopen");
       if (reopenBtn) reopenBtn.addEventListener("click", reopenTask);
+      var completeBtn = document.getElementById("task-modal-complete-review");
+      if (completeBtn) completeBtn.addEventListener("click", completeReviewTask);
+      var requestBtn = document.getElementById("task-modal-request-changes");
+      if (requestBtn) requestBtn.addEventListener("click", requestChangesTask);
       var deleteBtn = document.getElementById("task-modal-delete");
       if (deleteBtn) deleteBtn.addEventListener("click", deleteTask);
       var cancelBtn = document.getElementById("task-modal-cancel");

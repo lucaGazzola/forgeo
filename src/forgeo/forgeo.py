@@ -23,6 +23,7 @@ writes the file once and keeps Forgeo paused until the file is deleted.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -291,8 +292,8 @@ class Forgeo:
                 task_title=task.title if task is not None else None,
                 outcome=self._run_outcome(outcome),
                 agent_exit_code=self._run_exit_code(outcome),
-                commit_sha=self._last_commit_sha if outcome in ("task", "refactor") else None,
-                reason=self._last_run_reason if outcome in ("task", "refactor") else None,
+                commit_sha=self._last_commit_sha if outcome in ("task", "refactor", "review") else None,
+                reason=self._last_run_reason if outcome in ("task", "refactor", "review") else None,
                 output_logs=self._run_output_logs(outcome),
                 retry_count=self._run_retry_count(task, outcome),
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
@@ -307,7 +308,7 @@ class Forgeo:
         that a run was a retry without cluttering never-retried runs. Refactor
         runs and records for untouched tasks store ``None``.
         """
-        if outcome not in ("task", "blocked"):
+        if outcome not in ("task", "blocked", "review"):
             return None
         if task is None or task.retry_count <= 0:
             return None
@@ -321,7 +322,7 @@ class Forgeo:
         blow up a run record. ``None`` (not ``[]``) when nothing was captured,
         keeping records without output indistinguishable from pre-field ones.
         """
-        if outcome not in ("task", "refactor"):
+        if outcome not in ("task", "refactor", "review"):
             return None
         result = self._last_agent_result
         logs = result.output_logs if result is not None else None
@@ -333,7 +334,7 @@ class Forgeo:
         return logs[-cap:]
 
     def _run_kind(self, outcome: str) -> RunKind | None:
-        if outcome in ("task", "blocked"):
+        if outcome in ("task", "blocked", "review"):
             return RunKind.TASK
         if outcome == "refactor":
             return RunKind.REFACTOR
@@ -341,14 +342,14 @@ class Forgeo:
 
     def _cycle_task(self, outcome: str) -> Task | None:
         """The task a finished cycle ran, when there is one to record."""
-        if outcome in ("task", "refactor"):
+        if outcome in ("task", "refactor", "review"):
             return self._last_task
         if outcome == "blocked":
             return self._blocked_tasks[0] if self._blocked_tasks else None
         return None
 
     def _run_outcome(self, outcome: str) -> RunOutcome:
-        if outcome in ("task", "refactor"):
+        if outcome in ("task", "refactor", "review"):
             result = self._last_agent_result
             if result is None:
                 return RunOutcome.ERROR
@@ -361,7 +362,7 @@ class Forgeo:
         }.get(outcome, RunOutcome.ERROR)
 
     def _run_exit_code(self, outcome: str) -> int | None:
-        if outcome not in ("task", "refactor"):
+        if outcome not in ("task", "refactor", "review"):
             return None
         result = self._last_agent_result
         return result.exit_code if result is not None else None
@@ -370,16 +371,36 @@ class Forgeo:
     # Task execution                                                      #
     # ------------------------------------------------------------------ #
 
+    def _needs_review(self, task: Task) -> bool:
+        """Whether ``task`` should go to REVIEW on success."""
+        if task.review_required is not None:
+            return task.review_required
+        return self.config.review_mode == "branch"
+
+    def _review_branch_for(self, task: Task) -> str:
+        """Feature branch name for ``task``."""
+        sanitized = re.sub(r"[^A-Za-z0-9._/-]+", "-", task.id).strip("-")
+        if not sanitized:
+            sanitized = task.id
+        prefix = self.config.review_branch_prefix
+        # Ensure prefix ends with a slash for readability
+        if not prefix.endswith("/"):
+            prefix += "/"
+        return f"{prefix}{sanitized}"
+
     async def _run_task(self, task: Task) -> None:
-        """Execute one task: agent run(s), then commit/push on the main branch.
+        """Execute one task: agent run(s), then commit/push.
 
         A silent no-change SUCCESS (exit 0 with an empty tree) is re-run up to
         ``no_changes_retry_max`` more times in the same cycle; once the retry
         budget is spent the task is marked ``BLOCKED`` for human review — the
         only acceptable outcome for a task that ends without code changes.
+        With ``review_mode=branch`` a successful task is committed on a feature
+        branch and marked ``REVIEW`` instead of ``COMPLETED``.
         """
         logger.info("Running task %s (%s)", task.id, task.title)
         max_retries = self.config.no_changes_retry_max
+        needs_review = self._needs_review(task)
         for attempt in range(max_retries + 1):
             self._last_run_reason = None
             result, ok = await self._run_agent(
@@ -389,6 +410,7 @@ class Forgeo:
                 blocked_message=f"{task.title} [partial]",
                 command=task.agent_command,
                 timeout_seconds=task.agent_timeout_seconds,
+                is_review=needs_review,
             )
 
             if result.status is ExecutionStatus.BLOCKED:
@@ -398,6 +420,14 @@ class Forgeo:
                 await self._mark_failed(task, self._failure_reason(result), result)
                 return
             if ok:
+                if needs_review:
+                    branch = self._review_branch_for(task)
+                    sha = self._last_commit_sha
+                    await self.backlog.set_review(task.id, branch, sha, result)
+                    self.config.blocker_file.unlink(missing_ok=True)
+                    self._notify_webhook("review", task, branch)
+                    logger.info("Task %s moved to REVIEW on branch %s.", task.id, branch)
+                    return
                 await self.backlog.update_status(task.id, TaskStatus.COMPLETED, result)
                 self.config.blocker_file.unlink(missing_ok=True)
                 self._notify_webhook("completed", task, "")
@@ -430,6 +460,7 @@ class Forgeo:
         command: str | list[str] | None = None,
         timeout_seconds: float | None = None,
         is_refactor: bool = False,
+        is_review: bool = False,
     ) -> tuple[ExecutionResult, bool]:
         """Run the agent for one task or refactoring pass and apply the
         shared SUCCESS / BLOCKED / ERROR side effects (see
@@ -459,6 +490,7 @@ class Forgeo:
             blocked_message=blocked_message,
             instruction=instruction,
             is_refactor=is_refactor,
+            is_review=is_review,
         )
         return result, ok
 
@@ -500,14 +532,15 @@ class Forgeo:
         blocked_message: str,
         instruction: str,
         is_refactor: bool = False,
+        is_review: bool = False,
     ) -> bool:
         """Apply shared SUCCESS / BLOCKED / ERROR side effects for an agent run.
 
-        * SUCCESS — commit and push ``success_message``. An agent that
-          explicitly reported no changes are needed (``result.no_changes``)
-          completes the task without a commit; an agent that exited 0 but
-          produced no changes fails the task instead of silently completing
-          it.
+        * SUCCESS — commit and push ``success_message`` (on a feature branch
+          when ``is_review``). An agent that explicitly reported no changes are
+          needed (``result.no_changes``) completes the task without a commit;
+          an agent that exited 0 but produced no changes fails the task instead
+          of silently completing it.
         * BLOCKED — commit partial work under ``blocked_message``, then write
           the blocker file explaining what the human must do.
         * ERROR — hard-reset the working tree and log the failure.
@@ -521,7 +554,10 @@ class Forgeo:
         if result.status is ExecutionStatus.SUCCESS:
             if result.no_changes:
                 return await self._complete_without_changes(task, is_refactor=is_refactor)
-            ok = await self._commit_and_push(success_message, task=task)
+            if is_review and not is_refactor:
+                ok = await self._commit_on_review_branch(task, success_message)
+            else:
+                ok = await self._commit_and_push(success_message, task=task)
             if ok and self._last_commit_sha is None and not is_refactor:
                 # Exited 0 but produced no changes: not a completion. The
                 # engine cannot tell "deliberately did nothing" from "did
@@ -691,6 +727,65 @@ class Forgeo:
                 logger.info("Pushed %s to %s/%s", sha, self.config.remote, self.config.branch)
             except GitError as exc:
                 logger.error("Push failed (work stays committed locally): %s", exc)
+        return True
+
+    async def _commit_on_review_branch(self, task: Task, message: str) -> bool:
+        """Commit agent work on a feature branch and push it.
+
+        Creates ``review_branch`` from ``branch``, commits, pushes, then returns
+        to ``branch``. A git failure marks the task FAILED.
+        """
+        review_branch = self._review_branch_for(task)
+        try:
+            await self.git.a_create_review_branch(review_branch, self.config.branch)
+            sha = await self.git.a_commit_all(message)
+        except GitError as exc:
+            self._last_commit_sha = None
+            # Return to base branch before failing
+            try:
+                await self.git.a_ensure_branch(self.config.branch)
+            except GitError:
+                pass
+            # Discard any uncommitted changes left after failed commit attempt
+            try:
+                await self.git.a_reset_hard()
+            except GitError:
+                pass
+            await self._fail(
+                task,
+                ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
+            )
+            return False
+        if sha is None:
+            logger.info("No changes produced; nothing committed.")
+            try:
+                await self.git.a_ensure_branch(self.config.branch)
+            except GitError as exc:
+                logger.error("Could not switch back to %s: %s", self.config.branch, exc)
+            return True
+        self._last_commit_sha = sha
+        logger.info("Committed %s on branch %s: %s", sha, review_branch, message)
+        if self.config.remote:
+            try:
+                await self.git.a_push(self.config.remote, review_branch)
+                logger.info("Pushed %s to %s/%s", sha, self.config.remote, review_branch)
+            except GitError as exc:
+                logger.error("Push failed (work stays committed locally): %s", exc)
+        try:
+            await self.git.a_ensure_branch(self.config.branch)
+        except GitError as exc:
+            logger.error("Could not switch back to %s: %s", self.config.branch, exc)
+            self._last_commit_sha = None
+            await self._fail(
+                task,
+                ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
+            )
+            return False
+        # Ensure main is clean after switching back (review branch holds the changes)
+        try:
+            await self.git.a_reset_hard()
+        except GitError as exc:
+            logger.error("Could not reset %s after review branch: %s", self.config.branch, exc)
         return True
 
     # ------------------------------------------------------------------ #

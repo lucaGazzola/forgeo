@@ -154,6 +154,11 @@
   background: rgba(143, 183, 255, 0.1);
   border-color: transparent;
 }
+.count-chip--REVIEW {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  border-color: transparent;
+}
 .count-chip--BLOCKED {
   color: var(--blocked);
   background: rgba(240, 168, 77, 0.16);
@@ -626,6 +631,13 @@ details[open] > .run-output__summary::before {
   color: var(--text);
 }
 
+.modal__banner--review {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.08);
+}
+.modal__banner--review h3 {
+  color: #a78bfa;
+}
 .modal__banner--blocked {
   border-color: rgba(240, 168, 77, 0.4);
   background: rgba(240, 168, 77, 0.08);

@@ -403,6 +403,8 @@ class JiraBacklog(IssueBacklogBase):
             return TaskStatus.BLOCKED
         if configured["failed"] in labels:
             return TaskStatus.FAILED
+        if configured["review"] in labels:
+            return TaskStatus.REVIEW
         status = self._status(issue)
         workflow = self.config.workflow
         if configured["running"] in labels or self._matches(workflow.running_status, status):
@@ -493,6 +495,9 @@ class JiraBacklog(IssueBacklogBase):
             retries_left=retries_left,
             retry_count=as_nonnegative_int(metadata.get("retry_count")),
             failed_wait_cycles=as_nonnegative_int(metadata.get("failed_wait_cycles")),
+            review_branch=metadata.get("review_branch") if isinstance(metadata.get("review_branch"), str) else None,
+            review_commit_sha=metadata.get("review_commit_sha") if isinstance(metadata.get("review_commit_sha"), str) else None,
+            review_required=metadata.get("review_required") if isinstance(metadata.get("review_required"), bool) else None,
         )
 
     @staticmethod
@@ -755,6 +760,63 @@ class JiraBacklog(IssueBacklogBase):
             await self._flush_comments()
             return updated
 
+    async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            metadata = await self._metadata(task_id)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                metadata["agent_response"] = joined
+            metadata["state"] = TaskStatus.REVIEW.value
+            metadata["review_branch"] = branch
+            if sha is not None:
+                metadata["review_commit_sha"] = sha
+            metadata.pop("claimed_at", None)
+            metadata["failure_reason"] = []
+            metadata["blocker_reason"] = []
+            await self._update_labels(task_id, add=[self._labels["review"]], remove=[self._labels["running"], self._labels["blocked"], self._labels["failed"]])
+            await self._save_metadata(task_id, metadata)
+            self._comment(task_id, "REVIEW", [f"branch {branch}" + (f" sha {sha}" if sha else "")])
+            await self._flush_comments()
+            return await self.get_task(task_id)
+
+    async def complete_review(self, task_id: str) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            task = await self._task_from_issue(issue)
+            if task is None or task.status is not TaskStatus.REVIEW:
+                return None
+            metadata = await self._metadata(task_id)
+            metadata["state"] = TaskStatus.COMPLETED.value
+            metadata.pop("review_branch", None)
+            metadata.pop("review_commit_sha", None)
+            metadata.pop("claimed_at", None)
+            await self._transition_to(issue, self.config.workflow.completed_status)
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
+            await self._save_metadata(task_id, metadata)
+            return await self.get_task(task_id)
+
+    async def request_changes(self, task_id: str) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            task = await self._task_from_issue(issue)
+            if task is None or task.status is not TaskStatus.REVIEW:
+                return None
+            metadata = await self._metadata(task_id)
+            metadata["state"] = TaskStatus.OPEN.value
+            metadata.pop("review_branch", None)
+            metadata.pop("review_commit_sha", None)
+            await self._transition_to(issue, self.config.workflow.open_status)
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
+            await self._save_metadata(task_id, metadata)
+            return await self.get_task(task_id)
+
     async def bump_failed_wait(self, task_id: str) -> Task | None:
         async with self._lock:
             issue = await self._get_issue(task_id)
@@ -832,7 +894,10 @@ class JiraBacklog(IssueBacklogBase):
             key = created.get("key")
             if not isinstance(key, str) or not key:
                 raise JiraRequestError("Jira create response did not contain an issue key")
-            await self._save_metadata(key, {"state": TaskStatus.OPEN.value})
+            meta: dict[str, Any] = {"state": TaskStatus.OPEN.value}
+            if task.review_required is not None:
+                meta["review_required"] = task.review_required
+            await self._save_metadata(key, meta)
             task_result = await self.get_task(key)
             if task_result is None:
                 raise JiraRequestError(f"Created Jira issue {key} could not be read back")
@@ -871,6 +936,11 @@ class JiraBacklog(IssueBacklogBase):
                 candidate = Task.model_validate(candidate.model_dump(mode="python"))
             except ValidationError as exc:
                 raise ValueError(f"invalid task field(s): {exc}") from exc
+            # need to persist review fields even when not mapped to Jira field
+            if "review_required" in updates:
+                metadata = await self._metadata(task_id)
+                metadata["review_required"] = candidate.review_required
+                await self._save_metadata(task_id, metadata)
             updates = {
                 field: getattr(candidate, field)
                 for field in updates

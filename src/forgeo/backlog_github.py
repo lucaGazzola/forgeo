@@ -218,6 +218,8 @@ class GithubBacklog(IssueBacklogBase):
             return TaskStatus.BLOCKED
         if cfg["failed"] in labels:
             return TaskStatus.FAILED
+        if cfg["review"] in labels:
+            return TaskStatus.REVIEW
         if cfg["running"] in labels:
             return None
         state = issue.get("state")
@@ -266,6 +268,9 @@ class GithubBacklog(IssueBacklogBase):
             retries_left=as_optional_int(state.get("retries_left")),
             retry_count=as_nonnegative_int(state.get("retry_count")),
             failed_wait_cycles=as_nonnegative_int(state.get("failed_wait_cycles")),
+            review_branch=state.get("review_branch") if isinstance(state.get("review_branch"), str) else None,
+            review_commit_sha=state.get("review_commit_sha") if isinstance(state.get("review_commit_sha"), str) else None,
+            review_required=state.get("review_required") if isinstance(state.get("review_required"), bool) else None,
         )
 
     async def claim_task(self, task: Task) -> Task | None:
@@ -422,6 +427,65 @@ class GithubBacklog(IssueBacklogBase):
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
+    async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            state = await self.get_engine_state(task_id)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                state["agent_response"] = joined
+            state["state"] = TaskStatus.REVIEW.value
+            state["review_branch"] = branch
+            if sha is not None:
+                state["review_commit_sha"] = sha
+            state.pop("claimed_at", None)
+            state["failure_reason"] = []
+            state["blocker_reason"] = []
+            await self._update_labels(task_id, add=[self._labels["review"]], remove=[self._labels["running"], self._labels["blocked"], self._labels["failed"]])
+            await self.put_engine_state(task_id, state)
+            number = extract_issue_number(issue)
+            assert number is not None
+            self._comment(number, "REVIEW", [f"branch {branch}" + (f" sha {sha}" if sha else "")])
+            await self._flush_comments()
+            return await self.get_task(task_id)
+
+    async def complete_review(self, task_id: str) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            task = await self._task_from_issue(issue)
+            if task is None or task.status is not TaskStatus.REVIEW:
+                return None
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.COMPLETED.value
+            state.pop("review_branch", None)
+            state.pop("review_commit_sha", None)
+            state.pop("claimed_at", None)
+            await self._transition_state(task_id, "closed")
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
+    async def request_changes(self, task_id: str) -> Task | None:
+        async with self._lock:
+            issue = await self._get_issue(task_id)
+            if issue is None:
+                return None
+            task = await self._task_from_issue(issue)
+            if task is None or task.status is not TaskStatus.REVIEW:
+                return None
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.OPEN.value
+            state.pop("review_branch", None)
+            state.pop("review_commit_sha", None)
+            await self._transition_state(task_id, "open")
+            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
     async def reopen_task(self, task_id: str) -> Task | None:
         async with self._lock:
             issue = await self._get_issue(task_id)
@@ -456,17 +520,17 @@ class GithubBacklog(IssueBacklogBase):
             return task
 
     async def create_task(self, task: Task) -> Task:
+        engine = {
+            "state": TaskStatus.OPEN.value,
+            "acceptance_criteria": task.acceptance_criteria,
+            "dependencies": task.dependencies,
+            "files_to_modify": task.files_to_modify,
+        }
+        if task.review_required is not None:
+            engine["review_required"] = task.review_required
         fields: dict[str, Any] = {
             "title": task.title,
-            "body": embed_engine_state(
-                task.description,
-                {
-                    "state": TaskStatus.OPEN.value,
-                    "acceptance_criteria": task.acceptance_criteria,
-                    "dependencies": task.dependencies,
-                    "files_to_modify": task.files_to_modify,
-                },
-            ),
+            "body": embed_engine_state(task.description, engine),
             "labels": [self.config.label_prefix],
         }
         async with self._lock:
@@ -513,6 +577,9 @@ class GithubBacklog(IssueBacklogBase):
                         "agent_timeout_seconds": candidate.agent_timeout_seconds,
                         "run_at": candidate.run_at.isoformat() if candidate.run_at else None,
                         "retries_left": candidate.retries_left,
+                        "review_required": candidate.review_required,
+                        "review_branch": candidate.review_branch,
+                        "review_commit_sha": candidate.review_commit_sha,
                     }
                 )
                 fields["body"] = embed_engine_state(candidate.description, state)

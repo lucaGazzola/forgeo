@@ -1,5 +1,5 @@
 site_name: Forgeo
-site_description: A scheduled, agent-driven software forgeo for one repository.
+site_description: A scheduled, agent-driven software factory for your coding agent — backlog-driven, single-branch, with a web dashboard.
 site_url: https://forgeo.org/docs/
 repo_url: https://github.com/lucaGazzola/forgeo
 repo_name: lucaGazzola/forgeo

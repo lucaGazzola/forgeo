@@ -1,12 +1,10 @@
 # Agent contract
 
-The coding agent is **any shell command**: a CLI coding tool or a plain command. It must be able to:
+The coding agent is **any shell command** that can:
 
-1. read the task from the `FORGEO_TASK` environment variable,
-2. work on the repository from the current working directory,
-3. report its outcome through its **exit code**.
-
-Anything a CLI agent can do works:
+1. Read the task from `FORGEO_TASK`.
+2. Work on the repository in the current directory.
+3. Report its outcome via **exit code**.
 
 ```yaml
 agent_command: "claude -p \"$FORGEO_TASK\""
@@ -14,141 +12,67 @@ agent_command: "claude -p \"$FORGEO_TASK\""
 
 ## Environment
 
-The agent is launched with the **repository as its working directory**, and
-the process environment is augmented as follows:
+Launched with the repo as cwd and:
 
-| Variable | Meaning |
+| Variable | Value |
 | --- | --- |
-| <span style="white-space: nowrap">`FORGEO_TASK`</span> | The full instruction for this run: the project context when `task_context` is configured, then title, blank line, description, and an "Acceptance criteria:" list when present. |
-| <span style="white-space: nowrap">`FORGEO_REPO`</span> | The absolute path of the repository. |
-| <span style="white-space: nowrap">`FORGEO_BRANCH`</span> | The branch everything is committed to (default `main`). |
-| <span style="white-space: nowrap">*every `agent_env` key*</span> | Any extra variables from `agent_env` in the config. |
-| <span style="white-space: nowrap">*inherited environment*</span> | The daemon's own environment. |
+| `FORGEO_TASK` | Full instruction — project context (if `task_context`), title, description, and "Acceptance criteria:" when present. |
+| `FORGEO_REPO` | Absolute repo path. |
+| `FORGEO_BRANCH` | Target branch (default `main`). |
+| `agent_env` keys | Extra vars from config. |
+| Inherited env | Daemon's own environment. |
 
-`FORGEO_*` variables are set unconditionally and take precedence over both the
-inherited environment and `agent_env`.
+`FORGEO_*` always wins. For refactoring runs (empty backlog), `FORGEO_TASK` carries the `refactor_prompt` (task ID `REFACTOR`).
 
-### The task is not the whole picture
-
-A task description is isolated by design: it describes one unit of work, not
-the project. When `task_context` is set (see
-[Configuration](configuration.md#task_context)), Forgeo prepends the contents
-of that file — the high-level project overview — to `FORGEO_TASK` before the
-task, under a `# Project context` heading, followed by the task under a
-`# Task` heading. The file is re-read on every run, so an agent's own updates
-to it are seen by the next cycle.
-
-For a refactoring run (empty backlog) the same contract applies: the refactor
-prompt arrives as `FORGEO_TASK` (with the context prepended when configured),
-with the task id `REFACTOR` and title "Refactoring pass".
+When `task_context` is set, its file contents are prepended under `# Project context` before `# Task`. Re-read each run; missing file is a warning.
 
 ## Exit codes
 
-The exit code decides the outcome of the run:
-
-| Exit code | Outcome | What happens |
+| Code | Outcome | What happens |
 | --- | --- | --- |
-| <span style="white-space: nowrap">`0`</span> | **SUCCESS** | Everything is committed (`git add -A && git commit`) with the message `<title> (#<id>)`, pushed when a remote is set, and the task is marked `COMPLETED`. |
-| <span style="white-space: nowrap">`no_changes_exit_code` (default `3`)</span> | **SUCCESS, no changes** | The agent explicitly reports the task needs **no code change**: the task is marked `COMPLETED` without a commit (and the run record notes why). Only accepted when the working tree is clean. |
-| <span style="white-space: nowrap">`blocked_exit_code` (default `2`)</span> | **BLOCKED** | The agent needs a human decision. Partial work is committed as `<title> [partial]`, the agent's reason is persisted on the task (`blocker_reason`), optional Telegram and/or webhook notifications are sent, and the task is marked `BLOCKED`. `BLOCKER.md` is rendered from the backlog's `BLOCKED` tasks on the next cycle — real per-task reasons, never generic text — and disappears once the last one is resolved (reopen it from the web console). |
-| <span style="white-space: nowrap">anything else</span> | **ERROR** | Changes are discarded (`git reset --hard` + `git clean -fd`), the failure is logged, and the task is marked `FAILED`. |
+| `0` | **SUCCESS** | `git add -A && git commit` as `<title> (#<id>)`, push if `remote` set, task → `COMPLETED`. |
+| `no_changes_exit_code` (default `3`) | **SUCCESS, no changes** | Task → `COMPLETED` without commit. Tree must be clean. |
+| `blocked_exit_code` (default `2`) | **BLOCKED** | Partial work committed as `<title> [partial]`, `blocker_reason` saved, notifications sent, task → `BLOCKED`, `BLOCKER.md` rendered next cycle. |
+| anything else | **ERROR** | Changes discarded (`git reset --hard` + `clean -fd`), task → `FAILED`, `failure_reason` saved. |
 
-The blocked exit code is configurable via `blocked_exit_code` in
-[forgeo.yaml](configuration.md), and the no-change exit code via
-`no_changes_exit_code`.
-
-A `FAILED` task stays `FAILED` until a human reopens it — unless the retry
-policy is enabled (`failed_retry_max`, see [Configuration](configuration.md)),
-in which case Forgeo moves the task back to `OPEN` after
-`failed_retry_wait_cycles` cycles and runs it again, incrementing its retry
-count. `BLOCKED` is never retried automatically: it always waits for a human.
+`FAILED` stays `FAILED` until human reopens (or auto-retried via `failed_retry_max`). `BLOCKED` is never auto-retried.
 
 ## The no-change contract
 
-Forgeo cannot tell "the agent deliberately made no changes" from "the agent
-did nothing". A `SUCCESS` exit that produces **no changes is therefore not a
-valid completion for a task**:
+Forgeo cannot distinguish "deliberately no changes" from "did nothing":
 
-- exiting `0` while leaving the working tree **unchanged** is retried
-  immediately (`no_changes_retry_max`, see [Configuration](configuration.md))
-  and, once that budget is spent, the task is marked `BLOCKED` — never
-  `FAILED` and never silently `COMPLETED`. The only acceptable outcome for a
-  run that ends without code changes is a blocked task awaiting human review;
-- to complete a task **without touching the code**, exit
-  `no_changes_exit_code` (default `3`). The working tree must be clean — an
-  agent that reports "no changes" while leaving uncommitted work behind fails
-  instead.
+- Exit `0` with **unchanged tree** → retried `no_changes_retry_max` times in the same cycle, then `BLOCKED` (never `FAILED` or silent `COMPLETED`).
+- To complete without code change, exit `no_changes_exit_code` with a **clean tree**. Reporting no-change while leaving uncommitted work → `FAILED`.
 
-Refactoring passes are the exception: when the backlog is empty, a refactor
-that finds nothing to improve is a normal, successful run (the default
-refactor prompt already says "if nothing needs refactoring, make no
-changes").
+Refactoring passes are exempt — a refactor finding nothing to improve is a normal success.
 
 ## Timeouts
 
-`agent_timeout_seconds` (optional) kills the agent process after the given
-number of seconds:
-
-- on timeout the process is killed and the task fails as an ERROR
-  (`error: timed out after <n>s`);
-- output captured before the kill is kept in the run log;
-- when unset (`null`), the agent runs to completion — there is no default
-  timeout.
-
-A run that overruns `interval_minutes` is **never killed by the schedule**. The
-daemon skips the next iteration instead: only one agent runs at a time, and an
-iteration that wakes up while the previous run is still active is skipped, not
-interrupted.
-
-!!! tip
-
-    Set `agent_timeout_seconds` to something comfortably above your expected
-    agent runtime. For long interactive agents it is often safer to leave it
-    unset and rely on the skip-on-overlap behavior.
+`agent_timeout_seconds` kills the agent after N seconds (`error: timed out after <n>s`). Unset = no timeout. A run overrunning `interval_minutes` is never killed — the next cycle is skipped. Tip: leave unset for long agents and rely on skip-on-overlap.
 
 ## Output
 
-The agent's stdout and stderr are captured live, prefixed with `[stdout]` /
-`[stderr]`, and retained in the run result. To keep memory bounded, only the
-**last 1000 lines** are kept for a chatty agent. On a BLOCKED result, the
-agent's questions (falling back to the captured output lines) are stored on
-the task as `blocker_reason` and become the "what the agent needs" section of
-`BLOCKER.md` (up to the last 10 lines), rendered on the next cycle.
+Stdout/stderr are prefixed `[stdout]`/`[stderr]` and the last **1000 lines** are kept. On `BLOCKED`, the agent's questions (or output) become `blocker_reason` and the `BLOCKER.md` section (last 10 lines). Per-run tails go to `runs.jsonl` (`run_output_lines`); per-task `agent_response` is bounded by `agent_response_lines`.
 
 ## Git contract
 
-The agent should **not** commit or push anything itself — Forgeo does
-that, based on the exit code. The working contract is:
+The agent should **not** run `git` itself — Forgeo handles it:
 
-- make your changes in the repository;
-- **do not** run `git add`, `git commit`, `git push`, or reset the tree;
-- exit `0` to have your changes committed and pushed as one commit;
-- exit `no_changes_exit_code` when the task needs no code change (never exit
-  `0` with an empty tree — that run is retried and then marked `BLOCKED`);
-- exit `blocked_exit_code` to have partial work preserved and a blocker
-  written;
-- exit anything else to have your changes discarded.
+- Make changes in the repo.
+- Do not `git add`/`commit`/`push`/`reset`.
+- Exit `0` for commit, `no_changes_exit_code` for intentional no-op, `blocked_exit_code` for human input, anything else for discard.
 
-A good way to keep this contract front and center is to embed it in the
-`agent_command` prompt itself, e.g.:
+Embed the contract in your prompt:
 
 ```yaml
 agent_command: >
   opencode run --auto "Work on the repository at the current working directory.
-  Make the code changes requested below and nothing else. Do NOT run
-  git commit, git push, or git add -A — Forgeo commits your work.
-  Verify with the test suite where applicable.
-  Read AGENTS.md at the start of the session, and CONTEXT.md if present;
-  if your change materially affects the project overview or conventions,
-  update AGENTS.md and CONTEXT.md accordingly.
+  Make the requested changes and nothing else. Do NOT run git commit/push/add.
+  Verify with tests. Read AGENTS.md and CONTEXT.md if present; update them
+  if your change affects the overview.
   $FORGEO_TASK"
 ```
 
 ## Concurrency
 
-Only one agent runs at a time per forgeo:
-
-- the daemon holds a per-forgeo lock (`backlog.lock`) — a second `start` or
-  `once` is refused while it is held;
-- each cycle holds a per-iteration lock (`backlog.run`) — a wake-up that finds
-  a run still in progress is skipped.
+One agent per Forgeo: `backlog.lock` prevents a second `start`/`once`, and `backlog.run` makes a waking daemon skip while a run is active.

@@ -1,67 +1,37 @@
 # Forgeo
 
-A **scheduled, agent-driven software forgeo** for one repository. Every
-`interval_minutes` Forgeo wakes up and runs exactly one of three things:
+A **scheduled, agent-driven software factory** for one repository. Every `interval_minutes` Forgeo wakes up and does one thing:
 
-1. picks the oldest `OPEN` task whose dependencies are all `COMPLETED` from the
-   [backlog](backlog.md) (an optional `run_at` one-shot schedule overrides the
-   oldest-first order — see [One-shot scheduling](backlog.md#one-shot-scheduling)),
-   runs it through a coding [agent](agent-contract.md),
-   and commits + pushes the result directly on the single configured branch —
-   no branches, no PRs;
-2. if the backlog is empty, runs the agent in **refactoring mode** and commits
-   whatever it improves;
-3. if the agent signals it needs a human decision, the task is marked
-   `BLOCKED` with the agent's reason preserved, `BLOCKER.md` is rendered from
-   the backlog's blocked tasks, and Forgeo pauses until you resolve it (reopen
-   it from the web console).
+1. **Task** — picks the oldest `OPEN` task whose dependencies are `COMPLETED` (or the earliest due `run_at`), runs it via your [agent](agent-contract.md), commits and pushes on the configured branch.
+2. **Refactor** — if no task is runnable, runs the agent with `refactor_prompt` instead.
+3. **Blocked** — if the agent exits `blocked_exit_code`, marks the task `BLOCKED`, writes `BLOCKER.md`, and pauses until you reopen it.
 
-## What Forgeo is
+## Principles
 
-Forgeo is a small Python daemon and CLI that turns your repository into a
-self-maintaining codebase. You maintain a plain-JSON backlog of tasks; the
-forgeo works through it with whatever coding agent you configure (aider,
-Claude, a custom script — anything that reads the `FORGEO_TASK` environment
-variable). When there is nothing left to do, the same agent switches to
-refactoring mode and keeps the codebase tidy.
-
-Forgeo is deliberately single-purpose:
-
-- one repository per config;
-- one branch, everything committed on `main` (or whichever `branch` you set);
-- one agent at a time — an iteration that wakes up while the agent is still
-  working is skipped, never killed;
-- no PRs, no merge strategies, no branch juggling.
+- One repo, one branch (`main` by default), one agent at a time. Overlapping cycles are skipped, never killed.
+- No PRs or merge strategies — everything commits directly.
+- Any agent CLI works if it reads `FORGEO_TASK`.
 
 ## Where state lives
 
-- `forgeo.yaml` — the config (see [Configuration](configuration.md)).
-- `backlog.json` (configurable) — the task backlog, a file, an HTTP endpoint,
-  or Jira (see [Backlog format](backlog.md)).
-- `backlog.json.bak`, `backlog.json.bak.1`, ... — rotating snapshots of a
-  *file* backlog, written before every agent run and on daemon startup so a
-  bad write can always be rolled back (see [Backlog format](backlog.md)). A
-  remote backlog is owned by its provider and is never snapshotted locally.
-- `BLOCKER.md` (configurable) — written when a human decision is needed; keep
-  it outside the repo so it is never committed.
-- `forgeo.log` — rotating daemon log (5 MB × 3), also served over HTTP.
-- `backlog.state.json` — the daemon's live state (pid, started at, last
-  outcome, next run), rewritten after every cycle (also called
-  `daemon.state.json`).
-- `runs.jsonl` — the durable run history, one JSON record per finished cycle.
-- `backlog.lock` — per-forgeo lock holding the daemon PID; released
-  automatically on exit, even on a crash.
-- `backlog.run` — per-iteration lock that prevents two agents running at once.
-- `backlog.update.json` — remembers when the once-a-day PyPI update check last
-  ran, so it never phones home every cycle.
-- `~/.config/forgeo/web.toml` — the central dashboard's optional bearer
-  token (`forgeo web --token`): when present, every `/api/*` route requires
-  `Authorization: Bearer <token>`; with no file the dashboard stays open.
+| File | Purpose |
+| --- | --- |
+| `forgeo.yaml` | Config ([Configuration](configuration.md)) |
+| `backlog.json` | Task list — file, HTTP endpoint, or Jira/GitHub/GitLab ([Backlog](backlog.md)) |
+| `backlog.json.bak*` | Rotating snapshots of a *file* backlog (before each run) |
+| `BLOCKER.md` | Rendered from `BLOCKED` tasks; keep outside repo |
+| `forgeo.log` | Rotating log (5 MB × 3), also in dashboard |
+| `runs.jsonl` | Durable run history, one JSON line per cycle |
+| `backlog.state.json` | Live daemon state (pid, last outcome, next run) |
+| `backlog.lock` / `backlog.run` | Daemon and per-cycle locks |
+| `~/.config/forgeo/instances.yaml` | Instance registry (multi-repo) |
+| `~/.config/forgeo/web.toml` | Dashboard bearer token (optional) |
 
-The runtime files above sit next to the backlog file; with a remote backlog
-they go in `state_dir`, which defaults to the directory holding `forgeo.yaml`.
+Runtime files sit next to the backlog file; with a remote backlog they go in `state_dir` (defaults to the config directory).
 
 ## Next steps
 
-- [Getting Started](getting-started.md) — install and run your first cycle.
-- [CLI reference](cli-reference.md) — every command.
+- [Getting Started](getting-started.md) — install and run your first task.
+- [Configuration](configuration.md) — every `forgeo.yaml` key.
+- [Backlog format](backlog.md) — task schema, ordering, providers.
+- [CLI reference](cli-reference.md) — all commands.

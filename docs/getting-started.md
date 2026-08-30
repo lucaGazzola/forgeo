@@ -1,56 +1,25 @@
 # Getting Started
 
-This guide installs the `forgeo` CLI, initializes a config, and runs your
-first backlog task.
+Install the CLI, init a config, and run your first task.
 
 ## 1. Install
 
-Install the `forgeo` CLI with Homebrew on macOS or Linux
-(**no Python required**):
-
 ```bash
-brew install lucaGazzola/forgeo/forgeo
+brew install lucaGazzola/forgeo/forgeo          # macOS/Linux, no Python needed
+curl -fsSL https://forgeo.org/install.sh | bash  # binary or pip fallback
+pipx install forgeo-cli                          # Python 3.11+
 ```
 
-On newer Homebrew versions (4.6+) a third-party tap is untrusted by default:
-if `brew` refuses to load the formula, run `brew trust
-lucaGazzola/forgeo` first and install again.
+- Homebrew and the one-liner fetch a prebuilt binary from GitHub Releases.
+- The one-liner falls back to `pipx` → `pip install --user` if no binary matches.
+- Re-run the same command to upgrade. No root required.
+- On Homebrew 4.6+, run `brew trust lucaGazzola/forgeo` first if the tap is untrusted.
 
-Or from the public GitHub remote with the one-liner (**no Python required**):
-
-```bash
-curl -fsSL https://forgeo.org/install.sh | bash
-```
-
-Or with Python 3.11+ via pip:
-
-```bash
-pipx install forgeo-cli
-```
-
-The Homebrew formula and the one-liner both download a prebuilt standalone
-binary from the matching GitHub Release; the one-liner covers Linux, macOS,
-and Windows, while Homebrew installs the macOS (arm64/Intel) and Linux (Intel)
-binaries. All three installers:
-
-- never need root;
-- upgrade an existing install by re-running them (`brew upgrade
-  lucaGazzola/forgeo/forgeo`, re-running the one-liner, or
-  `pipx upgrade forgeo-cli` / `pip install --user --upgrade forgeo-cli`).
-
-The one-liner additionally falls back to `pipx` and then `pip install --user`
-when no prebuilt binary matches the platform and a Python 3.11+ is available,
-and warns you when the install location is not on your `PATH`.
-
-You do not need to watch for releases: when `forgeo start` or `forgeo once`
-begins a cycle, Forgeo checks PyPI at most once a day and prints a short
-notice (also logged) naming the newer version and the upgrade command when
-one is available. The check never auto-updates or modifies the install; set
-`FORGEO_UPDATE_CHECK=0` to disable it.
+Forgeo checks PyPI at most once a day on `forgeo start`/`once` and notifies when an upgrade exists. Set `FORGEO_UPDATE_CHECK=0` to disable. It never auto-updates.
 
 ## 2. Initialize
 
-Run the guided wizard from your project root:
+From your project root:
 
 ```bash
 forgeo init
@@ -58,53 +27,20 @@ forgeo init
 
 The wizard asks for:
 
-1. **Forgeo folder** — where the backlog, `BLOCKER.md` and the log live
-   (default `.forgeo`). It is gitignored by default.
-2. **Backlog provider** — where tasks live: `file` (local `.forgeo/backlog.json`),
-   `github` / `gitlab` / `jira` / `http`. For `github` it auto-detects
-   `owner/repo` from `git remote origin`, asks for `token_env` (default
-   `GITHUB_TOKEN`) and can persist a pasted classic PAT (`ghp_...`, scope `repo`)
-   to `~/.config/forgeo/github_token_env.sh` (600, wired to `~/.bashrc`). Same
-   for `gitlab` (`GITLAB_TOKEN`, base URL) and `jira`/`http`.
-3. **Coding agent command** — the bare command that launches your coding
-   agent (default `opencode run --auto`). Forgeo appends the standard task
-   prompt (which ends in `$FORGEO_TASK`) automatically, so you never type
-   it. Enter a command that already references `$FORGEO_TASK` and it is
-   kept verbatim.
-4. **Refactor prompt** — the instruction used when the backlog is empty; the
-   default is offered, or you can paste a custom one.
+1. **Forgeo folder** — where backlog/logs live (default `.forgeo`, gitignored).
+2. **Backlog provider** — `file` (local JSON), `github`/`gitlab`/`jira`/`http`. For `github` it auto-detects `owner/repo` from `git remote` and can persist a pasted `GITHUB_TOKEN` to `~/.config/forgeo/github_token_env.sh`.
+3. **Agent command** — bare command for your agent (default `opencode run --auto`). Forgeo appends the task prompt (`$FORGEO_TASK`); if your command already references `$FORGEO_TASK` it is kept verbatim.
+4. **Refactor prompt** — used when the backlog is empty.
 
-`forgeo init` writes `forgeo.yaml`, creates Forgeo folder, and appends
-`<folder>/` to `.gitignore` (unless you opt out). For `github`/`gitlab`/`jira`
-set `backlog_provider` + `backlog` URL + provider block is written automatically
-and `state_dir` is set to the Forgeo folder so runtime files stay beside the
-config.
+Writes `forgeo.yaml`, creates the folder, and appends it to `.gitignore` (opt-out available). With `github`/`gitlab`/`jira` it also sets `backlog_provider`, `backlog` URL, provider block, and `state_dir`.
 
 ```bash
-forgeo init --force    # overwrite an existing forgeo.yaml
+forgeo init --force    # overwrite existing config
 ```
 
-## 3. Create your first backlog
+## 3. Create the backlog
 
-If you chose `file` in the wizard, the backlog is a plain JSON file (see
-[Backlog format](backlog.md)) — by default `.forgeo/backlog.json`. Once Forgeo
-is running you can also add tasks from the [web console](web-console-api.md) — no
-file editing needed.
-
-If you chose `github`/`gitlab`/`jira`/`http` in the wizard, your `forgeo.yaml`
-already points at the provider (`backlog: https://api.github.com` etc.).
-For `github` create a classic PAT at `https://github.com/settings/tokens/new`
-(scope `repo`), `export GITHUB_TOKEN=ghp_...` (or let the wizard persist it),
-then `forgeo validate` before `forgeo start`. Same for `gitlab` (`GITLAB_TOKEN`)
-and `jira`. See [Backlog format](backlog.md) for provider details.
-
-For `jira`/`github`/`gitlab`, set `backlog_provider:` to the provider, point `backlog:` at its base URL
-(`https://jira.example.com`, `https://api.github.com` / `https://github.example.com/api/v3`,
-`https://gitlab.example.com`), configure the provider block (`jira.jql` / `github.repo` / `gitlab.repo` and auth),
-export the credentials named in `*_auth.token_env`, and run `forgeo validate` before starting the daemon.
-The dashboard for these providers is a read-mostly mirror: a banner links to the native board, each card links to
-the native issue, and Forgeo-specific state (BLOCKED/FAILED reasons, `agent_response`) is surfaced on the board — triage
-stays in Jira/GitHub/GitLab. See [Backlog: Jira/GitHub/GitLab](backlog.md) for the complete configuration.
+**File provider** — edit `.forgeo/backlog.json` (see [Backlog format](backlog.md)):
 
 ```json
 {
@@ -120,102 +56,61 @@ stays in Jira/GitHub/GitLab. See [Backlog: Jira/GitHub/GitLab](backlog.md) for t
 }
 ```
 
-!!! tip
+You can also add tasks from the dashboard once Forgeo is running — no file editing needed.
 
-    Hand this spec to your favorite LLM to generate the initial backlog for
-    the application you want to build.
-
-## 4. Start Forgeo
+**Remote providers** — `forgeo.yaml` already points at the provider. Export credentials and validate:
 
 ```bash
-forgeo start
-```
-
-`forgeo start` launches the daemon **detached in the background** and exits.
-The daemon wakes up every `interval_minutes` and runs one cycle. Stop it from
-anywhere with `forgeo stop`; `forgeo status` shows whether it is running. To
-run the daemon in the foreground instead (interruptible with Ctrl-C), use
-`forgeo start -f`. It binds no ports itself; open the dashboard (which
-shows every registered instance) with `forgeo web` — see
-[Web console & HTTP API](web-console-api.md):
-
-![Forgeo web console](img/console.png)
-
-## 5. Verify
-
-```bash
-forgeo status
-```
-
-shows the config, backlog counts, the next runnable `OPEN` task (one whose
-dependencies are all `COMPLETED`), whether the daemon is running, and the last
-run outcome. To run exactly one cycle without leaving a daemon up:
-
-```bash
-forgeo once
-```
-
-To run one specific task immediately instead of the oldest `OPEN` one — e.g.
-to rerun a `FAILED` task after reopening it, or to try a risky task now:
-
-```bash
-forgeo run --task SELF-012
-```
-
-`forgeo run` refuses with a clear error when the task does not exist or is
-not `OPEN`, and when a daemon or another `once`/`run` is already running.
-
-Before starting for the first time you can run a read-only dry run that
-validates the config, repository, branch/remote, backlog, agent command and
-lock state without invoking the agent or writing anything:
-
-```bash
+export GITHUB_TOKEN=ghp_...   # or GITLAB_TOKEN / JIRA_USER + JIRA_TOKEN
 forgeo validate
 ```
 
-## 6. Multiple repositories / instances
+See [Backlog format](backlog.md) for Jira/GitHub/GitLab details. The dashboard for issue providers is a read-mostly mirror — triage stays in the native tracker.
 
-Forgeo runs one config per repository — nothing stops you from running
-several factories on several repositories at the same time. Each config gets
-its own backlog, logs, locks and `runs.jsonl`, and each daemon is a separate
-process, so instances are fully independent. The **instance registry** gives
-every forgeo a stable name so you can enumerate them and manage them from
-anywhere.
+!!! tip
+    Ask your LLM to generate the initial backlog from your project spec.
+
+## 4. Start
 
 ```bash
-# 1. Initialize a config per repository (run the wizard in each project root)
-forgeo init
-
-# 2. Start a daemon per instance (background; each config is registered
-#    automatically under its `name` on first start — or pre-register with
-#    `instance add`)
-forgeo start --config /path/to/site-a/forgeo.yaml
-forgeo start --config /path/to/site-b/forgeo.yaml
-
-# 3. List every registered instance (also: `forgeo list`)
-forgeo instance list
-
-# 4. From anywhere, target an instance by name
-forgeo start --name site-a
-forgeo stop --name site-a
-
-# 5. Open the central dashboard: one page for every registered instance
-forgeo web           # default http://0.0.0.0:8790 (foreground)
-forgeo web -d        # ...or keep it running in the background
-forgeo web stop      # stop the background dashboard
+forgeo validate   # dry run: checks config, repo, backlog, agent, locks
+forgeo start      # daemon in background; wakes every interval_minutes
+forgeo start -f   # foreground, Ctrl-C to stop
+forgeo status     # config, counts, next task, daemon state, last outcome
 ```
 
-`--name` works on `start`, `once`, `status`, `stop` and `restart` and is
-mutually exclusive with `--config`; an unknown name prints a clear error.
-`start` and `stop` with `--config` register Forgeo automatically under
-its config's `name` when it is not in the registry yet, so the registry stays
-in sync without manual `forgeo instance add` steps. See
-[Configuration](configuration.md) for the registry file, and
-[CLI reference](cli-reference.md) for the commands.
+`forgeo start` runs pre-flight checks (same as `validate`) and refuses to start on errors. The daemon itself binds no ports — open the dashboard with `forgeo web` (see [Web console](web-console-api.md)):
+
+![Forgeo web console](img/console.png)
+
+## 5. Run one task
+
+```bash
+forgeo once                  # one cycle in foreground, no daemon
+forgeo run --task TASK-012   # one specific OPEN task (triage)
+```
+
+`forgeo run` refuses if the task is missing or not `OPEN`, or if a daemon is already running.
+
+## 6. Multiple repos
+
+One config per repo, each daemon independent. The **instance registry** gives each a name:
+
+```bash
+forgeo init                                            # in each repo
+forgeo start --config /path/to/site-a/forgeo.yaml      # auto-registers as `name`
+forgeo start --config /path/to/site-b/forgeo.yaml
+forgeo instance list   # or: forgeo list
+forgeo stop --name site-a
+forgeo web             # aggregate dashboard on :8790
+forgeo web -d && forgeo web stop   # background dashboard
+```
+
+`--name` works with `start`, `once`, `run`, `status`, `validate`, `stop`, `restart` (mutually exclusive with `--config`).
 
 ## Next steps
 
-- [Configuration reference](configuration.md) — every `forgeo.yaml` key.
-- [Backlog format](backlog.md) — task schema and statuses.
-- [Agent contract](agent-contract.md) — how the agent is invoked.
+- [Configuration](configuration.md) — every `forgeo.yaml` key.
+- [Backlog format](backlog.md) — schema, ordering, dependencies.
+- [Agent contract](agent-contract.md) — env, exit codes, timeouts.
 - [CLI reference](cli-reference.md) — all commands.

@@ -6,7 +6,6 @@
   <img src="docs/img/title.svg" alt="Forgeo" width="128">
 </div>
 
-
 [![CI](https://github.com/lucaGazzola/forgeo/actions/workflows/ci.yml/badge.svg)](https://github.com/lucaGazzola/forgeo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -14,175 +13,111 @@
   <img src="docs/img/demo.gif" alt="Forgeo running a backlog task end to end" width="720">
 </div>
 
-**Forgeo is a software factory for your coding-agent.**
-You're already working with an AI coding agent, prompting it task by task
-or giving it a goal. Forgeo organizes your work in a structured way with
-a backlog, and it decides what to work on next, runs your
-agent on it, and commits the result. Progress, pending decisions, and history
-are tracked in plain files you can inspect at any time, plus a web dashboard.
-Forgeo only interrupts you when a decision is genuinely yours to
-make, everything else happens autonomously. Transient failures (a network
-blip, a flaky test) are retried automatically when the retry policy is
-enabled, and only a task that keeps failing or genuinely needs a human
-decision ever reaches you.
+**Forgeo is a software factory for your coding agent.**
 
-All you need is basic comfort with a terminal, a git repository, and any coding
-agent CLI.
+Give it a backlog and an agent CLI — Forgeo picks the next runnable task, runs the agent, and commits the result. It tracks progress in plain files and a web dashboard, and only interrupts you when a human decision is needed.
+
+- **One task at a time** — oldest `OPEN` task whose dependencies are `COMPLETED` (or a `run_at` schedule), committed on a single branch. No PRs, no branch juggling.
+- **Agent-agnostic** — any CLI that reads `FORGEO_TASK` (aider, Claude, custom script).
+- **Refactors when idle** — runs a refactoring pass when the backlog is empty.
+- **Handles failure gracefully** — `BLOCKED` for human input (`BLOCKER.md`), `FAILED` with retry policy, snapshots for file backlogs, Telegram/webhook notifications.
+
+Requires a terminal, a git repo, and an agent CLI.
 
 ## Quickstart
 
-The full walkthrough is in [Getting started](docs/getting-started.md).
+Full walkthrough: [Getting Started](docs/getting-started.md).
 
-### 1. Install the CLI
+### 1. Install
 
-Pick any one installer (no root needed; re-running it upgrades Forgeo).
+Pick one (no root; re-run to upgrade):
 
 ```bash
-# Homebrew (macOS / Linux): prebuilt binary, no Python required
-brew install lucaGazzola/forgeo/forgeo
-
-# One-liner (Linux / macOS / Windows): prebuilt binary, falls back to pip
-curl -fsSL https://forgeo.org/install.sh | bash
-
-# pip (Python 3.11+)
-pipx install forgeo-cli
+brew install lucaGazzola/forgeo/forgeo          # Homebrew, no Python needed
+curl -fsSL https://forgeo.org/install.sh | bash  # binary or pip fallback
+pipx install forgeo-cli                          # Python 3.11+
 ```
 
-### 2. Create your Forgeo
+### 2. Init
 
 ```bash
 forgeo init
 ```
 
-Guided wizard, run from your project root. Writes `forgeo.yaml` (the
-config) and a `.forgeo/` folder for the backlog, logs and blocker files.
-The wizard asks for the backlog provider (`file` for a local JSON file, or
-`github`/`gitlab`/`jira`/`http` for an external tracker — for `github` it
-auto-detects `owner/repo` from `git remote` and can persist a pasted
-`GITHUB_TOKEN` to `~/.config/forgeo/github_token_env.sh`).
-
-The base flow is then three steps: fill the backlog, check the
-configuration, start the daemon.
+Wizard in your project root. Creates `forgeo.yaml` and `.forgeo/` (backlog, logs, blockers). Prompts for backlog provider (`file` / `github` / `gitlab` / `jira` / `http`) and agent command. For `github` it auto-detects `owner/repo` and can persist `GITHUB_TOKEN` to `~/.config/forgeo/`.
 
 ### 3. Fill the backlog
 
 ```bash
-# Either: edit the backlog file by hand — a plain JSON task list (see
-# Backlog format), created on first use:
-#   .forgeo/backlog.json
+# file provider: edit .forgeo/backlog.json (see Backlog format)
+# github/gitlab/jira/http: configured in forgeo.yaml, then:
+forgeo validate
 
-# Or: pick github/gitlab/jira in forgeo init (or configure forgeo.yaml
-# manually): set backlog_provider: github and backlog: https://api.github.com
-# with github.repo + token_env, then export GITHUB_TOKEN and run
-# forgeo validate. See backlog docs for Jira/GitHub/GitLab.
-
-# Or: add tasks from the web console once your forgeo is registered
-# (first `forgeo start` registers it automatically):
-forgeo web      # dashboard at http://0.0.0.0:8790, or keep it on with `forgeo web -d`
+# or add tasks from the dashboard:
+forgeo web      # http://0.0.0.0:8790  (use -d to keep it running)
 ```
 
 ![Forgeo web console](docs/img/console.png)
 
-### 4. Check the configuration
+### 4. Start
 
 ```bash
-forgeo validate
+forgeo validate   # dry run: config, repo, backlog, agent, locks
+forgeo start      # daemon in background, one cycle per interval_minutes
 ```
 
-Read-only dry run before the first start: verifies `forgeo.yaml`, the git
-repo, branch and remote, that the backlog parses (fetching it once when it
-is an HTTP endpoint), the agent command, and the lock state. Never invokes
-the agent and writes nothing.
+Each cycle: pick task → run agent → commit/push. Empty backlog → refactoring pass.
 
-### 5. Start the daemon
+### Day-to-day
 
 ```bash
-forgeo start
+forgeo status              # config, counts, next task, daemon state, last outcome
+forgeo once                # one cycle in foreground, no daemon
+forgeo run --task TASK-012 # run a specific OPEN task now
+forgeo stop / restart      # stop or restart daemon
+forgeo web                 # dashboard for all instances
 ```
 
-Starts the daemon **detached in the background** and exits. Every
-`interval_minutes` it runs one cycle: pick the oldest `OPEN` task whose
-dependencies are all `COMPLETED`, run your coding agent on it, commit the
-result. When the backlog is empty, the same agent runs a refactoring pass
-over the codebase instead.
+`forgeo web` is open by default on `0.0.0.0:8790`. On a shared host use `forgeo web --token` for bearer auth — see [Web console](docs/web-console-api.md).
 
-### Day-to-day commands
+### Docker sandbox
 
-```bash
-forgeo status    # Config, backlog counts, next runnable task, daemon running?, last outcome
-forgeo once      # Run exactly one cycle in the foreground, no daemon left behind
-forgeo run --task SELF-012  # Run one specific OPEN task now (triage)
-forgeo stop      # Stop the background daemon
-forgeo restart   # Stop and start again (re-reads forgeo.yaml after edits)
-forgeo web       # Dashboard: every instance's backlog, run history and logs
-```
-
-`forgeo web` defaults to an open dashboard on `http://0.0.0.0:8790`; on a
-shared host protect it with `forgeo web --token` (requires
-`Authorization: Bearer <token>` on every `/api/*` route — see
-[Web console & HTTP API](docs/web-console-api.md)).
-
-### Running the agent in a container
-
-By default Forgeo runs the agent directly on the host. To run it inside a
-Docker container instead, set `agent_sandbox: docker` in `forgeo.yaml`:
+Run the agent isolated:
 
 ```yaml
 agent_sandbox: docker
-agent_sandbox_image: your-image
-agent_sandbox_network: none   # default; set bridge/host to allow network
-agent_sandbox_mounts:         # optional, read-only, e.g. ~/.claude
-  - ~/.claude
+agent_sandbox_image: your-image   # must contain agent CLI + sh
+agent_sandbox_network: none       # default, no network
+agent_sandbox_mounts: [~/.claude] # read-only mounts
 ```
 
-The image must already contain the agent CLI your `agent_command` uses plus a
-shell (nothing is installed at run time). Forgeo bind-mounts the repository
-into the container at the same path, so the agent's edits land on your
-checkout and are committed as usual; the task is passed through as
-`FORGEO_TASK`. Networking is off by default (`none`) and nothing else is
-visible inside the container unless you list it in `agent_sandbox_mounts`.
-See the [Configuration](docs/configuration.md) docs for details.
+Repo is bind-mounted at the same path; task arrives as `FORGEO_TASK`. See [Configuration](docs/configuration.md).
 
-### Multiple repositories (instances)
+### Multiple repos
 
-Run several factories at once, one per repository; each config is fully
-independent (own backlog, logs, locks). Register each `forgeo.yaml` with
-`forgeo instance add NAME --config PATH`, manage any of them by name with
-`forgeo start/status/stop --name NAME`, list them all with `forgeo list`,
-and get one aggregate overview with the central dashboard, `forgeo web`.
+One config per repo, fully independent (own backlog, logs, locks). Use the instance registry:
+
+```bash
+forgeo instance add site-a --config /path/to/site-a/forgeo.yaml
+forgeo start --name site-a
+forgeo list          # all instances
+forgeo web           # aggregate dashboard
+```
 
 ## Documentation
 
-| Topic | Where |
+| Topic | Doc |
 | --- | --- |
-| Install, init, first cycle | [Getting started](docs/getting-started.md) |
-| Every `forgeo.yaml` key | [Configuration](docs/configuration.md) |
-| Task schema and statuses | [Backlog format](docs/backlog.md) |
-| How the agent is invoked (env, exit codes, timeouts) | [Agent contract](docs/agent-contract.md) |
+| Install, init, first cycle | [Getting Started](docs/getting-started.md) |
+| All `forgeo.yaml` keys | [Configuration](docs/configuration.md) |
+| Task schema & statuses | [Backlog format](docs/backlog.md) |
+| Agent env, exit codes, timeouts | [Agent contract](docs/agent-contract.md) |
 | All CLI commands | [CLI reference](docs/cli-reference.md) |
-| Web dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
+| Dashboard & HTTP API | [Web console & HTTP API](docs/web-console-api.md) |
 
-Everything is stored in plain files: the local backlog, `forgeo.log`, and
-`BLOCKER.md` whenever a decision is pending. Backlog providers (see
-[Backlog format](docs/backlog.md)):
+**Backlog providers:** [file](docs/backlog.md#a-json-file-backlog) · [HTTP](docs/backlog.md#a-backlog-over-http) · [Jira](docs/backlog.md#a-jira-backlog) · [GitHub](docs/backlog.md#a-github-backlog) · [GitLab](docs/backlog.md#a-gitlab-backlog) — file/HTTP exchange the full document; Jira/GitHub/GitLab sync issues individually. File backlogs are snapshotted (`backlog.json.bak`) before each run and restored if corrupt.
 
-- [JSON file](docs/backlog.md#a-json-file-backlog)
-- [HTTP endpoint](docs/backlog.md#a-backlog-over-http)
-- [Jira](docs/backlog.md#a-jira-backlog)
-- [GitHub](docs/backlog.md#a-github-backlog)
-- [GitLab](docs/backlog.md#a-gitlab-backlog)
-
-File and HTTP backlogs exchange the complete task document; Jira/GitHub/GitLab issues are read and transitioned
-individually with workflow state and engine metadata stored on the issue. A *file* backlog is snapshotted (rotating
-`backlog.json.bak` files) before every agent run and on daemon startup, and
-restored automatically if it is ever found corrupt — a bad write never loses
-your tasks.
-
-The central dashboard (`forgeo web`) mirrors every instance: for `file`/`http` it is the primary editor; for
-`jira`/`github`/`gitlab` it is a read-mostly mirror of the native tracker — each task card and its detail modal link
-to the native issue (`Open in Jira/GitHub/GitLab ↗`), a top banner links to the native board, and the board surfaces
-Forgeo-specific state the native UI does not (BLOCKED/FAILED reasons, `agent_response`, retry budget) — triage stays in
-the tracker (see [Web console & HTTP API](docs/web-console-api.md)).
+**Dashboard:** `forgeo web` aggregates every instance. For `file`/`http` it is the primary editor; for `jira`/`github`/`gitlab` it is a read-mostly mirror (links to native issues, surfaces `BLOCKED`/`FAILED` reasons and retry state).
 
 ## Develop
 
@@ -191,9 +126,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, quality
-gates (`pytest`, `ruff check`, `mypy src/forgeo`), and the pull-request
-process.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (quality gates: `pytest`, `ruff check`, `mypy src/forgeo`).
 
 ## License
 

@@ -319,6 +319,7 @@ def test_home_page_lists_registered_instances_via_api(web_env):
     assert alpha["last_outcome"] == "SUCCESS"
     assert alpha["backlog_counts"] == {
         "OPEN": 1,
+        "REVIEW": 0,
         "BLOCKED": 0,
         "COMPLETED": 1,
         "FAILED": 0,

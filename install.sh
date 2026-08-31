@@ -14,7 +14,7 @@ set -eu
 
 REPO_OWNER="lucaGazzola"
 REPO_NAME="forgeo"
-DEFAULT_VERSION="0.10.0"
+DEFAULT_VERSION="0.11.0"
 MIN_PYTHON="3.11"
 PYPI_PACKAGE="forgeo-cli"
 PREFIX="${FORGEO_PREFIX:-${HOME:-}/.local}"

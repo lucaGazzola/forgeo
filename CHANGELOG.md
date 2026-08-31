@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-31
+
+### Added
+
+- **REVIEW status with feature-branch workflow** (`review_mode: branch`). When enabled, a successful agent run no longer commits directly to `main` as `COMPLETED`: the engine creates a feature branch `forgeo/review/<TASK_ID>` (via `review_branch_prefix`, default `forgeo/review/`), commits there, pushes, and marks the task `REVIEW`. Tasks in `REVIEW` block dependants (like `BLOCKED`/`FAILED`) while independent tasks keep running.
+- Per-task `review_required` override (`bool | null`): `true` forces branch+REVIEW, `false` forces direct `COMPLETED`, `null` inherits `review_mode`. Editable via `PATCH /api/instances/<name>/tasks/<id>` and persisted across all providers (file/http body, hidden `<!-- forgeo: {...} -->` block on GitHub/GitLab, Jira issue property `review_branch`/`review_commit_sha`).
+- Engine-managed `review_branch` and `review_commit_sha` on `Task` (set on `REVIEW`, cleared on leave), carried through document stores (`DocumentBacklogStore.set_review`/`complete_review`/`request_changes`) and issue stores via `forgeo-review` label (`forgeo_labels()`) plus engine state.
+- Web console: dedicated **REVIEW** kanban column, review-branch display on cards/modals, and human-in-the-loop actions `Complete` (`POST …/complete-review` → `COMPLETED` after manual merge) and `Request changes` (`POST …/request-changes` → `OPEN` for rework). Issue providers also show `external_url`/board links for the branch.
+- Generic webhook now supports `review` event (`WEBHOOK_EVENTS += "review"`, `notify_webhook_events` validation), sent by `Forgeo._run_task` on the `REVIEW` transition via `GitManager.create_review_branch`/`a_create_review_branch` and `_commit_on_review_branch` (creates/resets branch, commits, pushes, switches back to `branch` and hard-resets `main`).
+- `HttpBacklog`/`JSONBacklog`/`IssueBacklogBase` now expose `set_review`/`complete_review`/`request_changes` and central dashboard routes `POST /api/instances/<name>/tasks/<id>/{complete-review,request-changes}`. Shared helpers `_issue_provider_base`, `_github_repo_root`, `_gitlab_issues_root`, `forgeo_labels`, `extract_issue_number/labels`, `bump_state_counter` unify Jira/GitHub/GitLab handling.
+- `config/forgeo.yaml` and `docs/configuration.md` document `review_mode` and `review_branch_prefix`; `mkdocs.yml` `site_description` updated.
+
+### Changed
+
+- Docs restructured and condensed (~55% shorter) while preserving full coverage: `README`, `docs/agent-contract.md`, `docs/backlog.md`, `docs/cli-reference.md`, `docs/configuration.md`, `docs/getting-started.md`, `docs/index.md`, `docs/web-console-api.md` rewritten for scannability (tables, endpoint summary, concise curl examples).
+- `docs/backlog.md`, `docs/configuration.md`, `docs/web-console-api.md`, and `README` document the new REVIEW workflow, `REVIEW` task lifecycle, and new `review`-related API fields.
+- Internal maintainability refactor: `backlog.py` helpers `_require_string`/`_require_string_list`/`_status_by_id`/`_set_agent_response`/`_blocked_notice`/`_blocker_sections`/`_render_block`, `forgeo.py` split of blocker/commit logic, `models.py` `_IssueFieldMappingBase`/`_IssueBacklogConfigBase`/`_PatAuthBase`/`_IssueWorkflowBase`/`_RepoBacklogConfigBase` extraction, `IssueBacklogBase` shared `_call`/`_labels`/`_get_issue`/`_search_all`/`_task_from_issue`/`list_tasks`/`get_task`/`validate_connection`/`bump_failed_wait`/`_update_issue_labels`, `GitManager.ensure_branch`/`current_branch`/`create_review_branch`/`commit_all_on_branch` plus async wrappers, `central.py` `_github_web_base` exact-host rewrite and `_external_board_url`/`_external_issue_url` helpers, `config.py` `_maybe_resolve`, `validate.py`/`daemon.py`/`runs.py`/`paths.py`/`io.py`/`web_common.py`/`setup.py` lint-driven cleanups.
+
+### Fixed
+
+- `ruff`/`mypy` compliance across the review branch (BLE001/S110/F541 suppressions in `setup.py`, type narrowing in `Forgeo`, `src/forgeo/backlog.py:21`, etc.); `pytest` green including new `REVIEW` column/counts and delete tests.
+
 ## [0.10.0] - 2026-08-24
 
 ### Added
@@ -407,7 +429,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/lucaGazzola/forgeo/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/lucaGazzola/forgeo/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/lucaGazzola/forgeo/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/lucaGazzola/forgeo/compare/v0.7.3...v0.8.0

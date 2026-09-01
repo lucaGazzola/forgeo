@@ -166,6 +166,7 @@ Runtime files (`backlog.lock`, `runs.jsonl`, etc.) go in `state_dir` (defaults t
 ## A Jira backlog
 
 ```yaml
+# PAT:
 backlog_provider: jira
 backlog: https://jira.example.com
 jira:
@@ -173,6 +174,12 @@ jira:
   project_key: APP
   auth: {scheme: basic, username_env: JIRA_USER, token_env: JIRA_TOKEN}
   workflow: {open_statuses: ["10000", "10001"], open_status: "10000", running_status: "3", completed_status: "10002"}
+# OAuth 3LO (Cloud):
+# jira:
+#   jql: 'project = APP AND labels = forgeo'
+#   auth:
+#     oauth: {client_id: xxxx, client_secret_env: JIRA_CLIENT_SECRET, scope: "offline_access read:jira-user read:jira-work"}
+# # then: forgeo auth login --provider jira --client-id xxxx
 ```
 
 - Jira keys → task IDs; `summary`/`description`/`created`/`updated` → task fields.
@@ -185,9 +192,13 @@ jira:
 ## A GitHub backlog
 
 ```yaml
+# PAT:
 backlog_provider: github
 backlog: https://api.github.com   # or https://github.example.com/api/v3
-github: {repo: owner/repo, token_env: GITHUB_TOKEN}
+github: {repo: owner/repo, auth: {token_env: GITHUB_TOKEN}}
+# OAuth (browser/device):
+# github: {repo: owner/repo, auth: {oauth: {client_id: Iv1.xxxx, flow: device, scope: repo}}}
+# # then: forgeo auth login --provider github --client-id Iv1.xxxx
 ```
 
 - Issue numbers → task IDs; `title`/`body`/`created_at`/`updated_at` → task fields.
@@ -204,9 +215,13 @@ GITHUB_TOKEN=... ./scripts/test-github-backlog-e2e.sh
 ## A GitLab backlog
 
 ```yaml
+# PAT:
 backlog_provider: gitlab
 backlog: https://gitlab.example.com   # instance root, /api/v4 appended
-gitlab: {repo: group/project, token_env: GITLAB_TOKEN}
+gitlab: {repo: group/project, auth: {token_env: GITLAB_TOKEN}}
+# OAuth (browser PKCE):
+# gitlab: {repo: group/project, auth: {oauth: {client_id: abc, flow: browser, scope: api}}}
+# # then: forgeo auth login --provider gitlab --client-id abc
 ```
 
 - `iid` → task ID; `opened`/`closed` → `OPEN`/`COMPLETED`; same hidden-block and label mechanics as GitHub.

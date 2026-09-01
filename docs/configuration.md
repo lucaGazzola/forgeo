@@ -70,6 +70,7 @@ Add `backlog_auth` for OAuth2-protected HTTP endpoints (see below). A failed HTT
 ### Jira
 
 ```yaml
+# PAT / basic (Server/DC):
 backlog_provider: jira
 backlog: https://jira.example.com
 state_dir: .forgeo
@@ -86,6 +87,16 @@ jira:
     open_status: "10000"
     running_status: "3"
     completed_status: "10002"
+# OAuth 3LO (Cloud, browser):
+# jira:
+#   jql: 'project = APP AND labels = forgeo'
+#   auth:
+#     oauth:
+#       client_id: xxxx
+#       client_secret_env: JIRA_CLIENT_SECRET
+#       scope: offline_access read:jira-user read:jira-work
+#       token_file: ~/.config/forgeo/tokens/jira.json  # optional
+# # then: forgeo auth login --provider jira --client-id xxxx
 ```
 
 | Key | Default | Description |
@@ -109,11 +120,23 @@ Status values can be names or IDs (IDs preferred). Jira keys become task IDs. En
 ### GitHub
 
 ```yaml
+# PAT:
 backlog_provider: github
 backlog: https://api.github.com   # or https://github.example.com/api/v3
 github:
   repo: owner/repo
-  token_env: GITHUB_TOKEN
+  auth:
+    token_env: GITHUB_TOKEN
+# OAuth / browser (device flow for CLI, browser PKCE):
+# github:
+#   repo: owner/repo
+#   auth:
+#     oauth:
+#       client_id: Iv1.xxxx
+#       flow: device              # device | browser
+#       scope: repo
+#       token_file: ~/.config/forgeo/tokens/github.json
+# # then: forgeo auth login --provider github --client-id Iv1.xxxx
 ```
 
 | Key | Default | Description |
@@ -134,11 +157,23 @@ Issue numbers become task IDs; `open`/`closed` maps to `OPEN`/`COMPLETED`; `forg
 ### GitLab
 
 ```yaml
+# PAT:
 backlog_provider: gitlab
 backlog: https://gitlab.example.com   # instance root, /api/v4 appended
 gitlab:
   repo: group/project
-  token_env: GITLAB_TOKEN
+  auth:
+    token_env: GITLAB_TOKEN
+# OAuth (browser PKCE, device if enabled):
+# gitlab:
+#   repo: group/project
+#   auth:
+#     oauth:
+#       client_id: abc123
+#       flow: browser             # browser | device
+#       scope: api
+#       token_file: ~/.config/forgeo/tokens/gitlab.json
+# # then: forgeo auth login --provider gitlab --client-id abc123
 ```
 
 Same keys as GitHub (`gitlab.*`), including `workflow` and `fields` for the same 7 mappings. Issue `iid` becomes task ID; `opened`/`closed` maps to `OPEN`/`COMPLETED`; hidden `<!-- forgeo: {...} -->` block for engine state.

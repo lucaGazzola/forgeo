@@ -57,11 +57,43 @@ class GithubClient:
     def __init__(self, base_url: str, config: GithubBacklogConfig) -> None:
         self.base_url = base_url.rstrip("/")
         self.config = config
+        self._oauth_provider: Any | None = None  # lazy GithubOAuthTokenProvider when oauth is used
+
+    def _oauth_token_provider(self) -> Any | None:
+        if self._oauth_provider is not None:
+            return self._oauth_provider
+        auth = self.config.auth
+        if auth.oauth is None:
+            return None
+        from forgeo.oauth_github import GithubOAuthTokenProvider, GithubTokenStore
+
+        token_file = auth.oauth.token_file
+        store = GithubTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else GithubTokenStore(api_base=self.base_url)
+        provider = GithubOAuthTokenProvider(store)
+        self._oauth_provider = provider
+        return provider
 
     def _auth_header(self) -> str:
-        token = require_env_token(self.config.auth.token_env, "GitHub", GithubRequestError)
-        # GitHub accepts Bearer or token; use Bearer for consistency
-        return f"Bearer {token}"
+        auth = self.config.auth
+        if auth.token_env is not None:
+            token = require_env_token(auth.token_env, "GitHub", GithubRequestError)
+            return f"Bearer {token}"
+        if auth.oauth is not None:
+            provider = self._oauth_token_provider()
+            assert provider is not None
+            try:
+                token = provider.token()
+            except Exception as exc:
+                # Wrap file errors as GithubRequestError so callers surface a clear message
+                if isinstance(exc, GithubRequestError):
+                    raise
+                from forgeo.oauth_github import GithubOAuthError
+
+                if isinstance(exc, GithubOAuthError):
+                    raise GithubRequestError(str(exc)) from exc
+                raise GithubRequestError(str(exc)) from exc
+            return f"Bearer {token}"
+        raise GithubRequestError("GitHub auth is not configured (token_env or oauth required)")
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
         url = f"{self.base_url}{path}"
@@ -77,23 +109,42 @@ class GithubClient:
         query: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> Any:
-        body = None
-        if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self._api_url(path, query),
-            data=body,
-            method=method,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": self._auth_header(),
-                "X-GitHub-Api-Version": "2022-11-28",
-                **({"Content-Type": "application/json"} if body is not None else {}),
-            },
-        )
-        return execute_json_request(
-            request, self.config.timeout_seconds, GithubRequestError, method
-        )
+        # Retry once when GitHub rejects an OAuth token (revoked/expired)
+        for attempt in (0, 1):
+            body = None
+            if payload is not None:
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            auth_header = self._auth_header()
+            request = urllib.request.Request(
+                self._api_url(path, query),
+                data=body,
+                method=method,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": auth_header,
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    **({"Content-Type": "application/json"} if body is not None else {}),
+                },
+            )
+            try:
+                return execute_json_request(
+                    request, self.config.timeout_seconds, GithubRequestError, method
+                )
+            except GithubRequestError as exc:
+                # On 401/403 with OAuth, invalidate cache and retry once so a freshly
+                # written token (e.g. after `forgeo auth login`) is picked up.
+                if (
+                    attempt == 0
+                    and exc.status in (401, 403)
+                    and self.config.auth.oauth is not None
+                    and self._oauth_provider is not None
+                ):
+                    try:
+                        self._oauth_provider.invalidate()  # noqa: BLE001
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                raise
 
     def _repo_path(self) -> str:
         # GitHub API expects owner/repo as two separate path segments;

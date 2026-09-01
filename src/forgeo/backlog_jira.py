@@ -83,22 +83,85 @@ class JiraClient:
         self.base_url = base_url.rstrip("/")
         self.config = config
         self.api_version = config.api_version or DEFAULT_API_VERSION
+        self._oauth_provider: Any | None = None
+
+    def _oauth_token_provider(self) -> Any | None:
+        if self._oauth_provider is not None:
+            return self._oauth_provider
+        auth = self.config.auth
+        if auth.oauth is None:
+            return None
+        from forgeo.oauth_jira import JiraOAuthTokenProvider, JiraTokenStore
+
+        token_file = auth.oauth.token_file
+        store = JiraTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else JiraTokenStore(api_base=self.base_url)
+        provider = JiraOAuthTokenProvider(
+            store, client_id=auth.oauth.client_id, client_secret_env=auth.oauth.client_secret_env
+        )
+        self._oauth_provider = provider
+        return provider
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
-        url = f"{self.base_url}/rest/api/{self.api_version}{path}"
+        # When OAuth is used with cloud_id, Jira Cloud API lives at api.atlassian.com/ex/jira/{cloudId}
+        base = self.base_url
+        auth = self.config.auth
+        if auth.oauth is not None:
+            # Prefer cloud_id from config oauth, else from token file
+            cloud_id: str | None = auth.oauth.cloud_id
+            if cloud_id is None and self._oauth_provider is not None:
+                try:
+                    data = self._oauth_provider.store.load()
+                    if isinstance(data, dict) and isinstance(data.get("cloud_id"), str):
+                        cloud_id = data["cloud_id"]
+                except Exception:
+                    pass
+            elif cloud_id is None:
+                # Try to load directly via store without provider cache
+                try:
+                    from forgeo.oauth_jira import JiraTokenStore
+
+                    tmp_store = JiraTokenStore(
+                        path=auth.oauth.token_file, api_base=self.base_url
+                    ) if auth.oauth.token_file is not None else JiraTokenStore(api_base=self.base_url)
+                    data = tmp_store.load()
+                    if isinstance(data, dict) and isinstance(data.get("cloud_id"), str):
+                        cloud_id = data["cloud_id"]
+                except Exception:
+                    pass
+            if cloud_id:
+                base = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        url = f"{base}/rest/api/{self.api_version}{path}"
         if query:
             url += "?" + urlencode(query, doseq=True)
         return url
 
     def _auth_header(self) -> str:
-        token = require_env_token(self.config.auth.token_env, "Jira", JiraRequestError)
-        if self.config.auth.scheme == "bearer":
+        auth = self.config.auth
+        if auth.oauth is not None:
+            provider = self._oauth_token_provider()
+            assert provider is not None
+            try:
+                token = provider.token()
+            except Exception as exc:
+                if isinstance(exc, JiraRequestError):
+                    raise
+                from forgeo.oauth_jira import JiraOAuthError
+
+                if isinstance(exc, JiraOAuthError):
+                    raise JiraRequestError(str(exc)) from exc
+                raise JiraRequestError(str(exc)) from exc
             return f"Bearer {token}"
-        username = self.config.auth.username
-        if self.config.auth.username_env is not None:
-            username = os.environ.get(self.config.auth.username_env)
+        # PAT branch
+        if auth.token_env is None or not auth.token_env.strip():
+            raise JiraRequestError("Jira token environment variable is not set")
+        token = require_env_token(auth.token_env, "Jira", JiraRequestError)
+        if auth.scheme == "bearer":
+            return f"Bearer {token}"
+        username = auth.username
+        if auth.username_env is not None:
+            username = os.environ.get(auth.username_env)
         if not username:
-            source = self.config.auth.username_env or "username"
+            source = auth.username_env or "username"
             raise JiraRequestError(f"Jira username {source!r} is not set")
         encoded = base64.b64encode(f"{username}:{token}".encode()).decode("ascii")
         return f"Basic {encoded}"
@@ -112,25 +175,41 @@ class JiraClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Perform one authenticated request and decode its JSON response."""
-        body = None
-        if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self._api_url(path, query),
-            data=body,
-            method=method,
-            headers={
-                "Accept": "application/json",
-                "Authorization": self._auth_header(),
-                **({"Content-Type": "application/json"} if body is not None else {}),
-            },
-        )
-        data = execute_json_request(
-            request, self.config.timeout_seconds, JiraRequestError, method
-        )
-        if not isinstance(data, dict):
-            raise JiraRequestError(f"{method} {request.full_url} returned a non-object JSON body")
-        return data
+        for attempt in (0, 1):
+            body = None
+            if payload is not None:
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                self._api_url(path, query),
+                data=body,
+                method=method,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": self._auth_header(),
+                    **({"Content-Type": "application/json"} if body is not None else {}),
+                },
+            )
+            try:
+                data = execute_json_request(
+                    request, self.config.timeout_seconds, JiraRequestError, method
+                )
+            except JiraRequestError as exc:
+                if (
+                    attempt == 0
+                    and exc.status in (401, 403)
+                    and self.config.auth.oauth is not None
+                    and self._oauth_provider is not None
+                ):
+                    try:
+                        self._oauth_provider.invalidate()  # noqa: BLE001
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                raise
+            if not isinstance(data, dict):
+                raise JiraRequestError(f"{method} {request.full_url} returned a non-object JSON body")
+            return data
+        raise JiraRequestError(f"{method} {self._api_url(path, query)} failed after retry")
 
     def search_issues(
         self,

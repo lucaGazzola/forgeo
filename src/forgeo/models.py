@@ -372,6 +372,31 @@ class BacklogAuth(BaseModel):
         return value
 
 
+class JiraOAuthConfig(BaseModel):
+    """OAuth / browser login for Jira Cloud (Atlassian 3LO)."""
+
+    client_id: str
+    client_secret_env: str | None = None
+    scope: str | None = None
+    token_file: str | Path | None = None
+    cloud_id: str | None = None
+    flow: Literal["browser", "device"] = "browser"
+
+    @field_validator("client_id")
+    @classmethod
+    def _client_id_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("client_id must not be blank")
+        return value
+
+    @field_validator("client_secret_env", "cloud_id")
+    @classmethod
+    def _not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("value must not be blank")
+        return value
+
+
 class JiraAuth(BaseModel):
     """Authentication for a Jira REST API.
 
@@ -380,12 +405,16 @@ class JiraAuth(BaseModel):
     bearer personal-access token instead. Secrets are always read from the
     environment; only the environment variable names are persisted in the
     config file.
+
+    OAuth (browser login) is available for Jira Cloud via ``oauth``; exactly
+    one of PAT (``token_env``/``scheme``) or ``oauth`` must be set.
     """
 
     scheme: Literal["basic", "bearer"] = "basic"
-    token_env: str
+    token_env: str | None = None
     username: str | None = None
     username_env: str | None = None
+    oauth: JiraOAuthConfig | None = None
 
     @field_validator("token_env", "username_env")
     @classmethod
@@ -402,11 +431,13 @@ class JiraAuth(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _basic_auth_requires_username(self) -> JiraAuth:
-        if self.scheme == "basic" and self.username is None and self.username_env is None:
-            raise ValueError(
-                "Jira basic authentication requires username or username_env"
-            )
+    def _check_auth(self) -> JiraAuth:
+        has_pat = self.token_env is not None
+        has_oauth = self.oauth is not None
+        if has_pat == has_oauth:
+            raise ValueError("jira.auth must have exactly one of token_env or oauth")
+        if has_pat and self.scheme == "basic" and self.username is None and self.username_env is None:
+            raise ValueError("Jira basic authentication requires username or username_env")
         return self
 
 
@@ -540,13 +571,105 @@ class _PatAuthBase(BaseModel):
         return value
 
 
-class GithubAuth(_PatAuthBase):
-    """PAT authentication for GitHub REST API."""
+class GithubOAuthConfig(BaseModel):
+    """OAuth / browser login for GitHub."""
+
+    client_id: str
+    scope: str | None = None
+    token_file: str | Path | None = None
+    flow: Literal["device", "browser"] = "device"
+    client_secret_env: str | None = None
+
+    @field_validator("client_id")
+    @classmethod
+    def _client_id_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("client_id must not be blank")
+        return value
+
+    @field_validator("client_secret_env")
+    @classmethod
+    def _secret_env_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("client_secret_env must not be blank")
+        return value
+
+
+class GithubAuth(BaseModel):
+    """PAT or OAuth authentication for GitHub REST API.
+
+    Exactly one of ``token_env`` (PAT) or ``oauth`` (browser/device flow)
+    must be set. ``token_env`` preserves the historical behaviour.
+    """
+
+    token_env: str | None = None
+    oauth: GithubOAuthConfig | None = None
+
+    @field_validator("token_env")
+    @classmethod
+    def _token_env_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_auth(self) -> GithubAuth:
+        has_pat = self.token_env is not None
+        has_oauth = self.oauth is not None
+        if has_pat == has_oauth:
+            raise ValueError("github.auth must have exactly one of token_env or oauth")
+        return self
 
 
 
-class GitlabAuth(_PatAuthBase):
-    """PAT authentication for GitLab REST API."""
+class GitlabOAuthConfig(BaseModel):
+    """OAuth / browser login for GitLab."""
+
+    client_id: str
+    scope: str | None = None
+    token_file: str | Path | None = None
+    flow: Literal["device", "browser"] = "browser"
+    client_secret_env: str | None = None
+
+    @field_validator("client_id")
+    @classmethod
+    def _client_id_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("client_id must not be blank")
+        return value
+
+    @field_validator("client_secret_env")
+    @classmethod
+    def _secret_env_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("client_secret_env must not be blank")
+        return value
+
+
+class GitlabAuth(BaseModel):
+    """PAT or OAuth authentication for GitLab REST API.
+
+    Exactly one of ``token_env`` (PAT) or ``oauth`` (browser/device flow)
+    must be set.
+    """
+
+    token_env: str | None = None
+    oauth: GitlabOAuthConfig | None = None
+
+    @field_validator("token_env")
+    @classmethod
+    def _token_env_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_auth(self) -> GitlabAuth:
+        has_pat = self.token_env is not None
+        has_oauth = self.oauth is not None
+        if has_pat == has_oauth:
+            raise ValueError("gitlab.auth must have exactly one of token_env or oauth")
+        return self
 
 
 

@@ -32,7 +32,7 @@ The wizard asks for:
 3. **Agent command** — bare command for your agent (default `opencode run --auto`). Forgeo appends the task prompt (`$FORGEO_TASK`); if your command already references `$FORGEO_TASK` it is kept verbatim.
 4. **Refactor prompt** — used when the backlog is empty.
 
-Writes `forgeo.yaml`, creates the folder, and appends it to `.gitignore` (opt-out available). With `github`/`gitlab`/`jira` it also sets `backlog_provider`, `backlog` URL, provider block, and `state_dir`.
+Writes `forgeo.yaml`, creates the folder, and appends it to `.gitignore` (opt-out available). With `github`/`gitlab`/`jira` it also sets `backlog_provider`, `backlog` URL, provider block, and `state_dir`. For `github`/`gitlab`/`jira` you can pick `PAT` or `browser` (OAuth) — browser stores a token in `~/.config/forgeo/tokens/`.
 
 ```bash
 forgeo init --force    # overwrite existing config
@@ -58,10 +58,14 @@ forgeo init --force    # overwrite existing config
 
 You can also add tasks from the dashboard once Forgeo is running — no file editing needed.
 
-**Remote providers** — `forgeo.yaml` already points at the provider. Export credentials and validate:
+**Remote providers** — `forgeo.yaml` already points at the provider. Authenticate with PAT **or** browser:
 
 ```bash
+# PAT:
 export GITHUB_TOKEN=ghp_...   # or GITLAB_TOKEN / JIRA_USER + JIRA_TOKEN
+# Browser OAuth (device flow preferred for CLI):
+forgeo auth login --provider github --client-id Iv1.xxx   # or gitlab/jira
+forgeo auth status   # forgeo auth logout to clear
 forgeo validate
 ```
 

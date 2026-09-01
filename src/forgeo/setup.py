@@ -231,7 +231,7 @@ def _ask_provider(input_fn: SetupInput | None, out: Console) -> str:
 
 def _setup_github(
     root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
-) -> tuple[str, str, dict[str, object], str, str]:
+) -> tuple[str, str, dict[str, object], str, str | None]:
     """Collect GitHub provider details; returns (backlog, provider, cfg, state_dir, token_env)."""
     detected = _detect_github_repo(root)
     default_repo = detected or ""
@@ -247,12 +247,116 @@ def _setup_github(
         if not github_repo or "/" not in github_repo:
             out.print("[red]Repository must be owner/repo (e.g. owner/repo).[/red]")
     github_repo = github_repo.strip()
-    token_env = _ask_text(
+    # GitHub API base — only prompt interactively to keep non-interactive tests stable; GHE users can edit forgeo.yaml afterwards.
+    github_api_base = DEFAULT_GITHUB_API
+    if input_fn is None:
+        github_api_base = (
+            _ask_text(
+                input_fn,
+                "[bold]GitHub API base URL[/bold] [default https://api.github.com]",
+                default=DEFAULT_GITHUB_API,
+            ).strip()
+            or DEFAULT_GITHUB_API
+        ).rstrip("/")
+    # Token env prompt also doubles as browser login selector to keep
+    # non-interactive tests backwards compatible: entering "browser" selects OAuth.
+    token_env_raw = _ask_text(
         input_fn,
-        "[bold]GitHub token env var[/bold] [default GITHUB_TOKEN]",
+        "[bold]GitHub auth[/bold] [PAT env var or 'browser' for OAuth login] [default GITHUB_TOKEN]",
         default=DEFAULT_TOKEN_ENV_GITHUB,
-    ).strip() or DEFAULT_TOKEN_ENV_GITHUB
-    github_cfg: dict[str, object] = {"repo": github_repo, "auth": {"token_env": token_env}}
+    ).strip()
+    if token_env_raw.lower() in ("browser", "oauth", "device"):
+        # OAuth / browser login path
+        default_client_id = os.environ.get("FORGEO_GITHUB_CLIENT_ID")
+        client_id = _ask_text(
+            input_fn,
+            "[bold]GitHub OAuth client ID[/bold] (from https://github.com/settings/developers > OAuth Apps)"
+            + (f" [default {default_client_id}]" if default_client_id else ""),
+            default=default_client_id,
+        ).strip()
+        while not client_id:
+            out.print("[red]Client ID must not be blank (or press Ctrl-C to abort).[/red]")
+            client_id = _ask_text(
+                input_fn,
+                "[bold]GitHub OAuth client ID[/bold]",
+                default=default_client_id,
+            ).strip()
+        flow_raw = _ask_text(
+            input_fn,
+            "[bold]OAuth flow[/bold] [device/browser] [default device]",
+            default="device",
+        ).strip().lower() or "device"
+        if flow_raw not in ("device", "browser"):
+            out.print(f"[yellow]Unknown flow {flow_raw!r}, using device.[/yellow]")
+            flow_raw = "device"
+        scope = _ask_text(
+            input_fn,
+            "[bold]OAuth scope[/bold] [default repo]",
+            default="repo",
+        ).strip() or "repo"
+        # Optional overrides — only prompt interactively to keep tests stable
+        token_file: str | None = None
+        client_secret_env: str | None = None
+        if input_fn is None:
+            token_file = (
+                _ask_text(
+                    input_fn,
+                    "[bold]Token file[/bold] [default ~/.config/forgeo/tokens/github.json]",
+                    default="",
+                ).strip()
+                or None
+            )
+            client_secret_env = (
+                _ask_text(
+                    input_fn,
+                    "[bold]Client secret env var (for confidential OAuth Apps, optional)[/bold]",
+                    default="",
+                ).strip()
+                or None
+            )
+        oauth_cfg: dict[str, object] = {"client_id": client_id, "flow": flow_raw}
+        if scope != "repo":
+            oauth_cfg["scope"] = scope
+        if token_file:
+            oauth_cfg["token_file"] = token_file
+        if client_secret_env:
+            oauth_cfg["client_secret_env"] = client_secret_env
+        github_cfg: dict[str, object] = {"repo": github_repo, "auth": {"oauth": oauth_cfg}}
+        if input_fn is None:
+            # Interactive: optionally run the login now
+            if _ask_yes_no(
+                input_fn,
+                "[bold]Run browser login now to fetch and store a token?[/bold]",
+                default=True,
+            ):
+                try:
+                    from forgeo.oauth_github import (
+                        GithubTokenStore,
+                        github_oauth_base,
+                        run_browser_flow,
+                        run_device_flow,
+                    )
+
+                    oauth_base = github_oauth_base(github_api_base)
+                    if flow_raw == "browser":
+                        secret = os.environ.get(client_secret_env) if client_secret_env else None
+                        token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=secret)
+                    else:
+                        token_data = run_device_flow(client_id, oauth_base, scope)
+                    store = GithubTokenStore(path=token_file, api_base=github_api_base)
+                    store.save(token_data)
+                    out.print(f"[green]GitHub token saved to {store.path} (600).[/green]")
+                    out.print("[dim]Token cached; forgeo validate/start will use it.[/dim]")
+                except Exception as exc:  # noqa: BLE001 - login is best-effort
+                    out.print(f"[yellow]Browser login failed: {exc}[/yellow]")
+                    out.print("[dim]Run `forgeo auth login --provider github` to retry.[/dim]")
+            else:
+                out.print("[dim]Run `forgeo auth login --provider github` to fetch a token.[/dim]")
+        else:
+            out.print("[dim]Run `forgeo auth login --provider github` to fetch a token after setup.[/dim]")
+        return github_api_base, "github", github_cfg, forgeo_dir, None
+    token_env = token_env_raw or DEFAULT_TOKEN_ENV_GITHUB
+    github_cfg = {"repo": github_repo, "auth": {"token_env": token_env}}
     if input_fn is None:
         if _ask_yes_no(
             input_fn,
@@ -268,7 +372,7 @@ def _setup_github(
                 out.print(f"[dim]Set {token_env} before forgeo validate/start: export {token_env}=ghp_...[/dim]")
         else:
             out.print(f"[dim]Create a classic PAT at https://github.com/settings/tokens/new (scope repo), then: export {token_env}=ghp_...[/dim]")
-    return DEFAULT_GITHUB_API, "github", github_cfg, forgeo_dir, token_env
+    return github_api_base, "github", github_cfg, forgeo_dir, token_env
 
 
 def _setup_gitlab(
@@ -284,11 +388,90 @@ def _setup_gitlab(
     while not gitlab_repo.strip():
         out.print("[red]Project must not be blank.[/red]")
         gitlab_repo = _ask_text(input_fn, "[bold]GitLab project[/bold] (group/project or numeric id)", default=None).strip()
-    token_env = _ask_text(
+    token_env_raw = _ask_text(
         input_fn,
-        "[bold]GitLab token env var[/bold] [default GITLAB_TOKEN]",
+        "[bold]GitLab auth[/bold] [PAT env var or 'browser' for OAuth login] [default GITLAB_TOKEN]",
         default=DEFAULT_TOKEN_ENV_GITLAB,
-    ).strip() or DEFAULT_TOKEN_ENV_GITLAB
+    ).strip()
+    if token_env_raw.lower() in ("browser", "oauth", "device"):
+        default_client_id = os.environ.get("FORGEO_GITLAB_CLIENT_ID")
+        client_id = _ask_text(
+            input_fn,
+            "[bold]GitLab OAuth client ID[/bold] (from GitLab Admin > Applications)",
+            default=default_client_id,
+        ).strip()
+        while not client_id:
+            out.print("[red]Client ID must not be blank.[/red]")
+            client_id = _ask_text(input_fn, "[bold]GitLab OAuth client ID[/bold]", default=default_client_id).strip()
+        flow_raw = _ask_text(
+            input_fn,
+            "[bold]OAuth flow[/bold] [browser/device] [default browser]",
+            default="browser",
+        ).strip().lower() or "browser"
+        if flow_raw not in ("browser", "device"):
+            out.print(f"[yellow]Unknown flow {flow_raw!r}, using browser.[/yellow]")
+            flow_raw = "browser"
+        scope = _ask_text(
+            input_fn,
+            "[bold]OAuth scope[/bold] [default api]",
+            default="api",
+        ).strip() or "api"
+        token_file: str | None = None
+        client_secret_env: str | None = None
+        if input_fn is None:
+            token_file = (
+                _ask_text(input_fn, "[bold]Token file[/bold] [default ~/.config/forgeo/tokens/gitlab.json]", default="").strip() or None
+            )
+            client_secret_env = (
+                _ask_text(input_fn, "[bold]Client secret env var (for confidential apps, optional)[/bold]", default="").strip() or None
+            )
+        oauth_cfg: dict[str, object] = {"client_id": client_id, "flow": flow_raw}
+        if scope != "api":
+            oauth_cfg["scope"] = scope
+        if token_file:
+            oauth_cfg["token_file"] = token_file
+        if client_secret_env:
+            oauth_cfg["client_secret_env"] = client_secret_env
+        # GitLab base URL — only prompt interactively to keep tests stable
+        gitlab_api = DEFAULT_GITLAB_API
+        if input_fn is None:
+            gitlab_api = (
+                _ask_text(
+                    input_fn,
+                    "[bold]GitLab base URL[/bold] [default https://gitlab.com]",
+                    default=DEFAULT_GITLAB_API,
+                ).strip()
+                or DEFAULT_GITLAB_API
+            )
+        gitlab_cfg_oauth: dict[str, object] = {"repo": gitlab_repo, "auth": {"oauth": oauth_cfg}}
+        if input_fn is None:
+            if _ask_yes_no(input_fn, "[bold]Run browser login now to fetch and store a token?[/bold]", default=True):
+                try:
+                    from forgeo.oauth_gitlab import (
+                        GitlabTokenStore,
+                        gitlab_oauth_base,
+                        run_browser_flow,
+                        run_device_flow,
+                    )
+
+                    oauth_base = gitlab_oauth_base(gitlab_api)
+                    if flow_raw == "browser":
+                        secret = os.environ.get(client_secret_env) if client_secret_env else None
+                        token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=secret)
+                    else:
+                        token_data = run_device_flow(client_id, oauth_base, scope)
+                    store = GitlabTokenStore(path=token_file, api_base=gitlab_api)
+                    store.save(token_data)
+                    out.print(f"[green]GitLab token saved to {store.path} (600).[/green]")
+                except Exception as exc:  # noqa: BLE001
+                    out.print(f"[yellow]Browser login failed: {exc}[/yellow]")
+                    out.print("[dim]Run `forgeo auth login --provider gitlab` to retry.[/dim]")
+            else:
+                out.print("[dim]Run `forgeo auth login --provider gitlab` to fetch a token.[/dim]")
+        else:
+            out.print("[dim]Run `forgeo auth login --provider gitlab` to fetch a token after setup.[/dim]")
+        return gitlab_api.rstrip("/"), "gitlab", gitlab_cfg_oauth, forgeo_dir
+    token_env = token_env_raw or DEFAULT_TOKEN_ENV_GITLAB
     gitlab_api = _ask_text(
         input_fn,
         "[bold]GitLab base URL[/bold] [default https://gitlab.com]",
@@ -304,7 +487,7 @@ def _setup_jira(
     """Collect Jira provider details; returns (backlog, provider, cfg, state_dir)."""
     jira_url = _ask_text(
         input_fn,
-        "[bold]Jira base URL[/bold] (e.g. https://jira.example.com)",
+        "[bold]Jira base URL[/bold] (e.g. https://jira.example.com or https://xxx.atlassian.net)",
         default=None,
     ).strip()
     while not jira_url.strip():
@@ -315,12 +498,65 @@ def _setup_jira(
         "[bold]Jira JQL[/bold] [default project = APP AND labels = forgeo]",
         default="project = APP AND labels = forgeo",
     ).strip() or "project = APP AND labels = forgeo"
-    token_env = _ask_text(
+    token_env_raw = _ask_text(
         input_fn,
-        "[bold]Jira token env var[/bold] [default JIRA_TOKEN]",
+        "[bold]Jira auth[/bold] [PAT env var or 'browser' for OAuth 3LO] [default JIRA_TOKEN]",
         default="JIRA_TOKEN",
-    ).strip() or "JIRA_TOKEN"
-    jira_cfg: dict[str, object] = {"jql": jql, "auth": {"token_env": token_env, "scheme": "bearer"}}
+    ).strip()
+    if token_env_raw.lower() in ("browser", "oauth"):
+        default_client_id = os.environ.get("FORGEO_JIRA_CLIENT_ID")
+        client_id = _ask_text(
+            input_fn,
+            "[bold]Jira OAuth client ID[/bold] (from https://developer.atlassian.com/console/myapps/)",
+            default=default_client_id,
+        ).strip()
+        while not client_id:
+            out.print("[red]Client ID must not be blank.[/red]")
+            client_id = _ask_text(input_fn, "[bold]Jira OAuth client ID[/bold]", default=default_client_id).strip()
+        client_secret_env = _ask_text(
+            input_fn,
+            "[bold]Jira OAuth client secret env var[/bold] [default JIRA_CLIENT_SECRET]",
+            default="JIRA_CLIENT_SECRET",
+        ).strip() or "JIRA_CLIENT_SECRET"
+        scope = _ask_text(
+            input_fn,
+            "[bold]OAuth scope[/bold] [default offline_access read:jira-user read:jira-work]",
+            default="offline_access read:jira-user read:jira-work",
+        ).strip() or "offline_access read:jira-user read:jira-work"
+        token_file: str | None = None
+        cloud_id: str | None = None
+        if input_fn is None:
+            token_file = _ask_text(input_fn, "[bold]Token file[/bold] [default ~/.config/forgeo/tokens/jira.json]", default="").strip() or None
+            cloud_id = _ask_text(input_fn, "[bold]Atlassian cloud ID (optional, auto-detected if blank)[/bold]", default="").strip() or None
+        oauth_cfg: dict[str, object] = {"client_id": client_id, "client_secret_env": client_secret_env, "scope": scope, "flow": "browser"}
+        if token_file:
+            oauth_cfg["token_file"] = token_file
+        if cloud_id:
+            oauth_cfg["cloud_id"] = cloud_id
+        jira_cfg: dict[str, object] = {"jql": jql, "auth": {"oauth": oauth_cfg}}
+        if input_fn is None:
+            if _ask_yes_no(input_fn, "[bold]Run browser login now to fetch and store a token?[/bold]", default=True):
+                try:
+                    from forgeo.oauth_jira import JiraTokenStore, run_browser_flow
+
+                    secret = os.environ.get(client_secret_env)
+                    token_data = run_browser_flow(client_id, None, scope, client_secret=secret, cloud_id=cloud_id)
+                    store = JiraTokenStore(path=token_file, api_base=jira_url)
+                    store.save(token_data)
+                    out.print(f"[green]Jira token saved to {store.path} (600).[/green]")
+                    if token_data.get("cloud_id"):
+                        out.print(f"[dim]Cloud ID {token_data['cloud_id']} saved.[/dim]")
+                except Exception as exc:  # noqa: BLE001
+                    out.print(f"[yellow]Browser login failed: {exc}[/yellow]")
+                    out.print("[dim]Run `forgeo auth login --provider jira` to retry.[/dim]")
+            else:
+                out.print("[dim]Run `forgeo auth login --provider jira` to fetch a token.[/dim]")
+        else:
+            out.print("[dim]Run `forgeo auth login --provider jira` to fetch a token after setup.[/dim]")
+        out.print("[dim]Complete Jira workflow/fields in forgeo.yaml (see config/forgeo.yaml example).[/dim]")
+        return jira_url.rstrip("/"), "jira", jira_cfg, forgeo_dir
+    token_env = token_env_raw or "JIRA_TOKEN"
+    jira_cfg = {"jql": jql, "auth": {"token_env": token_env, "scheme": "bearer"}}
     out.print("[dim]Complete Jira workflow/fields in forgeo.yaml (see config/forgeo.yaml example).[/dim]")
     return jira_url.rstrip("/"), "jira", jira_cfg, forgeo_dir
 
@@ -476,8 +712,24 @@ def run_setup(
     if provider != "file":
         backlog_display = f"{backlog_display} [{provider}]"
     next_hint = f"forgeo start --config {config_path.name}"
-    if provider == "github" and github_token_env is not None:
-        next_hint = f"export {github_token_env}=ghp_... && forgeo validate --config {config_path.name} && {next_hint}"
+    if provider == "github":
+        if github_cfg is not None and isinstance(github_cfg.get("auth"), dict) and "oauth" in github_cfg["auth"]:  # type: ignore[operator]
+            next_hint = f"forgeo auth login --provider github && forgeo validate --config {config_path.name} && {next_hint}"
+        elif github_token_env is not None:
+            next_hint = f"export {github_token_env}=ghp_... && forgeo validate --config {config_path.name} && {next_hint}"
+    elif provider == "gitlab" and gitlab_cfg is not None:
+        auth = gitlab_cfg.get("auth") if isinstance(gitlab_cfg.get("auth"), dict) else {}
+        if isinstance(auth, dict) and "oauth" in auth:
+            next_hint = f"forgeo auth login --provider gitlab && forgeo validate --config {config_path.name} && {next_hint}"
+        else:
+            # PAT hint
+            next_hint = f"export GITLAB_TOKEN=glpat-... && forgeo validate --config {config_path.name} && {next_hint}"
+    elif provider == "jira" and jira_cfg is not None:
+        auth = jira_cfg.get("auth") if isinstance(jira_cfg.get("auth"), dict) else {}
+        if isinstance(auth, dict) and "oauth" in auth:
+            next_hint = f"forgeo auth login --provider jira && forgeo validate --config {config_path.name} && {next_hint}"
+        else:
+            next_hint = f"export JIRA_TOKEN=... && forgeo validate --config {config_path.name} && {next_hint}"
     out.print(
         Panel.fit(
             f"[bold]Forgeo configured[/bold] in {config_path}\n"

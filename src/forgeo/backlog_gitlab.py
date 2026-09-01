@@ -57,11 +57,43 @@ class GitlabClient:
     def __init__(self, base_url: str, config: GitlabBacklogConfig) -> None:
         self.base_url = base_url.rstrip("/")
         self.config = config
+        self._oauth_provider: Any | None = None
+
+    def _oauth_token_provider(self) -> Any | None:
+        if self._oauth_provider is not None:
+            return self._oauth_provider
+        auth = self.config.auth
+        if auth.oauth is None:
+            return None
+        from forgeo.oauth_gitlab import GitlabOAuthTokenProvider, GitlabTokenStore
+
+        token_file = auth.oauth.token_file
+        store = GitlabTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else GitlabTokenStore(api_base=self.base_url)
+        provider = GitlabOAuthTokenProvider(store)
+        self._oauth_provider = provider
+        return provider
 
     def _auth_headers(self) -> dict[str, str]:
-        token = require_env_token(self.config.auth.token_env, "GitLab", GitlabRequestError)
-        # GitLab prefers PRIVATE-TOKEN, but also accepts Bearer
-        return {"PRIVATE-TOKEN": token, "Authorization": f"Bearer {token}"}
+        auth = self.config.auth
+        if auth.token_env is not None:
+            token = require_env_token(auth.token_env, "GitLab", GitlabRequestError)
+            # GitLab prefers PRIVATE-TOKEN, but also accepts Bearer
+            return {"PRIVATE-TOKEN": token, "Authorization": f"Bearer {token}"}
+        if auth.oauth is not None:
+            provider = self._oauth_token_provider()
+            assert provider is not None
+            try:
+                token = provider.token()
+            except Exception as exc:
+                if isinstance(exc, GitlabRequestError):
+                    raise
+                from forgeo.oauth_gitlab import GitlabOAuthError
+
+                if isinstance(exc, GitlabOAuthError):
+                    raise GitlabRequestError(str(exc)) from exc
+                raise GitlabRequestError(str(exc)) from exc
+            return {"Authorization": f"Bearer {token}"}
+        raise GitlabRequestError("GitLab auth is not configured (token_env or oauth required)")
 
     def _project_path(self) -> str:
         # GitLab API expects URL-encoded project path or numeric id
@@ -81,20 +113,35 @@ class GitlabClient:
         query: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> Any:
-        body = None
-        if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Accept": "application/json",
-            **self._auth_headers(),
-            **({"Content-Type": "application/json"} if body is not None else {}),
-        }
-        request = urllib.request.Request(
-            self._api_url(path, query), data=body, method=method, headers=headers
-        )
-        return execute_json_request(
-            request, self.config.timeout_seconds, GitlabRequestError, method
-        )
+        for attempt in (0, 1):
+            body = None
+            if payload is not None:
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            headers = {
+                "Accept": "application/json",
+                **self._auth_headers(),
+                **({"Content-Type": "application/json"} if body is not None else {}),
+            }
+            request = urllib.request.Request(
+                self._api_url(path, query), data=body, method=method, headers=headers
+            )
+            try:
+                return execute_json_request(
+                    request, self.config.timeout_seconds, GitlabRequestError, method
+                )
+            except GitlabRequestError as exc:
+                if (
+                    attempt == 0
+                    and exc.status in (401, 403)
+                    and self.config.auth.oauth is not None
+                    and self._oauth_provider is not None
+                ):
+                    try:
+                        self._oauth_provider.invalidate()  # noqa: BLE001
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                raise
 
     def search_issues(self, *, page: int = 1, per_page: int = 20) -> list[dict[str, Any]]:
         path = f"/projects/{self._project_path()}/issues"

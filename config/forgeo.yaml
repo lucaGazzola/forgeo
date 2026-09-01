@@ -48,6 +48,7 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 # Jira can be used directly instead of a JSON or HTTP backlog. Jira issue keys
 # become task ids. Labels and a Jira issue property hold Forgeo's engine state;
 # workflow status references may be names or (preferably) stable Jira ids.
+# PAT / basic (Server/DC):
 #   backlog_provider: jira
 #   backlog: https://jira.example.com
 #   jira:
@@ -58,6 +59,17 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #       scheme: basic           # basic (Jira Cloud) or bearer (Server/DC PAT)
 #       username_env: JIRA_USER # Required for basic auth.
 #       token_env: JIRA_TOKEN
+# OAuth 3LO (Jira Cloud, browser PKCE):
+#   jira:
+#     jql: 'project = APP AND labels = forgeo'
+#     auth:
+#       oauth:
+#         client_id: xxxxx               # from https://developer.atlassian.com/console/myapps/
+#         client_secret_env: JIRA_CLIENT_SECRET  # env var holding secret
+#         scope: offline_access read:jira-user read:jira-work  # default
+#         cloud_id: xxxxx-xxxx            # optional, auto-detected if blank
+#         token_file: ~/.config/forgeo/tokens/jira.json
+#   # Then: forgeo auth login --provider jira --client-id <id>
 #     workflow:
 #       open_statuses: ["10000", "10001"]
 #       open_status: "10000"
@@ -73,22 +85,43 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #
 # GitHub Issues as backlog. Issue numbers become task ids. Labels hold Forgeo state;
 # engine state is stored as a hidden JSON block in the issue body.
+# PAT (classic):
 #   backlog_provider: github
-#   backlog: https://api.github.com
+#   backlog: https://api.github.com  # or https://github.example.com/api/v3 for GHE
 #   github:
 #     repo: owner/repo
-#     token_env: GITHUB_TOKEN
-#     label_prefix: forgeo
-#     claim_timeout_seconds: 86400
+#     auth:
+#       token_env: GITHUB_TOKEN
+# OAuth / browser login (device flow preferred for CLI):
+#   github:
+#     repo: owner/repo
+#     auth:
+#       oauth:
+#         client_id: Iv1.xxxxxxxx        # OAuth App client ID (https://github.com/settings/developers)
+#         flow: device                   # device | browser (PKCE loopback)
+#         scope: repo                    # default repo
+#         token_file: ~/.config/forgeo/tokens/github.json  # optional, default per host
+#         client_secret_env: GH_CLIENT_SECRET  # optional, for confidential apps (browser flow)
+#   # Then: forgeo auth login --provider github --client-id Iv1.xxx  (or uses forgeo.yaml)
 #
 # GitLab Issues as backlog. Issue iids become task ids. Labels + hidden body block.
+# PAT:
 #   backlog_provider: gitlab
-#   backlog: https://gitlab.example.com
+#   backlog: https://gitlab.com  # or https://gitlab.example.com
 #   gitlab:
 #     repo: group/project   # or numeric project id
-#     token_env: GITLAB_TOKEN
-#     label_prefix: forgeo
-#     claim_timeout_seconds: 86400
+#     auth:
+#       token_env: GITLAB_TOKEN
+# OAuth (browser PKCE, device if enabled):
+#   gitlab:
+#     repo: group/project
+#     auth:
+#       oauth:
+#         client_id: abc123
+#         flow: browser                # browser | device
+#         scope: api                   # default api
+#         token_file: ~/.config/forgeo/tokens/gitlab.json
+#   # Then: forgeo auth login --provider gitlab --client-id <id>
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.
 # run_history_keep: 2000        # How many finished runs runs.jsonl keeps; oldest

@@ -125,6 +125,29 @@ Unregister (never touches config/repo). Errors if unknown.
 
 Table of all instances: name, daemon state, last outcome (from `runs.jsonl`). Exits `0` with hint if none.
 
+## `forgeo auth`
+
+Browser/OAuth login for `github`/`gitlab`/`jira` (alternative to `*_TOKEN` PAT). Tokens stored `0600` in `~/.config/forgeo/tokens/` and read by `forgeo validate`/`start`/`once`.
+
+### `forgeo auth login --provider <github|gitlab|jira>`
+
+| Flag | Description |
+| --- | --- |
+| `--provider` | `github` (default) / `gitlab` / `jira`. |
+| `--config <file>` | `forgeo.yaml` to read `auth.oauth.client_id` (defaults to `./forgeo.yaml`). |
+| `--client-id <id>` | OAuth client ID (overrides config; required if not in `forgeo.yaml`). |
+| `--flow <device|browser>` | `device` (GitHub CLI) / `browser` (PKCE loopback `127.0.0.1:0/callback`). Defaults: `device` for GitHub, `browser` for GitLab/Jira. |
+| `--scope <scope>` | Scope (default `repo` / `api` / `offline_access read:jira-user read:jira-work`). |
+| `--token-file <path>` | Where to store token (default per-provider per-host `~/.config/forgeo/tokens/<provider>.json`). |
+| `--api-base <url>` | Provider API base (default from `forgeo.yaml` backlog or `https://api.github.com`/`https://gitlab.com`). |
+| `--no-open-browser` | Print URL instead of `webbrowser.open()`. |
+
+Device flow: prints `https://github.com/login/device` + `user_code`, polls `…/login/oauth/access_token`. Browser flow: opens `…/oauth/authorize` + PKCE `code_challenge`, listens on loopback, exchanges `code` for `access_token` (`refresh_token` for Jira). `forgeo init` with `browser` writes `auth.oauth` and offers `Run browser login now?`.
+
+### `forgeo auth status --provider <p>` / `forgeo auth logout --provider <p>`
+
+`status` masks token (`ghp_…1234`), shows `scope`/`expires_in`/`cloud_id` (Jira). `logout` removes the file. Both honour `--token-file`/`--api-base`/`--config`.
+
 ## `forgeo web`
 
 Central dashboard aggregating every registered instance (reads files directly, works whether daemons are running).

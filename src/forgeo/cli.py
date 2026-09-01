@@ -315,6 +315,93 @@ def build_parser() -> argparse.ArgumentParser:
     web_sub.add_parser(
         "status", help="Print whether the central dashboard is running."
     )
+
+    auth_parser = sub.add_parser(
+        "auth",
+        help="Browser/OAuth login for issue backlogs (GitHub, GitLab, Jira).",
+    )
+    auth_sub = auth_parser.add_subparsers(dest="auth_action")
+    auth_login = auth_sub.add_parser("login", help="Log in via browser/OAuth and store a token.")
+    auth_login.add_argument(
+        "--provider",
+        choices=["github", "gitlab", "jira"],
+        default="github",
+        help="Backlog provider to authenticate (default: github).",
+    )
+    auth_login.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Forgeo config to read OAuth client_id from (defaults to forgeo.yaml if present).",
+    )
+    auth_login.add_argument("--client-id", default=None, help="OAuth client ID (overrides config).")
+    auth_login.add_argument(
+        "--flow",
+        choices=["device", "browser"],
+        default=None,
+        help="OAuth flow to use (overrides config; default: device for github, browser for gitlab/jira).",
+    )
+    auth_login.add_argument(
+        "--scope",
+        default=None,
+        help="OAuth scope to request (default: repo for github, api for gitlab, offline_access for jira).",
+    )
+    auth_login.add_argument(
+        "--token-file",
+        type=Path,
+        default=None,
+        help="Where to store the token (defaults to ~/.config/forgeo/tokens/<provider>.json).",
+    )
+    auth_login.add_argument(
+        "--api-base",
+        default=None,
+        help="Provider API base URL (default: https://api.github.com / https://gitlab.com / jira site, or from config).",
+    )
+    auth_login.add_argument(
+        "--no-open-browser",
+        action="store_true",
+        help="Do not open the browser automatically (print the URL instead).",
+    )
+    auth_status = auth_sub.add_parser("status", help="Show stored OAuth token status.")
+    auth_status.add_argument(
+        "--provider",
+        choices=["github", "gitlab", "jira"],
+        default="github",
+        help="Backlog provider (default: github).",
+    )
+    auth_status.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Forgeo config to resolve token file / api base.",
+    )
+    auth_status.add_argument(
+        "--token-file",
+        type=Path,
+        default=None,
+        help="Token file to inspect.",
+    )
+    auth_status.add_argument("--api-base", default=None, help="Provider API base URL.")
+    auth_logout = auth_sub.add_parser("logout", help="Remove the stored OAuth token.")
+    auth_logout.add_argument(
+        "--provider",
+        choices=["github", "gitlab", "jira"],
+        default="github",
+        help="Backlog provider (default: github).",
+    )
+    auth_logout.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Forgeo config to resolve token file / api base.",
+    )
+    auth_logout.add_argument(
+        "--token-file",
+        type=Path,
+        default=None,
+        help="Token file to remove.",
+    )
+    auth_logout.add_argument("--api-base", default=None, help="Provider API base URL.")
     return parser
 
 
@@ -1093,6 +1180,559 @@ def cmd_web_status(args: argparse.Namespace) -> int:
     return 0
 
 
+# ------------------------------------------------------------------ #
+# Auth (GitHub OAuth / browser login)                                 #
+# ------------------------------------------------------------------ #
+
+
+def _resolve_github_auth_params(args: argparse.Namespace) -> tuple[str, str, str, str, Path] | None:
+    """Resolve GitHub OAuth params from CLI args and optional config.
+
+    Returns (api_base, client_id, flow, scope, token_file) or None after
+    printing an error.
+    """
+    from pathlib import Path as _P
+
+    from forgeo.config import load_config
+    from forgeo.oauth_github import github_default_token_path
+
+    config_path = getattr(args, "config", None)
+    # None means try default forgeo.yaml if it exists
+    if config_path is None:
+        default = _P("forgeo.yaml")
+        if default.exists():
+            config_path = default
+    config = None
+    if config_path is not None and _P(config_path).exists():
+        try:
+            config = load_config(config_path)
+        except Exception as exc:  # noqa: BLE001 - user-facing error
+            console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
+            return None
+
+    api_base = getattr(args, "api_base", None)
+    if api_base is None and config is not None and config.github is not None:
+        # config.backlog is the API base for github provider
+        if isinstance(config.backlog, str):
+            api_base = config.backlog
+    if api_base is None:
+        api_base = "https://api.github.com"
+
+    client_id = getattr(args, "client_id", None)
+    flow = getattr(args, "flow", None)
+    scope = getattr(args, "scope", None)
+    token_file_arg = getattr(args, "token_file", None)
+
+    # Fall back to config's oauth block
+    if config is not None and config.github is not None and config.github.auth.oauth is not None:
+        oauth = config.github.auth.oauth
+        if client_id is None:
+            client_id = oauth.client_id
+        if flow is None:
+            flow = oauth.flow
+        if scope is None:
+            scope = oauth.scope or "repo"
+        if token_file_arg is None and oauth.token_file is not None:
+            token_file_arg = _P(oauth.token_file)
+
+    if client_id is None or not str(client_id).strip():
+        console.print(
+            "[red]GitHub OAuth client_id is required. Provide --client-id or set github.auth.oauth.client_id in forgeo.yaml "
+            "(create an OAuth App at https://github.com/settings/developers).[/red]"
+        )
+        return None
+
+    if flow is None:
+        flow = "device"
+    if scope is None:
+        scope = "repo"
+    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else github_default_token_path(api_base)
+    return api_base, str(client_id).strip(), str(flow), str(scope), token_file
+
+
+def _resolve_gitlab_auth_params(args: argparse.Namespace) -> tuple[str, str, str, str, Path] | None:
+    """Resolve GitLab OAuth params."""
+    from pathlib import Path as _P
+
+    from forgeo.config import load_config
+    from forgeo.oauth_gitlab import gitlab_default_token_path
+
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        default = _P("forgeo.yaml")
+        if default.exists():
+            config_path = default
+    config = None
+    if config_path is not None and _P(config_path).exists():
+        try:
+            config = load_config(config_path)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
+            return None
+    api_base = getattr(args, "api_base", None)
+    if api_base is None and config is not None and config.gitlab is not None:
+        if isinstance(config.backlog, str):
+            api_base = config.backlog
+    if api_base is None:
+        api_base = "https://gitlab.com"
+    client_id = getattr(args, "client_id", None)
+    flow = getattr(args, "flow", None)
+    scope = getattr(args, "scope", None)
+    token_file_arg = getattr(args, "token_file", None)
+    if config is not None and config.gitlab is not None and config.gitlab.auth.oauth is not None:
+        oauth = config.gitlab.auth.oauth
+        if client_id is None:
+            client_id = oauth.client_id
+        if flow is None:
+            flow = oauth.flow
+        if scope is None:
+            scope = oauth.scope or "api"
+        if token_file_arg is None and oauth.token_file is not None:
+            token_file_arg = _P(oauth.token_file)
+    if client_id is None or not str(client_id).strip():
+        console.print(
+            "[red]GitLab OAuth client_id is required. Provide --client-id or set gitlab.auth.oauth.client_id in forgeo.yaml "
+            "(create an Application at https://gitlab.com/-/profile/applications).[/red]"
+        )
+        return None
+    if flow is None:
+        flow = "browser"
+    if scope is None:
+        scope = "api"
+    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else gitlab_default_token_path(api_base)
+    return api_base, str(client_id).strip(), str(flow), str(scope), token_file
+
+
+def _resolve_jira_auth_params(args: argparse.Namespace) -> tuple[str, str, str, str, Path] | None:
+    """Resolve Jira OAuth params."""
+    from pathlib import Path as _P
+
+    from forgeo.config import load_config
+    from forgeo.oauth_jira import jira_default_token_path
+
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        default = _P("forgeo.yaml")
+        if default.exists():
+            config_path = default
+    config = None
+    if config_path is not None and _P(config_path).exists():
+        try:
+            config = load_config(config_path)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
+            return None
+    api_base = getattr(args, "api_base", None)
+    if api_base is None and config is not None and config.jira is not None:
+        if isinstance(config.backlog, str):
+            api_base = config.backlog
+    if api_base is None:
+        api_base = "https://jira.example.com"
+    client_id = getattr(args, "client_id", None)
+    flow = getattr(args, "flow", None)
+    scope = getattr(args, "scope", None)
+    token_file_arg = getattr(args, "token_file", None)
+    if config is not None and config.jira is not None and config.jira.auth.oauth is not None:
+        oauth = config.jira.auth.oauth
+        if client_id is None:
+            client_id = oauth.client_id
+        if flow is None:
+            flow = oauth.flow
+        if scope is None:
+            scope = oauth.scope or "offline_access read:jira-user read:jira-work"
+        if token_file_arg is None and oauth.token_file is not None:
+            token_file_arg = _P(oauth.token_file)
+    if client_id is None or not str(client_id).strip():
+        console.print(
+            "[red]Jira OAuth client_id is required. Provide --client-id or set jira.auth.oauth.client_id in forgeo.yaml "
+            "(create an App at https://developer.atlassian.com/console/myapps/).[/red]"
+        )
+        return None
+    if flow is None:
+        flow = "browser"
+    if scope is None:
+        scope = "offline_access read:jira-user read:jira-work"
+    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else jira_default_token_path(api_base)
+    return api_base, str(client_id).strip(), str(flow), str(scope), token_file
+
+
+def cmd_auth(args: argparse.Namespace) -> int:
+    action = getattr(args, "auth_action", None)
+    if action == "login":
+        return cmd_auth_login(args)
+    if action == "status":
+        return cmd_auth_status(args)
+    if action == "logout":
+        return cmd_auth_logout(args)
+    build_parser().print_help()
+    return 0
+
+
+def cmd_auth_login(args: argparse.Namespace) -> int:
+    """Handle ``forgeo auth login``: run OAuth flow and store token."""
+    provider = getattr(args, "provider", "github")
+    if provider == "gitlab":
+        from forgeo.oauth_gitlab import GitlabOAuthError, GitlabTokenStore, gitlab_oauth_base, run_browser_flow, run_device_flow
+
+        params = _resolve_gitlab_auth_params(args)
+        if params is None:
+            return 1
+        api_base, client_id, flow, scope, token_file = params
+        oauth_base = gitlab_oauth_base(api_base)
+        console.print(f"[bold]GitLab auth[/bold]: provider=gitlab api_base={api_base} oauth_base={oauth_base} flow={flow}")
+        # Resolve client_secret if configured
+        from pathlib import Path as _P
+
+        from forgeo.config import load_config
+
+        client_secret = None
+        # Try to get client_secret_env from config
+        try:
+            cfg_path = getattr(args, "config", None) or (_P("forgeo.yaml") if _P("forgeo.yaml").exists() else None)
+            if cfg_path and _P(cfg_path).exists():
+                cfg = load_config(_P(cfg_path))
+                if cfg.gitlab and cfg.gitlab.auth.oauth and cfg.gitlab.auth.oauth.client_secret_env:
+                    env = cfg.gitlab.auth.oauth.client_secret_env
+                    import os
+
+                    client_secret = os.environ.get(env)
+        except Exception:
+            pass
+        try:
+            if flow == "browser":
+                token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=client_secret)
+            else:
+                token_data = run_device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
+        except GitlabOAuthError as exc:
+            console.print(f"[red]GitLab login failed: {exc}[/red]")
+            return 1
+        except KeyboardInterrupt:
+            console.print("[yellow]Login cancelled.[/yellow]")
+            return 130
+        try:
+            store = GitlabTokenStore(path=token_file, api_base=api_base)
+            store.save(token_data)
+            console.print(f"[green]GitLab token saved to {store.path} (0600).[/green]")
+            console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
+            console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
+        except OSError as exc:
+            console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
+            return 1
+        return 0
+    if provider == "jira":
+        from forgeo.oauth_jira import JiraOAuthError, JiraTokenStore, run_browser_flow
+
+        params = _resolve_jira_auth_params(args)
+        if params is None:
+            return 1
+        api_base, client_id, flow, scope, token_file = params
+        console.print(f"[bold]Jira auth[/bold]: provider=jira api_base={api_base} flow={flow}")
+        # Resolve client_secret
+        client_secret = None
+        try:
+            from pathlib import Path as _P
+
+            from forgeo.config import load_config
+
+            cfg_path = getattr(args, "config", None) or (_P("forgeo.yaml") if _P("forgeo.yaml").exists() else None)
+            if cfg_path and _P(cfg_path).exists():
+                cfg = load_config(_P(cfg_path))
+                if cfg.jira and cfg.jira.auth.oauth and cfg.jira.auth.oauth.client_secret_env:
+                    import os
+
+                    client_secret = os.environ.get(cfg.jira.auth.oauth.client_secret_env)
+        except Exception:
+            pass
+        try:
+            if flow != "browser":
+                console.print("[yellow]Jira only supports browser flow; using browser.[/yellow]")
+            token_data = run_browser_flow(client_id, None, scope, client_secret=client_secret)  # type: ignore[arg-type]
+        except JiraOAuthError as exc:
+            console.print(f"[red]Jira login failed: {exc}[/red]")
+            return 1
+        except KeyboardInterrupt:
+            console.print("[yellow]Login cancelled.[/yellow]")
+            return 130
+        try:
+            store = JiraTokenStore(path=token_file, api_base=api_base)  # type: ignore[assignment]
+            store.save(token_data)
+            console.print(f"[green]Jira token saved to {store.path} (0600).[/green]")
+            if token_data.get("cloud_id"):
+                console.print(f"[dim]Cloud ID {token_data['cloud_id']} [/dim]")
+            console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
+        except OSError as exc:
+            console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
+            return 1
+        return 0
+    # default github
+    from forgeo.oauth_github import (
+        GithubOAuthError,
+        GithubTokenStore,
+        github_oauth_base,
+        run_browser_flow,
+        run_device_flow,
+    )
+
+    params = _resolve_github_auth_params(args)
+    if params is None:
+        return 1
+    api_base, client_id, flow, scope, token_file = params
+    oauth_base = github_oauth_base(api_base)
+    console.print(f"[bold]GitHub auth[/bold]: provider=github api_base={api_base} oauth_base={oauth_base} flow={flow}")
+
+    try:
+        if flow == "browser":
+            # Resolve client_secret for confidential apps
+            client_secret = None
+            try:
+                from pathlib import Path as _P
+
+                from forgeo.config import load_config
+
+                cfg_path = getattr(args, "config", None) or (_P("forgeo.yaml") if _P("forgeo.yaml").exists() else None)
+                if cfg_path and _P(cfg_path).exists():
+                    cfg = load_config(_P(cfg_path))
+                    if cfg.github and cfg.github.auth.oauth and cfg.github.auth.oauth.client_secret_env:
+                        import os
+
+                        client_secret = os.environ.get(cfg.github.auth.oauth.client_secret_env)
+            except Exception:
+                pass
+            token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=client_secret)
+        else:
+            token_data = run_device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
+    except GithubOAuthError as exc:
+        console.print(f"[red]GitHub login failed: {exc}[/red]")
+        return 1
+    except KeyboardInterrupt:
+        console.print("[yellow]Login cancelled.[/yellow]")
+        return 130
+
+    # Persist
+    try:
+        store = GithubTokenStore(path=token_file, api_base=api_base)  # type: ignore[assignment]
+        store.save(token_data)
+        console.print(f"[green]GitHub token saved to {store.path} (0600).[/green]")
+        console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
+        console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
+    except OSError as exc:
+        console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
+        return 1
+    return 0
+
+
+def cmd_auth_status(args: argparse.Namespace) -> int:
+    """Handle ``forgeo auth status``: show token presence/expiry."""
+    provider = getattr(args, "provider", "github")
+    if provider == "gitlab":
+        from forgeo.oauth_gitlab import GitlabTokenStore
+
+        api_base = getattr(args, "api_base", None)
+        token_file_arg = getattr(args, "token_file", None)
+        config_path = getattr(args, "config", None)
+        if token_file_arg is None and config_path is not None:
+            from pathlib import Path as _P
+
+            from forgeo.config import load_config
+
+            try:
+                cfg = load_config(_P(config_path))
+                if cfg.gitlab is not None and cfg.gitlab.auth.oauth is not None and cfg.gitlab.auth.oauth.token_file is not None:
+                    token_file_arg = _P(cfg.gitlab.auth.oauth.token_file)
+                if api_base is None and isinstance(cfg.backlog, str):
+                    api_base = cfg.backlog
+            except Exception:
+                pass
+        if api_base is None:
+            api_base = "https://gitlab.com"
+        store = GitlabTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GitlabTokenStore(api_base=api_base)
+        data = store.load()
+        if data is None:
+            console.print(f"[yellow]No GitLab token found at {store.path}.[/yellow]")
+            console.print("[dim]Run `forgeo auth login --provider gitlab --client-id <id>` .[/dim]")
+            return 1
+        token = str(data.get("access_token", ""))
+        masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
+        expires = data.get("expires_in")
+        scope = data.get("scope") or ""
+        console.print(f"[green]Token found[/green] at {store.path}")
+        console.print(f"  token: {masked}")
+        if scope:
+            console.print(f"  scope: {scope}")
+        if isinstance(expires, int | float):
+            console.print(f"  expires_in: {expires}s")
+        else:
+            console.print("  expires: never")
+        return 0
+    if provider == "jira":
+        from forgeo.oauth_jira import JiraTokenStore
+
+        api_base = getattr(args, "api_base", None)
+        token_file_arg = getattr(args, "token_file", None)
+        config_path = getattr(args, "config", None)
+        if token_file_arg is None and config_path is not None:
+            from pathlib import Path as _P
+
+            from forgeo.config import load_config
+
+            try:
+                cfg = load_config(_P(config_path))
+                if cfg.jira is not None and cfg.jira.auth.oauth is not None and cfg.jira.auth.oauth.token_file is not None:
+                    token_file_arg = _P(cfg.jira.auth.oauth.token_file)
+                if api_base is None and isinstance(cfg.backlog, str):
+                    api_base = cfg.backlog
+            except Exception:
+                pass
+        if api_base is None:
+            api_base = "https://jira.example.com"
+        store = JiraTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else JiraTokenStore(api_base=api_base)  # type: ignore[assignment]
+        data = store.load()
+        if data is None:
+            console.print(f"[yellow]No Jira token found at {store.path}.[/yellow]")
+            console.print("[dim]Run `forgeo auth login --provider jira --client-id <id>` .[/dim]")
+            return 1
+        token = str(data.get("access_token", ""))
+        masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
+        expires = data.get("expires_in")
+        scope = data.get("scope") or ""
+        cloud_id = data.get("cloud_id") or ""
+        console.print(f"[green]Token found[/green] at {store.path}")
+        console.print(f"  token: {masked}")
+        if cloud_id:
+            console.print(f"  cloud_id: {cloud_id}")
+        if scope:
+            console.print(f"  scope: {scope}")
+        if isinstance(expires, int | float):
+            console.print(f"  expires_in: {expires}s")
+        else:
+            console.print("  expires: never")
+        return 0
+    from forgeo.oauth_github import GithubTokenStore
+
+    api_base = getattr(args, "api_base", None)
+    token_file_arg = getattr(args, "token_file", None)
+    config_path = getattr(args, "config", None)
+    if token_file_arg is None and config_path is not None:
+        from pathlib import Path as _P
+
+        from forgeo.config import load_config
+
+        try:
+            cfg = load_config(_P(config_path))
+            if cfg.github is not None and cfg.github.auth.oauth is not None and cfg.github.auth.oauth.token_file is not None:
+                token_file_arg = _P(cfg.github.auth.oauth.token_file)
+            if api_base is None and isinstance(cfg.backlog, str):
+                api_base = cfg.backlog
+        except Exception:
+            pass
+    if api_base is None:
+        api_base = "https://api.github.com"
+    store = GithubTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GithubTokenStore(api_base=api_base)  # type: ignore[assignment]
+    data = store.load()
+    if data is None:
+        console.print(f"[yellow]No GitHub token found at {store.path}.[/yellow]")
+        console.print("[dim]Run `forgeo auth login --provider github --client-id <id>` .[/dim]")
+        return 1
+    token = str(data.get("access_token", ""))
+    masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
+    expires = data.get("expires_in")
+    scope = data.get("scope") or data.get("scope", "")
+    console.print(f"[green]Token found[/green] at {store.path}")
+    console.print(f"  token: {masked}")
+    if scope:
+        console.print(f"  scope: {scope}")
+    if isinstance(expires, int | float):
+        console.print(f"  expires_in: {expires}s")
+    else:
+        console.print("  expires: never (GitHub classic token)")
+    return 0
+
+
+def cmd_auth_logout(args: argparse.Namespace) -> int:
+    """Handle ``forgeo auth logout``: delete stored token."""
+    provider = getattr(args, "provider", "github")
+    if provider == "gitlab":
+        from forgeo.oauth_gitlab import GitlabTokenStore
+
+        api_base = getattr(args, "api_base", None)
+        token_file_arg = getattr(args, "token_file", None)
+        config_path = getattr(args, "config", None)
+        if token_file_arg is None and config_path is not None:
+            from pathlib import Path as _P
+
+            from forgeo.config import load_config
+
+            try:
+                cfg = load_config(_P(config_path))
+                if cfg.gitlab is not None and cfg.gitlab.auth.oauth is not None and cfg.gitlab.auth.oauth.token_file is not None:
+                    token_file_arg = _P(cfg.gitlab.auth.oauth.token_file)
+                if api_base is None and isinstance(cfg.backlog, str):
+                    api_base = cfg.backlog
+            except Exception:
+                pass
+        if api_base is None:
+            api_base = "https://gitlab.com"
+        store = GitlabTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GitlabTokenStore(api_base=api_base)
+        if store.clear():
+            console.print(f"[green]Removed token at {store.path}.[/green]")
+            return 0
+        console.print(f"[yellow]No token to remove at {store.path}.[/yellow]")
+        return 1
+    if provider == "jira":
+        from forgeo.oauth_jira import JiraTokenStore
+
+        api_base = getattr(args, "api_base", None)
+        token_file_arg = getattr(args, "token_file", None)
+        config_path = getattr(args, "config", None)
+        if token_file_arg is None and config_path is not None:
+            from pathlib import Path as _P
+
+            from forgeo.config import load_config
+
+            try:
+                cfg = load_config(_P(config_path))
+                if cfg.jira is not None and cfg.jira.auth.oauth is not None and cfg.jira.auth.oauth.token_file is not None:
+                    token_file_arg = _P(cfg.jira.auth.oauth.token_file)
+                if api_base is None and isinstance(cfg.backlog, str):
+                    api_base = cfg.backlog
+            except Exception:
+                pass
+        if api_base is None:
+            api_base = "https://jira.example.com"
+        store = JiraTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else JiraTokenStore(api_base=api_base)  # type: ignore[assignment]
+        if store.clear():
+            console.print(f"[green]Removed token at {store.path}.[/green]")
+            return 0
+        console.print(f"[yellow]No token to remove at {store.path}.[/yellow]")
+        return 1
+    from forgeo.oauth_github import GithubTokenStore
+
+    api_base = getattr(args, "api_base", None)
+    token_file_arg = getattr(args, "token_file", None)
+    config_path = getattr(args, "config", None)
+    if token_file_arg is None and config_path is not None:
+        from pathlib import Path as _P
+
+        from forgeo.config import load_config
+
+        try:
+            cfg = load_config(_P(config_path))
+            if cfg.github is not None and cfg.github.auth.oauth is not None and cfg.github.auth.oauth.token_file is not None:
+                token_file_arg = _P(cfg.github.auth.oauth.token_file)
+            if api_base is None and isinstance(cfg.backlog, str):
+                api_base = cfg.backlog
+        except Exception:
+            pass
+    if api_base is None:
+        api_base = "https://api.github.com"
+    store = GithubTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GithubTokenStore(api_base=api_base)  # type: ignore[assignment]
+    if store.clear():
+        console.print(f"[green]Removed token at {store.path}.[/green]")
+        return 0
+    console.print(f"[yellow]No token to remove at {store.path}.[/yellow]")
+    return 1
+
+
 _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "start": cmd_start,
     "once": cmd_once,
@@ -1105,6 +1745,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "instance": cmd_instance,
     "list": cmd_instance_list,
     "web": cmd_web,
+    "auth": cmd_auth,
 }
 
 

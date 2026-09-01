@@ -45,7 +45,7 @@ pipx install forgeo-cli                          # Python 3.11+
 forgeo init
 ```
 
-Wizard in your project root. Creates `forgeo.yaml` and `.forgeo/` (backlog, logs, blockers). Prompts for backlog provider (`file` / `github` / `gitlab` / `jira` / `http`) and agent command. For `github` it auto-detects `owner/repo` and can persist `GITHUB_TOKEN` to `~/.config/forgeo/`.
+Wizard in your project root. Creates `forgeo.yaml` and `.forgeo/` (backlog, logs, blockers). Prompts for backlog provider (`file` / `github` / `gitlab` / `jira` / `http`) and agent command. For `github`/`gitlab`/`jira` it auto-detects `owner/repo` and offers `PAT` (`GITHUB_TOKEN` → `~/.config/forgeo/`) or browser OAuth (`forgeo auth login` → `~/.config/forgeo/tokens/`).
 
 ### 3. Fill the backlog
 

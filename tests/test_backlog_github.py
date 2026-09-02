@@ -153,7 +153,7 @@ async def test_claim_moves_issue_to_running_and_records_lease() -> None:
     task = (await backlog.list_tasks())[0]
     claimed = await backlog.claim_task(task)
     assert claimed is not None and claimed.status is TaskStatus.OPEN
-    assert any(l["name"] == "forgeo-running" for l in client.issues[1]["labels"])
+    assert any(label["name"] == "forgeo-running" for label in client.issues[1]["labels"])
     body = client.issues[1]["body"]
     assert "claimed_at" in body
 
@@ -167,7 +167,7 @@ async def test_old_claim_is_released_before_a_new_cycle() -> None:
     )
     backlog, client = make_github([gh_issue(1, labels=["forgeo-running"], body=body)])
     await backlog.recover_claims()
-    assert all(l["name"] != "forgeo-running" for l in client.issues[1]["labels"])
+    assert all(label["name"] != "forgeo-running" for label in client.issues[1]["labels"])
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_blocked_task_can_be_reopened() -> None:
     await backlog.claim_task(task)
     blocked = await backlog.set_blocked(task.id, ["Which db?"], ExecutionResult(status=ExecutionStatus.BLOCKED))
     assert blocked is not None and blocked.status is TaskStatus.BLOCKED
-    assert any(l["name"] == "forgeo-blocked" for l in client.issues[1]["labels"])
+    assert any(label["name"] == "forgeo-blocked" for label in client.issues[1]["labels"])
     assert client.comments and "BLOCKED" in client.comments[-1][1]
     reopened = await backlog.reopen_task(task.id)
     assert reopened is not None and reopened.status is TaskStatus.OPEN
@@ -221,7 +221,7 @@ async def test_failed_task_retries() -> None:
     await backlog.claim_task(task)
     failed = await backlog.set_failed(task.id, ["timeout"], ExecutionResult(status=ExecutionStatus.ERROR))
     assert failed is not None and failed.status is TaskStatus.FAILED
-    assert any(l["name"] == "forgeo-failed" for l in client.issues[1]["labels"])
+    assert any(label["name"] == "forgeo-failed" for label in client.issues[1]["labels"])
     await backlog.bump_failed_wait(task.id)
     retried = await backlog.retry_task(task.id)
     assert retried is not None and retried.status is TaskStatus.OPEN

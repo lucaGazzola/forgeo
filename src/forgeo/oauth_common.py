@@ -97,10 +97,6 @@ class CallbackHandler(BaseHTTPRequestHandler):
 def run_loopback(state: str, timeout: float = 300.0) -> tuple[str | None, str | None, str | None]:
     """Run loopback server and capture code/state/error."""
     server = HTTPServer(("127.0.0.1", 0), CallbackHandler)
-    addr = server.server_address
-    host: str = str(addr[0])
-    port: int = int(addr[1])
-    redirect_uri = f"http://{host}:{port}/callback"
     server.timeout = timeout
     last_handler: list[CallbackHandler] = []
 

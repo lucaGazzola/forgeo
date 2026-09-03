@@ -45,7 +45,9 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #     scope: forgeo-backlog   # Optional.
 #     timeout_seconds: 10     # Optional, default 10.
 #
-# Jira can be used directly instead of a JSON or HTTP backlog. Jira issue keys
+# Jira can be used directly instead of a JSON or HTTP backlog. Uncomment one
+# complete provider example below and replace the active `backlog` above;
+# provider examples are alternatives, not additional config blocks. Jira issue keys
 # become task ids. Labels and a Jira issue property hold Forgeo's engine state;
 # workflow status references may be names or (preferably) stable Jira ids.
 # PAT / basic (Server/DC):
@@ -69,6 +71,7 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #         scope: offline_access read:jira-user read:jira-work  # default
 #         cloud_id: xxxxx-xxxx            # optional, auto-detected if blank
 #         token_file: ~/.config/forgeo/tokens/jira.json
+#         callback_port: 8765              # optional fixed loopback callback port
 #   # Then: forgeo auth login --provider jira --client-id <id>
 #     workflow:
 #       open_statuses: ["10000", "10001"]
@@ -101,6 +104,7 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #         flow: device                   # device | browser (PKCE loopback)
 #         scope: repo                    # default repo
 #         token_file: ~/.config/forgeo/tokens/github.json  # optional, default per host
+#         callback_port: 8765             # optional fixed loopback callback port
 #         client_secret_env: GH_CLIENT_SECRET  # optional, for confidential apps (browser flow)
 #   # Then: forgeo auth login --provider github --client-id Iv1.xxx  (or uses forgeo.yaml)
 #
@@ -121,6 +125,7 @@ backlog: backlog.json           # The task backlog (created on first use). Keep 
 #         flow: browser                # browser | device
 #         scope: api                   # default api
 #         token_file: ~/.config/forgeo/tokens/gitlab.json
+#         callback_port: 8765            # optional fixed loopback callback port
 #   # Then: forgeo auth login --provider gitlab --client-id <id>
 blocker_file: BLOCKER.md        # Written with a detailed explanation when the agent
                                 # needs human input. Keep it outside the repository.

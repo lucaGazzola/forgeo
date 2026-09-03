@@ -380,7 +380,8 @@ class JiraOAuthConfig(BaseModel):
     scope: str | None = None
     token_file: str | Path | None = None
     cloud_id: str | None = None
-    flow: Literal["browser", "device"] = "browser"
+    callback_port: int | None = Field(default=None, ge=1, le=65535)
+    flow: Literal["browser"] = "browser"
 
     @field_validator("client_id")
     @classmethod
@@ -577,6 +578,7 @@ class GithubOAuthConfig(BaseModel):
     client_id: str
     scope: str | None = None
     token_file: str | Path | None = None
+    callback_port: int | None = Field(default=None, ge=1, le=65535)
     flow: Literal["device", "browser"] = "device"
     client_secret_env: str | None = None
 
@@ -628,6 +630,7 @@ class GitlabOAuthConfig(BaseModel):
     client_id: str
     scope: str | None = None
     token_file: str | Path | None = None
+    callback_port: int | None = Field(default=None, ge=1, le=65535)
     flow: Literal["device", "browser"] = "browser"
     client_secret_env: str | None = None
 

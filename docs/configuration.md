@@ -96,13 +96,21 @@ jira:
 #       client_secret_env: JIRA_CLIENT_SECRET
 #       scope: offline_access read:jira-user read:jira-work
 #       token_file: ~/.config/forgeo/tokens/jira.json  # optional
+#       callback_port: 8765                         # optional fixed loopback port
 # # then: forgeo auth login --provider jira --client-id xxxx
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `jira.jql` | — | JQL scope — include all lifecycle states. |
-| `jira.auth` | — | `basic` (username + token) or `bearer` (token). |
+| `jira.auth` | — | Exactly one of PAT (`basic`/`bearer` with `token_env`) or `oauth` (Jira Cloud browser PKCE). |
+| `jira.auth.oauth.client_id` | — | Atlassian OAuth app client ID. Required for OAuth. |
+| `jira.auth.oauth.client_secret_env` | — | Optional environment variable containing the OAuth client secret; required for refresh when the app is confidential. |
+| `jira.auth.oauth.scope` | — | Requested scopes; `offline_access read:jira-user read:jira-work` by default. |
+| `jira.auth.oauth.token_file` | per-host path | Token JSON file, mode `0600`; relative paths resolve from `forgeo.yaml`. |
+| `jira.auth.oauth.cloud_id` | — | Atlassian site ID; auto-detected after login when omitted. |
+| `jira.auth.oauth.flow` | `browser` | Browser PKCE only. |
+| `jira.auth.oauth.callback_port` | ephemeral | Fixed loopback port for browser login when the app requires an exact callback URI. |
 | `jira.project_key` | — | Project for dashboard task creation. |
 | `jira.issue_type` | `Task` | Issue type for creation. |
 | `jira.api_version` | `3` | `3` = Cloud cursor pagination, `2` = offset. |
@@ -136,13 +144,20 @@ github:
 #       flow: device              # device | browser
 #       scope: repo
 #       token_file: ~/.config/forgeo/tokens/github.json
+#       callback_port: 8765       # optional fixed loopback port for browser flow
 # # then: forgeo auth login --provider github --client-id Iv1.xxxx
 ```
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `github.repo` | — | `owner/repo`. |
-| `github.auth` | — | `token_env` for PAT. |
+| `github.auth` | — | Exactly one of `token_env` (PAT) or `oauth`. |
+| `github.auth.oauth.client_id` | — | OAuth app client ID. Required for OAuth. |
+| `github.auth.oauth.flow` | `device` | `device` or `browser`. |
+| `github.auth.oauth.scope` | `repo` | OAuth scope. |
+| `github.auth.oauth.token_file` | per-host path | Token JSON file, mode `0600`; relative paths resolve from `forgeo.yaml`. |
+| `github.auth.oauth.callback_port` | ephemeral | Fixed loopback port for browser login when the app requires an exact callback URI. |
+| `github.auth.oauth.client_secret_env` | — | Optional environment variable containing a confidential browser-flow client secret. |
 | `github.label_prefix` | `forgeo` | Label prefix. |
 | `github.property_key` | `forgeo` | Marker key for hidden body block. |
 | `github.page_size` | `30` | Issues per page. |
@@ -173,10 +188,33 @@ gitlab:
 #       flow: browser             # browser | device
 #       scope: api
 #       token_file: ~/.config/forgeo/tokens/gitlab.json
+#       callback_port: 8765        # optional fixed loopback port for browser flow
 # # then: forgeo auth login --provider gitlab --client-id abc123
 ```
 
-Same keys as GitHub (`gitlab.*`), including `workflow` and `fields` for the same 7 mappings. Issue `iid` becomes task ID; `opened`/`closed` maps to `OPEN`/`COMPLETED`; hidden `<!-- forgeo: {...} -->` block for engine state.
+Same backlog and task keys as GitHub (`gitlab.*`). Its auth must contain exactly one of `token_env` (PAT) or `oauth`; OAuth supports `client_id`, `flow`, `scope`, `token_file`, `callback_port`, and optional `client_secret_env`. Issue `iid` becomes task ID; `opened`/`closed` maps to `OPEN`/`COMPLETED`; hidden `<!-- forgeo: {...} -->` block for engine state.
+
+### Browser OAuth details
+
+For GitHub and GitLab, OAuth is an alternative to the provider PAT. For Jira, OAuth is available for Jira Cloud and is browser-only. Do not configure both `token_env` and `oauth` in the same provider; validation requires exactly one.
+
+The token file is outside `forgeo.yaml`, is written with mode `0600`, and defaults to a provider/host-specific file under `~/.config/forgeo/tokens/`. A relative `token_file` is resolved relative to the config file. A `client_secret_env` value is only an environment variable name; the secret itself must be exported before login and kept available to the daemon for refreshes.
+
+Browser login uses a loopback callback at `http://127.0.0.1:<port>/callback`. The default port is ephemeral. If the provider requires a pre-registered exact URI, register a fixed port in the OAuth application and pass it to login:
+
+```bash
+forgeo auth login --provider github --client-id Iv1.xxx --flow browser --callback-port 8765
+forgeo auth login --provider gitlab --client-id abc123 --callback-port 8765
+export JIRA_CLIENT_SECRET=...
+forgeo auth login --provider jira --client-id xxxx --callback-port 8765
+```
+
+Use `--no-open-browser` to print the authorization URL without opening it. After login, verify the provider-specific token and start the daemon:
+
+```bash
+forgeo auth status --provider github   # or gitlab / jira
+forgeo validate
+```
 
 ## Key details
 

@@ -6,7 +6,8 @@ The **central dashboard** (`forgeo web`) is the only web interface. Daemons bind
 forgeo web               # 0.0.0.0:8790 foreground
 forgeo web --port 9000 --host 127.0.0.1
 forgeo web -d            # background
-forgeo web status / stop
+forgeo web status
+forgeo web stop
 forgeo web --token       # bearer auth for /api/*
 ```
 

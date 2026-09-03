@@ -28,11 +28,11 @@ forgeo init
 The wizard asks for:
 
 1. **Forgeo folder** — where backlog/logs live (default `.forgeo`, gitignored).
-2. **Backlog provider** — `file` (local JSON), `github`/`gitlab`/`jira`/`http`. For `github` it auto-detects `owner/repo` from `git remote` and can persist a pasted `GITHUB_TOKEN` to `~/.config/forgeo/github_token_env.sh`.
+2. **Backlog provider** — `file` (local JSON), `github`/`gitlab`/`jira`/`http`. For GitHub it auto-detects `owner/repo` from `git remote` and can persist a pasted `GITHUB_TOKEN` to `~/.config/forgeo/github_token_env.sh`.
 3. **Agent command** — bare command for your agent (default `opencode run --auto`). Forgeo appends the task prompt (`$FORGEO_TASK`); if your command already references `$FORGEO_TASK` it is kept verbatim.
 4. **Refactor prompt** — used when the backlog is empty.
 
-Writes `forgeo.yaml`, creates the folder, and appends it to `.gitignore` (opt-out available). With `github`/`gitlab`/`jira` it also sets `backlog_provider`, `backlog` URL, provider block, and `state_dir`. For `github`/`gitlab`/`jira` you can pick `PAT` or `browser` (OAuth) — browser stores a token in `~/.config/forgeo/tokens/`.
+Writes `forgeo.yaml`, creates the folder, and appends it to `.gitignore` (opt-out available). With `github`/`gitlab`/`jira` it also sets `backlog_provider`, `backlog` URL, provider block, and `state_dir`. For `github`/`gitlab`/`jira` you can pick `PAT` or OAuth. GitHub defaults to device flow; GitLab and Jira use browser PKCE. Browser tokens are stored in `~/.config/forgeo/tokens/`.
 
 ```bash
 forgeo init --force    # overwrite existing config
@@ -58,16 +58,24 @@ forgeo init --force    # overwrite existing config
 
 You can also add tasks from the dashboard once Forgeo is running — no file editing needed.
 
-**Remote providers** — `forgeo.yaml` already points at the provider. Authenticate with PAT **or** browser:
+**Remote providers** — `forgeo.yaml` already points at the provider. Authenticate with a PAT **or** browser OAuth:
 
 ```bash
 # PAT:
-export GITHUB_TOKEN=ghp_...   # or GITLAB_TOKEN / JIRA_USER + JIRA_TOKEN
-# Browser OAuth (device flow preferred for CLI):
-forgeo auth login --provider github --client-id Iv1.xxx   # or gitlab/jira
-forgeo auth status   # forgeo auth logout to clear
+export GITHUB_TOKEN=ghp_...   # or GITLAB_TOKEN / JIRA_TOKEN
+# GitHub OAuth (device flow by default):
+forgeo auth login --provider github --client-id Iv1.xxx
+# GitLab OAuth (browser PKCE):
+forgeo auth login --provider gitlab --client-id abc123
+# Jira Cloud OAuth (browser PKCE; export the configured secret for refresh):
+export JIRA_CLIENT_SECRET=...
+forgeo auth login --provider jira --client-id xxxx
+forgeo auth status --provider github   # use gitlab or jira for those providers
+forgeo auth logout --provider github
 forgeo validate
 ```
+
+Browser login uses an ephemeral loopback port by default. If the OAuth application requires an exact registered callback URL, register `http://127.0.0.1:8765/callback` and add `--callback-port 8765` to the login command. Use `--no-open-browser` when you want to open the printed authorization URL yourself. For a config outside the current directory, add `--config /path/to/forgeo.yaml` to the auth command.
 
 See [Backlog format](backlog.md) for Jira/GitHub/GitLab details. The dashboard for issue providers is a read-mostly mirror — triage stays in the native tracker.
 

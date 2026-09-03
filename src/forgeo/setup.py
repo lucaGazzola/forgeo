@@ -127,6 +127,27 @@ def _ask_multiline(input_fn: SetupInput | None, prompt: str, console: Console) -
     return "\n".join(lines)
 
 
+def _ask_callback_port(input_fn: SetupInput | None, provider: str, out: Console) -> int | None:
+    """Ask for an optional fixed browser callback port."""
+    while True:
+        raw = _ask_text(
+            input_fn,
+            f"[bold]{provider} OAuth callback port[/bold] [default ephemeral; use a fixed port if the app requires an exact redirect URI]",
+            default="",
+        ).strip()
+        if not raw:
+            return None
+        try:
+            port = int(raw)
+        except ValueError:
+            port = 0
+        if 1 <= port <= 65535:
+            return port
+        if input_fn is not None:
+            return None
+        out.print("[red]Callback port must be an integer between 1 and 65535, or blank for ephemeral.[/red]")
+
+
 def _detect_github_repo(project_root: Path) -> str | None:
     """Try to infer owner/repo from git remote origin."""
     try:
@@ -314,6 +335,11 @@ def _setup_github(
                 ).strip()
                 or None
             )
+        callback_port = (
+            _ask_callback_port(input_fn, "GitHub", out)
+            if input_fn is None and flow_raw == "browser"
+            else None
+        )
         oauth_cfg: dict[str, object] = {"client_id": client_id, "flow": flow_raw}
         if scope != "repo":
             oauth_cfg["scope"] = scope
@@ -321,12 +347,14 @@ def _setup_github(
             oauth_cfg["token_file"] = token_file
         if client_secret_env:
             oauth_cfg["client_secret_env"] = client_secret_env
+        if callback_port is not None:
+            oauth_cfg["callback_port"] = callback_port
         github_cfg: dict[str, object] = {"repo": github_repo, "auth": {"oauth": oauth_cfg}}
         if input_fn is None:
             # Interactive: optionally run the login now
             if _ask_yes_no(
                 input_fn,
-                "[bold]Run browser login now to fetch and store a token?[/bold]",
+                "[bold]Run OAuth login now to fetch and store a token?[/bold]",
                 default=True,
             ):
                 try:
@@ -340,7 +368,13 @@ def _setup_github(
                     oauth_base = github_oauth_base(github_api_base)
                     if flow_raw == "browser":
                         secret = os.environ.get(client_secret_env) if client_secret_env else None
-                        token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=secret)
+                        token_data = run_browser_flow(
+                            client_id,
+                            oauth_base,
+                            scope,
+                            client_secret=secret,
+                            callback_port=callback_port,
+                        )
                     else:
                         token_data = run_device_flow(client_id, oauth_base, scope)
                     store = GithubTokenStore(path=token_file, api_base=github_api_base)
@@ -425,6 +459,11 @@ def _setup_gitlab(
             client_secret_env = (
                 _ask_text(input_fn, "[bold]Client secret env var (for confidential apps, optional)[/bold]", default="").strip() or None
             )
+        callback_port = (
+            _ask_callback_port(input_fn, "GitLab", out)
+            if input_fn is None and flow_raw == "browser"
+            else None
+        )
         oauth_cfg: dict[str, object] = {"client_id": client_id, "flow": flow_raw}
         if scope != "api":
             oauth_cfg["scope"] = scope
@@ -432,6 +471,8 @@ def _setup_gitlab(
             oauth_cfg["token_file"] = token_file
         if client_secret_env:
             oauth_cfg["client_secret_env"] = client_secret_env
+        if callback_port is not None:
+            oauth_cfg["callback_port"] = callback_port
         # GitLab base URL — only prompt interactively to keep tests stable
         gitlab_api = DEFAULT_GITLAB_API
         if input_fn is None:
@@ -445,7 +486,7 @@ def _setup_gitlab(
             )
         gitlab_cfg_oauth: dict[str, object] = {"repo": gitlab_repo, "auth": {"oauth": oauth_cfg}}
         if input_fn is None:
-            if _ask_yes_no(input_fn, "[bold]Run browser login now to fetch and store a token?[/bold]", default=True):
+            if _ask_yes_no(input_fn, "[bold]Run OAuth login now to fetch and store a token?[/bold]", default=True):
                 try:
                     from forgeo.oauth_gitlab import (
                         GitlabTokenStore,
@@ -457,7 +498,13 @@ def _setup_gitlab(
                     oauth_base = gitlab_oauth_base(gitlab_api)
                     if flow_raw == "browser":
                         secret = os.environ.get(client_secret_env) if client_secret_env else None
-                        token_data = run_browser_flow(client_id, oauth_base, scope, client_secret=secret)
+                        token_data = run_browser_flow(
+                            client_id,
+                            oauth_base,
+                            scope,
+                            client_secret=secret,
+                            callback_port=callback_port,
+                        )
                     else:
                         token_data = run_device_flow(client_id, oauth_base, scope)
                     store = GitlabTokenStore(path=token_file, api_base=gitlab_api)
@@ -528,19 +575,29 @@ def _setup_jira(
         if input_fn is None:
             token_file = _ask_text(input_fn, "[bold]Token file[/bold] [default ~/.config/forgeo/tokens/jira.json]", default="").strip() or None
             cloud_id = _ask_text(input_fn, "[bold]Atlassian cloud ID (optional, auto-detected if blank)[/bold]", default="").strip() or None
+        callback_port = _ask_callback_port(input_fn, "Jira", out) if input_fn is None else None
         oauth_cfg: dict[str, object] = {"client_id": client_id, "client_secret_env": client_secret_env, "scope": scope, "flow": "browser"}
         if token_file:
             oauth_cfg["token_file"] = token_file
         if cloud_id:
             oauth_cfg["cloud_id"] = cloud_id
+        if callback_port is not None:
+            oauth_cfg["callback_port"] = callback_port
         jira_cfg: dict[str, object] = {"jql": jql, "auth": {"oauth": oauth_cfg}}
         if input_fn is None:
-            if _ask_yes_no(input_fn, "[bold]Run browser login now to fetch and store a token?[/bold]", default=True):
+            if _ask_yes_no(input_fn, "[bold]Run OAuth login now to fetch and store a token?[/bold]", default=True):
                 try:
                     from forgeo.oauth_jira import JiraTokenStore, run_browser_flow
 
                     secret = os.environ.get(client_secret_env)
-                    token_data = run_browser_flow(client_id, None, scope, client_secret=secret, cloud_id=cloud_id)
+                    token_data = run_browser_flow(
+                        client_id,
+                        None,
+                        scope,
+                        client_secret=secret,
+                        cloud_id=cloud_id,
+                        callback_port=callback_port,
+                    )
                     store = JiraTokenStore(path=token_file, api_base=jira_url)
                     store.save(token_data)
                     out.print(f"[green]Jira token saved to {store.path} (600).[/green]")

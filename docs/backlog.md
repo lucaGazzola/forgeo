@@ -150,7 +150,7 @@ backlog: https://api.example.com/backlog
 | Every read | `GET <url>` returns `{"tasks": [...]}` |
 | Every write | `POST <url>` sends the full document |
 
-Add `backlog_auth` for OAuth2. Same schema and ordering. Endpoint must:
+Add `backlog_auth` for OAuth2 client-credentials access to an HTTP backlog. This is a service-account flow, not the human browser login described for issue providers below. Same schema and ordering. Endpoint must:
 
 - Return `{"tasks": [...]}`; non-object or non-list → empty.
 - Replace, not append — POST body is the complete list.
@@ -178,7 +178,7 @@ jira:
 # jira:
 #   jql: 'project = APP AND labels = forgeo'
 #   auth:
-#     oauth: {client_id: xxxx, client_secret_env: JIRA_CLIENT_SECRET, scope: "offline_access read:jira-user read:jira-work"}
+#     oauth: {client_id: xxxx, client_secret_env: JIRA_CLIENT_SECRET, scope: "offline_access read:jira-user read:jira-work", flow: browser}
 # # then: forgeo auth login --provider jira --client-id xxxx
 ```
 
@@ -186,7 +186,7 @@ jira:
 - `open_statuses` = pickable; `running_status` = claimed before agent runs; `completed_status`/`blocked_status`/`failed_status` = terminal (blocked/failed optional — labels `forgeo-blocked`/`forgeo-failed` always applied).
 - Engine state (`blocker_reason`, `retry_count`, `agent_response`, etc.) in Jira issue property `forgeo`.
 - Optional `jira.fields` maps custom fields for `acceptance_criteria`, `dependencies`, etc. Without `run_at` mapping, Jira `duedate` is used at midnight UTC. Dependencies also inferred from `blocks` issue links.
-- Auth from env vars: `basic` (username + token) or `bearer` (PAT). Uses REST API v3 (`/search/jql` + cursor) by default; set `api_version: 2` for older servers.
+- Auth is exactly one of PAT from environment variables (`basic` username + token or `bearer` token) or Jira Cloud OAuth 3LO (`oauth`). Uses REST API v3 (`/search/jql` + cursor) by default; set `api_version: 2` for older servers. OAuth browser login stores the token outside the config and discovers `cloud_id`; keep the configured client-secret environment variable available for refresh.
 - Daemon paginates JQL; stale claims released after `claim_timeout_seconds`. Unavailable Jira fails the cycle.
 
 ## A GitHub backlog
@@ -196,13 +196,13 @@ jira:
 backlog_provider: github
 backlog: https://api.github.com   # or https://github.example.com/api/v3
 github: {repo: owner/repo, auth: {token_env: GITHUB_TOKEN}}
-# OAuth (browser/device):
+# OAuth (device or browser):
 # github: {repo: owner/repo, auth: {oauth: {client_id: Iv1.xxxx, flow: device, scope: repo}}}
 # # then: forgeo auth login --provider github --client-id Iv1.xxxx
 ```
 
 - Issue numbers → task IDs; `title`/`body`/`created_at`/`updated_at` → task fields.
-- `open` → `OPEN`, `closed` → `COMPLETED`; labels `forgeo-running`/`blocked`/`failed` for the rest.
+- `open` → `OPEN`, `closed` → `COMPLETED`; labels `forgeo-running`/`forgeo-blocked`/`forgeo-failed` for the rest.
 - Engine state in hidden `<!-- forgeo: {...} -->` block inside the body.
 - Paginated `GET /repos/{owner}/{repo}/issues?state=all`; claiming adds `forgeo-running` + `claimed_at`.
 
@@ -219,12 +219,12 @@ GITHUB_TOKEN=... ./scripts/test-github-backlog-e2e.sh
 backlog_provider: gitlab
 backlog: https://gitlab.example.com   # instance root, /api/v4 appended
 gitlab: {repo: group/project, auth: {token_env: GITLAB_TOKEN}}
-# OAuth (browser PKCE):
+# OAuth (browser PKCE, device if enabled by the instance):
 # gitlab: {repo: group/project, auth: {oauth: {client_id: abc, flow: browser, scope: api}}}
 # # then: forgeo auth login --provider gitlab --client-id abc
 ```
 
-- `iid` → task ID; `opened`/`closed` → `OPEN`/`COMPLETED`; same hidden-block and label mechanics as GitHub.
+- `iid` → task ID; `opened`/`closed` → `OPEN`/`COMPLETED`; labels `forgeo-running`/`forgeo-blocked`/`forgeo-failed`; same hidden-block mechanics as GitHub. OAuth is an alternative to `token_env` and supports browser PKCE (or device flow when enabled by the GitLab instance).
 - Paginated `GET /api/v4/projects/:id/issues?state=all`.
 
 ## Managing tasks

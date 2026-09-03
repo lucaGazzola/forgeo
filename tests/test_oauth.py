@@ -1,10 +1,11 @@
-"""Client-credentials token provider: caching, renewal, and failure messages."""
+"""OAuth token providers: caching, renewal, and failure messages."""
 
 from __future__ import annotations
 
 import io
 import json
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from forgeo.oauth import (
     ClientCredentialsTokenProvider,
     TokenError,
 )
+from forgeo.oauth_jira import JiraOAuthTokenProvider, JiraTokenStore
 
 SECRET_ENV = "FORGEO_TEST_CLIENT_SECRET"
 
@@ -184,3 +186,29 @@ def test_response_without_access_token_is_an_error(
     patch_urlopen(monkeypatch, lambda request, timeout=None: _response({"nope": 1}))
     with pytest.raises(TokenError, match="no access_token"):
         ClientCredentialsTokenProvider(make_auth()).token()
+
+
+def test_jira_invalidate_refreshes_with_the_stored_refresh_token(tmp_path, monkeypatch):
+    secret_env = "FORGEO_TEST_JIRA_CLIENT_SECRET"
+    monkeypatch.setenv(secret_env, "s3cr3t")
+    store = JiraTokenStore(path=Path(tmp_path) / "jira.json")
+    store.save(
+        {
+            "access_token": "old-token",
+            "refresh_token": "refresh-token",
+            "expires_in": 3600,
+        }
+    )
+    provider = JiraOAuthTokenProvider(
+        store,
+        client_id="jira-client",
+        client_secret_env=secret_env,
+    )
+    refreshed = {"access_token": "new-token", "expires_in": 3600}
+    monkeypatch.setattr("forgeo.oauth_jira._refresh_token", lambda *args: refreshed)
+
+    assert provider.token() == "old-token"
+    provider.invalidate()
+    assert provider.token() == "new-token"
+    assert store.load() is not None
+    assert store.load()["refresh_token"] == "refresh-token"

@@ -404,6 +404,8 @@ def run_browser_flow(
     scope: str | None = None,
     *,
     client_secret: str | None = None,
+    open_browser: bool = True,
+    callback_port: int | None = None,
     timeout: float = 300.0,
 ) -> dict[str, Any]:
     """Open browser for GitHub OAuth and exchange code for token.
@@ -413,8 +415,14 @@ def run_browser_flow(
     """
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(16)
-    # Start loopback server on ephemeral port
-    server = HTTPServer(("127.0.0.1", 0), _CallbackHandler)
+    if callback_port is not None and not 1 <= callback_port <= 65535:
+        raise GithubOAuthError("OAuth callback port must be between 1 and 65535")
+    # Use an ephemeral port by default; a fixed port can be supplied when the
+    # provider requires an exact callback URL to be registered.
+    try:
+        server = HTTPServer(("127.0.0.1", callback_port or 0), _CallbackHandler)
+    except OSError as exc:
+        raise GithubOAuthError(f"Could not bind OAuth callback port: {exc}") from exc
     addr = server.server_address
     host: str = str(addr[0])
     port: int = int(addr[1])
@@ -432,11 +440,14 @@ def run_browser_flow(
     if not scope:
         params["scope"] = "repo"
     auth_url = f"{oauth_base.rstrip('/')}/login/oauth/authorize?{urlencode(params)}"
-    print(f"\nOpening browser for GitHub login:\n  {auth_url}\n")
-    try:
-        webbrowser.open(auth_url)
-    except Exception:
-        print(f"Could not open browser automatically; please open:\n  {auth_url}")
+    if open_browser:
+        print(f"\nOpening browser for GitHub login:\n  {auth_url}\n")
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            print(f"Could not open browser automatically; please open:\n  {auth_url}")
+    else:
+        print(f"\nOpen this URL in your browser to authorize Forgeo:\n  {auth_url}\n")
     # Wait for callback
     server.timeout = timeout
 

@@ -127,7 +127,9 @@ Table of all instances: name, daemon state, last outcome (from `runs.jsonl`). Ex
 
 ## `forgeo auth`
 
-Browser/OAuth login for `github`/`gitlab`/`jira` (alternative to `*_TOKEN` PAT). Tokens stored `0600` in `~/.config/forgeo/tokens/` and read by `forgeo validate`/`start`/`once`.
+Browser/OAuth login for `github`/`gitlab`/`jira` (alternative to a PAT in an environment variable). This is separate from `backlog_auth`, which uses OAuth2 client credentials for an HTTP backlog. Tokens are stored `0600` in `~/.config/forgeo/tokens/` and read by `forgeo validate`/`start`/`once`.
+
+Create an OAuth application with the provider before logging in. GitHub defaults to the device flow, GitLab defaults to browser PKCE, and Jira Cloud supports browser PKCE only. Browser flows listen on `127.0.0.1`; the port is ephemeral unless `--callback-port` is supplied. If the provider requires an exact registered redirect URI, register `http://127.0.0.1:<port>/callback` and use that same port in the command.
 
 ### `forgeo auth login --provider <github|gitlab|jira>`
 
@@ -136,17 +138,26 @@ Browser/OAuth login for `github`/`gitlab`/`jira` (alternative to `*_TOKEN` PAT).
 | `--provider` | `github` (default) / `gitlab` / `jira`. |
 | `--config <file>` | `forgeo.yaml` to read `auth.oauth.client_id` (defaults to `./forgeo.yaml`). |
 | `--client-id <id>` | OAuth client ID (overrides config; required if not in `forgeo.yaml`). |
-| `--flow <device|browser>` | `device` (GitHub CLI) / `browser` (PKCE loopback `127.0.0.1:0/callback`). Defaults: `device` for GitHub, `browser` for GitLab/Jira. |
+| `--flow <device|browser>` | `device` for GitHub, `browser` for GitLab/Jira. GitLab device flow is available only when enabled by the GitLab instance; Jira is browser-only. |
 | `--scope <scope>` | Scope (default `repo` / `api` / `offline_access read:jira-user read:jira-work`). |
 | `--token-file <path>` | Where to store token (default per-provider per-host `~/.config/forgeo/tokens/<provider>.json`). |
+| `--callback-port <port>` | Fixed `127.0.0.1` port for browser callbacks. Default is an ephemeral port; use this when the OAuth app requires an exact callback URI. |
+| `--cloud-id <id>` | Jira Cloud ID (overrides `jira.auth.oauth.cloud_id`). |
 | `--api-base <url>` | Provider API base (default from `forgeo.yaml` backlog or `https://api.github.com`/`https://gitlab.com`). |
-| `--no-open-browser` | Print URL instead of `webbrowser.open()`. |
+| `--no-open-browser` | Print the authorization URL instead of opening it automatically. Applies to browser and device flows. |
 
-Device flow: prints `https://github.com/login/device` + `user_code`, polls `…/login/oauth/access_token`. Browser flow: opens `…/oauth/authorize` + PKCE `code_challenge`, listens on loopback, exchanges `code` for `access_token` (`refresh_token` for Jira). `forgeo init` with `browser` writes `auth.oauth` and offers `Run browser login now?`.
+Device flow: prints a verification URL and user code, then polls the provider token endpoint. Browser flow: opens (or prints) the provider authorization URL with a PKCE `code_challenge`, listens on loopback, and exchanges the callback code for an access token. Jira also discovers an Atlassian `cloud_id` and stores a refresh token when one is returned. If `client_secret_env` is configured for Jira, export that variable for token refreshes by the daemon. `forgeo init` with OAuth writes `auth.oauth` and offers to run login immediately.
 
 ### `forgeo auth status --provider <p>` / `forgeo auth logout --provider <p>`
 
-`status` masks token (`ghp_…1234`), shows `scope`/`expires_in`/`cloud_id` (Jira). `logout` removes the file. Both honour `--token-file`/`--api-base`/`--config`.
+```bash
+forgeo auth status --provider github
+forgeo auth status --provider gitlab
+forgeo auth status --provider jira
+forgeo auth logout --provider github
+```
+
+`status` masks the token and shows `scope`/`expires_in`/`cloud_id` (Jira). `logout` removes the file. Both honor `--token-file`/`--api-base`/`--config` and use the project-local `forgeo.yaml` when it exists; pass `--config` for a config elsewhere.
 
 ## `forgeo web`
 

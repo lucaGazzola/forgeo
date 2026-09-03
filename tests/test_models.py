@@ -267,6 +267,32 @@ def test_task_context_path_resolves_and_round_trips(tmp_path):
     assert disk["task_context"] == "CONTEXT.md"
 
 
+def test_oauth_token_file_resolves_and_round_trips_relative_to_config(tmp_path):
+    config_path = tmp_path / "forgeo.yaml"
+    config_path.write_text(
+        "backlog_provider: github\n"
+        "backlog: https://api.github.com\n"
+        "github:\n"
+        "  repo: owner/repo\n"
+        "  auth:\n"
+        "    oauth:\n"
+        "      client_id: client\n"
+        "      token_file: tokens/github.json\n"
+        "agent_command: echo\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.github is not None
+    assert config.github.auth.oauth is not None
+    assert config.github.auth.oauth.token_file == tmp_path.resolve() / "tokens/github.json"
+
+    save_config(config_path, config)
+    disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert disk["github"]["auth"]["oauth"]["token_file"] == str(Path("tokens") / "github.json")
+
+
 def test_save_config_stores_paths_relative_to_file(tmp_path):
     config_path = tmp_path / "forgeo.yaml"
     config = ForgeoConfig(
@@ -446,6 +472,23 @@ def test_jira_basic_auth_requires_a_username():
             backlog_provider="jira",
             jira=jira_payload(
                 auth={"scheme": "basic", "token_env": "JIRA_TOKEN"}
+            ),
+        )
+
+
+def test_jira_oauth_only_allows_browser_flow():
+    with pytest.raises(ValidationError, match="browser"):
+        ForgeoConfig(
+            agent_command="x",
+            backlog="https://jira.example.com",
+            backlog_provider="jira",
+            jira=jira_payload(
+                auth={
+                    "oauth": {
+                        "client_id": "client",
+                        "flow": "device",
+                    }
+                }
             ),
         )
 

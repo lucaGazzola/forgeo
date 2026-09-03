@@ -28,6 +28,43 @@ def _maybe_resolve(path: Path | None, base: Path) -> Path | None:
     return base / path
 
 
+def _resolve_oauth_token_files(config: ForgeoConfig, base: Path) -> dict[str, object]:
+    """Resolve relative issue-provider OAuth token files against the config."""
+    updates: dict[str, object] = {}
+    for name in ("jira", "github", "gitlab"):
+        provider = getattr(config, name)
+        if provider is None:
+            continue
+        oauth = provider.auth.oauth
+        if oauth is None or oauth.token_file is None:
+            continue
+        raw = str(oauth.token_file)
+        # Keep the conventional home-directory spelling for TokenStore to expand.
+        if raw.startswith("~"):
+            continue
+        resolved = _maybe_resolve(Path(raw), base)
+        if resolved is None:
+            continue
+        oauth = oauth.model_copy(update={"token_file": resolved})
+        auth = provider.auth.model_copy(update={"oauth": oauth})
+        updates[name] = provider.model_copy(update={"auth": auth})
+    return updates
+
+
+def _store_relative_path(value: object, base: Path) -> object:
+    """Store an absolute path relative to the config when possible."""
+    raw = str(value)
+    if raw.startswith("~"):
+        return value
+    path = Path(raw)
+    if not path.is_absolute():
+        return value
+    try:
+        return os.path.relpath(path, base)
+    except ValueError:
+        return value
+
+
 def load_config(path: str | Path) -> ForgeoConfig:
     """Load and validate a Forgeo YAML file.
 
@@ -39,7 +76,7 @@ def load_config(path: str | Path) -> ForgeoConfig:
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     config = ForgeoConfig.model_validate(payload)
     base = config_path.parent.resolve()
-    updates: dict[str, Path | str] = {}
+    updates: dict[str, object] = {}
     for field in ("repo", "blocker_file", "task_context"):
         if resolved := _maybe_resolve(getattr(config, field), base):
             updates[field] = resolved
@@ -54,6 +91,7 @@ def load_config(path: str | Path) -> ForgeoConfig:
         updates["state_dir"] = resolved
     if resolved := _maybe_resolve(Path(config.log_file), base):
         updates["log_file"] = str(resolved)
+    updates.update(_resolve_oauth_token_files(config, base))
     return config if not updates else config.model_copy(update=updates)
 
 
@@ -85,5 +123,15 @@ def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:
                 payload[field] = os.path.relpath(value, base)
             except ValueError:
                 pass  # different drive (Windows): keep the absolute path
+    for name in ("jira", "github", "gitlab"):
+        provider = payload.get(name)
+        if not isinstance(provider, dict):
+            continue
+        auth = provider.get("auth")
+        if not isinstance(auth, dict):
+            continue
+        oauth = auth.get("oauth")
+        if isinstance(oauth, dict) and oauth.get("token_file") is not None:
+            oauth["token_file"] = _store_relative_path(oauth["token_file"], base)
     atomic_write_text(config_path, yaml.safe_dump(payload, sort_keys=False))
     return load_config(config_path)

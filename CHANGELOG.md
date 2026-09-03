@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OAuth issue-backlog login now supports printed browser URLs, fixed loopback callback ports, project-local config resolution for `auth status`/`logout`, and config-relative token files. Documentation now distinguishes browser OAuth from HTTP client credentials and records provider-specific flow, secret, and callback requirements.
+
 ## [0.12.0] - 2026-09-03
 
 ### Added

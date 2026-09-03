@@ -73,6 +73,9 @@ class JiraTokenStore:
         return data
 
     def save(self, data: dict[str, Any]) -> None:
+        data = dict(data)
+        if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
+            data["issued_at"] = time.time()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -116,6 +119,7 @@ class JiraOAuthTokenProvider:
         self._lock = threading.Lock()
         self._token: str | None = None
         self._expires_at: float = 0.0
+        self._refresh_requested = False
 
     def token(self) -> str:
         with self._lock:
@@ -126,32 +130,31 @@ class JiraOAuthTokenProvider:
                 raise JiraOAuthError(
                     f"Jira OAuth token not found at {self.store.path}; run `forgeo auth login --provider jira`."
                 )
-            # Check expiry, attempt refresh if needed and possible
             expires_in = data.get("expires_in")
-            # If we have a stored expires_at, use it; otherwise compute from expires_in if present
-            # We store expires_at as absolute monotonic? Instead store expires_at timestamp? Simpler: use expires_in as lifetime and check if near expiry
-            # For now, if expires_in present and we have issued_at, compute remaining
-            # If token is considered expired, try refresh
-            # We will treat if we have refresh_token and expires_in indicates near expiry, we refresh
-            # For simplicity, if token has expires_in and we are past margin, try refresh
-            # But we don't have issued time; we approximate that load time is close to issue time and use _expires_at cache
-            # If _expires_at is inf (no expiry), just return
-            # If we are here, either _token was None or expired ( _expires_at <= now ), so we need to maybe refresh
-            if data.get("refresh_token") and isinstance(expires_in, int | float):
-                # We don't know when token was issued; if we have no cached expiry, we try to use it as is unless we know it's expired
-                # If we previously cached expiry and now it's expired, we are here because _expires_at <= now
-                # So we should attempt refresh if we have refresh_token
-                # Check if we should refresh: if _expires_at != inf and time.monotonic() >= _expires_at
-                if self._expires_at != float("inf") and self._token is not None:
-                    # We were cached and now expired -> refresh
-                    refreshed = self._refresh(data)
-                    if refreshed:
-                        data = refreshed
+            refresh_due = self._refresh_requested
+            if self._token is not None and self._expires_at != float("inf"):
+                refresh_due = True
+            issued_at = data.get("issued_at")
+            if (
+                isinstance(expires_in, int | float)
+                and isinstance(issued_at, int | float)
+                and time.time() >= float(issued_at) + float(expires_in) - EXPIRY_MARGIN_SECONDS
+            ):
+                refresh_due = True
+            if data.get("refresh_token") and isinstance(expires_in, int | float) and refresh_due:
+                refreshed = self._refresh(data)
+                if refreshed:
+                    data = refreshed
+            self._refresh_requested = False
             # Now set cache
             access = str(data["access_token"])
             lifetime = data.get("expires_in")
             if isinstance(lifetime, int | float) and lifetime > 0:
-                self._expires_at = time.monotonic() + max(float(lifetime) - EXPIRY_MARGIN_SECONDS, 0.0)
+                remaining = float(lifetime) - EXPIRY_MARGIN_SECONDS
+                issued_at = data.get("issued_at")
+                if isinstance(issued_at, int | float):
+                    remaining = float(issued_at) + float(lifetime) - time.time() - EXPIRY_MARGIN_SECONDS
+                self._expires_at = time.monotonic() + max(remaining, 0.0)
             else:
                 self._expires_at = float("inf")
             self._token = access
@@ -171,6 +174,8 @@ class JiraOAuthTokenProvider:
             # Preserve cloud_id if not in new_data
             if "cloud_id" not in new_data and data.get("cloud_id"):
                 new_data["cloud_id"] = data["cloud_id"]
+            if "refresh_token" not in new_data and refresh:
+                new_data["refresh_token"] = refresh
             self.store.save(new_data)
             return new_data
         except Exception as exc:  # noqa: BLE001
@@ -181,10 +186,15 @@ class JiraOAuthTokenProvider:
         with self._lock:
             self._token = None
             self._expires_at = 0.0
+            self._refresh_requested = True
 
     def save_token(self, data: dict[str, Any]) -> None:
+        data = dict(data)
+        if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
+            data["issued_at"] = time.time()
         self.store.save(data)
         with self._lock:
+            self._refresh_requested = False
             self._token = str(data["access_token"]) if data.get("access_token") else None
             lifetime = data.get("expires_in")
             if isinstance(lifetime, int | float) and lifetime > 0:
@@ -296,13 +306,22 @@ def run_browser_flow(
     *,
     client_secret: str | None = None,
     cloud_id: str | None = None,
+    open_browser: bool = True,
+    callback_port: int | None = None,
     timeout: float = 300.0,
 ) -> dict[str, Any]:
     """Run Atlassian OAuth 3LO browser flow and return token data including cloud_id."""
     del oauth_base  # Atlassian base is fixed
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(16)
-    server = HTTPServer(("127.0.0.1", 0), _CallbackHandler)
+    if callback_port is not None and not 1 <= callback_port <= 65535:
+        raise JiraOAuthError("OAuth callback port must be between 1 and 65535")
+    # Use an ephemeral port by default; a fixed port can be supplied when the
+    # provider requires an exact callback URL to be registered.
+    try:
+        server = HTTPServer(("127.0.0.1", callback_port or 0), _CallbackHandler)
+    except OSError as exc:
+        raise JiraOAuthError(f"Could not bind OAuth callback port: {exc}") from exc
     addr = server.server_address
     host: str = str(addr[0])
     port: int = int(addr[1])
@@ -324,11 +343,14 @@ def run_browser_flow(
         "code_challenge_method": "S256",
     }
     auth_url = f"{ATLASSIAN_AUTH_BASE}/authorize?{urlencode(params)}"
-    print(f"\nOpening browser for Jira login:\n  {auth_url}\n")
-    try:
-        webbrowser.open(auth_url)
-    except Exception:
-        print(f"Could not open browser automatically; please open:\n  {auth_url}")
+    if open_browser:
+        print(f"\nOpening browser for Jira login:\n  {auth_url}\n")
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            print(f"Could not open browser automatically; please open:\n  {auth_url}")
+    else:
+        print(f"\nOpen this URL in your browser to authorize Forgeo:\n  {auth_url}\n")
     server.timeout = timeout
     last_handler: list[_CallbackHandler] = []
 

@@ -23,6 +23,8 @@ from forgeo.cli import (
     cmd_instance_add,
     cmd_instance_list,
     cmd_instance_rm,
+    cmd_auth_login,
+    cmd_auth_status,
     cmd_once,
     cmd_restart,
     cmd_run,
@@ -1061,6 +1063,85 @@ def test_parser_parses_instance_subcommands():
     assert build_parser().parse_args(["instance", "rm", "my-repo"]).instance_action == "rm"
     assert build_parser().parse_args(["instance", "list"]).instance_action == "list"
     assert build_parser().parse_args(["list"]).action == "list"
+
+
+def test_auth_login_parser_accepts_callback_options():
+    args = build_parser().parse_args(
+        [
+            "auth",
+            "login",
+            "--provider",
+            "gitlab",
+            "--flow",
+            "browser",
+            "--callback-port",
+            "8765",
+            "--no-open-browser",
+        ]
+    )
+    assert args.callback_port == 8765
+    assert args.no_open_browser is True
+
+
+def test_auth_login_passes_browser_options_to_github_flow(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_browser_flow(client_id, oauth_base, scope, **kwargs):
+        calls.update(client_id=client_id, oauth_base=oauth_base, scope=scope, **kwargs)
+        return {"access_token": "secret"}
+
+    monkeypatch.setattr("forgeo.oauth_github.run_browser_flow", fake_browser_flow)
+    args = build_parser().parse_args(
+        [
+            "auth",
+            "login",
+            "--provider",
+            "github",
+            "--client-id",
+            "client",
+            "--flow",
+            "browser",
+            "--token-file",
+            str(tmp_path / "token.json"),
+            "--callback-port",
+            "8765",
+            "--no-open-browser",
+        ]
+    )
+
+    assert cmd_auth_login(args) == 0
+    assert calls["client_id"] == "client"
+    assert calls["open_browser"] is False
+    assert calls["callback_port"] == 8765
+    assert (tmp_path / "token.json").exists()
+
+
+def test_auth_status_uses_project_default_config(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "project"
+    token_path = config_dir / "tokens" / "github.json"
+    config_dir.mkdir()
+    (config_dir / "forgeo.yaml").write_text(
+        "backlog_provider: github\n"
+        "backlog: https://api.github.com\n"
+        "github:\n"
+        "  repo: owner/repo\n"
+        "  auth:\n"
+        "    oauth:\n"
+        "      client_id: client\n"
+        "      token_file: tokens/github.json\n"
+        "agent_command: echo\n",
+        encoding="utf-8",
+    )
+    from forgeo.oauth_github import GithubTokenStore
+
+    GithubTokenStore(path=token_path).save({"access_token": "secret-token"})
+    monkeypatch.chdir(config_dir)
+
+    args = build_parser().parse_args(["auth", "status", "--provider", "github"])
+    assert cmd_auth_status(args) == 0
+    output = capsys.readouterr().out
+    assert "tokens" in output
+    assert token_path.name in output
 
 
 def test_instance_add_and_register(tmp_path, git_repo, monkeypatch, capsys):

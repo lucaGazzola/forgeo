@@ -41,7 +41,7 @@ from forgeo.instances import list_instances, load_registry
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.paths import lock_path, runs_path
 from forgeo.runs import RunRecorder
-from tests.conftest import FakeForgeo, git, make_config, make_task
+from tests.conftest import FakeForgeo, git, make_config, make_task, requires_posix
 
 
 def write_config(git_repo: Path, tmp_path: Path, **overrides) -> Path:
@@ -170,6 +170,7 @@ def test_once_triggers_update_check(git_repo, tmp_path, monkeypatch, capsys):
     assert "0.5.0" in out
 
 
+@requires_posix
 def test_once_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
     config_path = write_config(git_repo, tmp_path)
     fake = FakeForgeo()
@@ -184,6 +185,7 @@ def test_once_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
     lock.close()
 
 
+@requires_posix
 def test_once_refuses_while_daemon_lock_held(git_repo, tmp_path, monkeypatch):
     config_path = write_config(git_repo, tmp_path)
     fake = FakeForgeo()
@@ -302,6 +304,7 @@ def test_run_refuses_non_open_task(git_repo, tmp_path, monkeypatch, capsys):
     assert "only OPEN tasks" in out
 
 
+@requires_posix
 def test_run_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
     config_path = write_config(git_repo, tmp_path)
     fake = FakeForgeo()
@@ -529,6 +532,7 @@ def test_status_works_with_missing_backlog(git_repo, tmp_path, capsys):
     assert "next: (none)" in out
 
 
+@requires_posix
 def test_status_reports_daemon_running(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
     lock = acquire_run_lock(tmp_path / "backlog.lock")
@@ -786,6 +790,7 @@ def test_validate_reports_all_problems_at_once(git_repo, tmp_path, capsys):
     assert "not ready to run (2 problem(s))" in out
 
 
+@requires_posix
 def test_validate_reports_lock_held(git_repo, tmp_path, monkeypatch, capsys):
     config_path = write_config(git_repo, tmp_path)
     lock = acquire_run_lock(tmp_path / "backlog.lock")
@@ -853,9 +858,21 @@ def test_validate_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, c
     assert "Forgeo is ready to run." in capsys.readouterr().out
 
 
-def test_validate_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("command", ["validate", "status", "once", "run"])
+def test_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys, command):
+    """Every command refuses an instance name that is not in the registry."""
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
-    assert cmd_validate(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
+    if command == "run":
+        args = argparse.Namespace(config=DEFAULT_CONFIG, name="nope", task="SELF-012")
+    else:
+        args = argparse.Namespace(config=DEFAULT_CONFIG, name="nope")
+    dispatch = {
+        "validate": cmd_validate,
+        "status": cmd_status,
+        "once": cmd_once,
+        "run": cmd_run,
+    }
+    assert dispatch[command](args) == 1
     assert "Unknown instance" in capsys.readouterr().out
 
 
@@ -875,6 +892,7 @@ def test_stop_registers_unregistered_instance(git_repo, tmp_path, monkeypatch, c
     assert load_registry() == {"test-forgeo": str(config_path.resolve())}
 
 
+@requires_posix
 def test_start_registers_instance_in_registry(git_repo, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -895,6 +913,7 @@ def test_start_registers_instance_in_registry(git_repo, tmp_path, monkeypatch, c
             cmd_stop(stop_args(config_path))
 
 
+@requires_posix
 def test_start_detached_refuses_when_already_running(git_repo, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -949,6 +968,7 @@ def test_stop_missing_config(tmp_path, capsys):
     assert "not found" in capsys.readouterr().out
 
 
+@requires_posix
 def test_stop_stale_pid_errors(git_repo, tmp_path, monkeypatch, capsys):
     """Lock held by an unknown process with a dead recorded pid: refuse."""
     import fcntl
@@ -966,6 +986,7 @@ def test_stop_stale_pid_errors(git_repo, tmp_path, monkeypatch, capsys):
         handle.close()
 
 
+@requires_posix
 def test_stop_terminates_running_daemon(git_repo, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -983,6 +1004,7 @@ def test_stop_terminates_running_daemon(git_repo, tmp_path, monkeypatch, capsys)
             proc.kill()
 
 
+@requires_posix
 def test_restart_starts_daemon_when_not_running(git_repo, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -1000,6 +1022,7 @@ def test_restart_starts_daemon_when_not_running(git_repo, tmp_path, monkeypatch,
         cmd_stop(stop_args(config_path))
 
 
+@requires_posix
 def test_restart_replaces_running_daemon(git_repo, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -1257,6 +1280,7 @@ def test_instance_list_table_shows_state(tmp_path, git_repo, monkeypatch, capsys
     assert "OPEN=" not in out
 
 
+@requires_posix
 def test_instance_list_reports_daemon_running(tmp_path, git_repo, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path)
@@ -1291,12 +1315,6 @@ def test_status_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, cap
     assert "name: test-forgeo" in capsys.readouterr().out
 
 
-def test_status_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
-    assert cmd_status(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
-    assert "Unknown instance" in capsys.readouterr().out
-
-
 def test_once_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path)
@@ -1307,12 +1325,6 @@ def test_once_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsy
     assert cmd_once(argparse.Namespace(config=DEFAULT_CONFIG, name="my-repo")) == 0
     assert fake.cycles == 1
     assert "Cycle finished: task" in capsys.readouterr().out
-
-
-def test_once_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
-    assert cmd_once(argparse.Namespace(config=DEFAULT_CONFIG, name="nope")) == 1
-    assert "Unknown instance" in capsys.readouterr().out
 
 
 def test_run_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
@@ -1331,15 +1343,6 @@ def test_run_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys
     assert "Cycle finished: task" in capsys.readouterr().out
 
 
-def test_run_unknown_name_exits_nonzero(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
-    assert (
-        cmd_run(argparse.Namespace(config=DEFAULT_CONFIG, name="nope", task="SELF-012"))
-        == 1
-    )
-    assert "Unknown instance" in capsys.readouterr().out
-
-
 def test_stop_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path)
@@ -1349,6 +1352,7 @@ def test_stop_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsy
     assert "not running" in capsys.readouterr().out
 
 
+@requires_posix
 def test_restart_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(git_repo, tmp_path, interval_minutes=600)
@@ -1367,6 +1371,7 @@ def test_restart_resolves_name_from_registry(tmp_path, git_repo, monkeypatch, ca
         cmd_stop(stop_args(config_path))
 
 
+@requires_posix
 def test_two_instances_stay_fully_independent(
     git_repo, git_template, tmp_path, monkeypatch, capsys
 ):

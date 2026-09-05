@@ -307,7 +307,7 @@ def test_save_config_stores_paths_relative_to_file(tmp_path):
 
     disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert disk["name"] == "demo"
-    assert disk["repo"] == "../repo"
+    assert disk["repo"] == str(Path("..") / "repo")
     assert disk["backlog"] == "tasks.json"
     assert disk["blocker_file"] == "BLOCKER.md"
     assert disk["log_file"] == "forgeo.log"

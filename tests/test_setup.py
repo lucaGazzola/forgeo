@@ -143,7 +143,7 @@ def test_run_setup_keeps_existing_gitignore(tmp_path):
 def test_run_setup_aborts_on_absolute_folder(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
-    assert _run_setup(project, "/tmp/outside") is None
+    assert _run_setup(project, str(tmp_path / "outside")) is None
     assert not (project / "forgeo.yaml").exists()
 
 

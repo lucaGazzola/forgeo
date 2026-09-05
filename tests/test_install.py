@@ -20,9 +20,18 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from tests.conftest import HAVE_POSIX
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 PYPI_PACKAGE = "forgeo-cli"
+
+pytestmark = pytest.mark.skipif(
+    not HAVE_POSIX or shutil.which("sh") is None,
+    reason="install.sh tests require a POSIX shell (sh) on PATH",
+)
 
 
 def _installer_default_version() -> str:
@@ -37,8 +46,6 @@ def _installer_default_version() -> str:
 
 
 VERSION = _installer_default_version()
-SH = shutil.which("sh")
-assert SH, "sh must be available to run install.sh"
 
 FAKE_BINARY = "#!/bin/sh\nprintf 'forgeo-binary-stub %s\\n' \"${1:-}\"\n"
 
@@ -150,7 +157,7 @@ def _run_install(
     (tmp_path / "fake_binary").write_text(FAKE_BINARY, encoding="utf-8")
     _write_bin(bin_dir, stubs or ["uname", "curl"])
     return subprocess.run(
-        [SH, str(INSTALL_SH)],
+        ["sh", str(INSTALL_SH)],
         env=env,
         capture_output=True,
         text=True,

@@ -4,10 +4,13 @@ used across suites."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +40,40 @@ def _skip_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
     deleting the variable.
     """
     monkeypatch.setenv("FORGEO_UPDATE_CHECK", "0")
+
+
+#: True when the platform has POSIX process-group semantics (``os.killpg``).
+HAVE_POSIX = hasattr(os, "killpg")
+
+#: True when a ``docker`` binary is on PATH (the docker-sandbox tests need it).
+HAVE_DOCKER = shutil.which("docker") is not None
+
+requires_posix = pytest.mark.skipif(
+    not HAVE_POSIX,
+    reason="requires POSIX process-group semantics (os.killpg)",
+)
+requires_docker = pytest.mark.skipif(
+    not HAVE_DOCKER, reason="docker binary is not on PATH"
+)
+
+
+async def wait_for_async(
+    predicate: Callable[[], bool],
+    *,
+    timeout: float = 10.0,
+    interval: float = 0.02,
+) -> None:
+    """Poll ``predicate`` until it is truthy; raise ``TimeoutError`` otherwise.
+
+    Used instead of a bare ``while ... : await asyncio.sleep(0.01)`` loop so a
+    slow or loaded CI runner cannot hang a test forever.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise TimeoutError(f"condition not met within {timeout:g}s")
 
 
 def git(repo: Path, *args: str) -> str:

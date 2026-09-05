@@ -17,7 +17,14 @@ from forgeo.daemon import (
     read_lock_pid,
 )
 from forgeo.models import ExecutionResult, ExecutionStatus, TaskStatus
-from tests.conftest import FakeForgeo, make_config, make_forgeo, make_task
+from tests.conftest import (
+    FakeForgeo,
+    make_config,
+    make_forgeo,
+    make_task,
+    requires_posix,
+    wait_for_async,
+)
 
 
 def make_daemon(git_repo, tmp_path, interval=1, **overrides) -> ForgeoDaemon:
@@ -29,12 +36,11 @@ async def test_daemon_runs_cycles_on_interval(git_repo, tmp_path):
     daemon = make_daemon(git_repo, tmp_path)
     daemon.interval_seconds = 0.01
     task = asyncio.create_task(daemon.run_forever())
-
-    while daemon.forgeo.cycles == 0:
-        await asyncio.sleep(0.01)
-    daemon.stop()
-    await asyncio.wait_for(task, timeout=5)
-
+    try:
+        await wait_for_async(lambda: daemon.forgeo.cycles >= 1)
+    finally:
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=10)
     assert daemon.forgeo.cycles >= 1
 
 
@@ -50,12 +56,15 @@ async def test_daemon_survives_crashed_cycle(git_repo, tmp_path, caplog):
     daemon.forgeo.cycles = 0
     with caplog.at_level(logging.ERROR, logger="forgeo"):
         task = asyncio.create_task(daemon.run_forever())
-        await asyncio.sleep(0.1)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.last_outcome == "error")
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
     assert "boom" in caplog.text
 
 
+@requires_posix
 def test_run_lock_is_exclusive(tmp_path):
     lock_path = tmp_path / "forgeo.lock"
     first = acquire_run_lock(lock_path)
@@ -65,6 +74,7 @@ def test_run_lock_is_exclusive(tmp_path):
     assert acquire_run_lock(lock_path) is not None
 
 
+@requires_posix
 def test_is_lock_held_detects_holder_and_stale_file(tmp_path):
     lock_path = tmp_path / "forgeo.lock"
     assert is_lock_held(lock_path) is False
@@ -75,6 +85,7 @@ def test_is_lock_held_detects_holder_and_stale_file(tmp_path):
     assert is_lock_held(lock_path) is False
 
 
+@requires_posix
 def test_run_lock_held_while_active(tmp_path):
     lock_path = tmp_path / "forgeo.run"
     first = RunLock(lock_path)
@@ -103,6 +114,7 @@ def test_read_lock_pid_garbage(tmp_path):
     assert read_lock_pid(lock_path) is None
 
 
+@requires_posix
 def test_failed_acquire_keeps_holders_pid(tmp_path):
     """A second, failing acquire must not wipe the running holder's PID."""
     lock_path = tmp_path / "forgeo.lock"
@@ -114,27 +126,19 @@ def test_failed_acquire_keeps_holders_pid(tmp_path):
         held.close()
 
 
+@requires_posix
 async def test_daemon_skips_when_previous_run_active(git_repo, tmp_path):
     daemon = make_daemon(git_repo, tmp_path)
     daemon.interval_seconds = 0.01
     lock = RunLock(daemon.run_lock.lock_path)
     with lock.held():
         task = asyncio.create_task(daemon.run_forever())
-        await asyncio.sleep(0.1)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.last_outcome == "skipped")
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
     assert daemon.forgeo.cycles == 0
-
-
-async def test_daemon_runs_after_run_lock_released(git_repo, tmp_path):
-    daemon = make_daemon(git_repo, tmp_path)
-    daemon.interval_seconds = 0.01
-    task = asyncio.create_task(daemon.run_forever())
-    while daemon.forgeo.cycles == 0:
-        await asyncio.sleep(0.01)
-    daemon.stop()
-    await asyncio.wait_for(task, timeout=5)
-    assert daemon.forgeo.cycles >= 1
 
 
 async def test_compute_next_run_at_shortened_by_future_run_at(git_repo, tmp_path):
@@ -206,10 +210,11 @@ async def test_daemon_next_run_at_reflects_future_run_at(git_repo, tmp_path):
     daemon = ForgeoDaemon(forgeo.config, forgeo)
     daemon.interval_seconds = 3600
     task = asyncio.create_task(daemon.run_forever())
-    while daemon.next_run_at is None:
-        await asyncio.sleep(0.02)
-    daemon.stop()
-    await asyncio.wait_for(task, timeout=5)
+    try:
+        await wait_for_async(lambda: daemon.next_run_at is not None)
+    finally:
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=10)
     delay = (daemon.next_run_at - datetime.now(UTC)).total_seconds()
     assert 0 <= delay <= 12
 
@@ -233,10 +238,11 @@ async def test_state_file_tracks_runs(git_repo, tmp_path):
     daemon = make_daemon(git_repo, tmp_path)
     daemon.interval_seconds = 0.01
     task = asyncio.create_task(daemon.run_forever())
-    while daemon.forgeo.cycles == 0:
-        await asyncio.sleep(0.01)
-    daemon.stop()
-    await asyncio.wait_for(task, timeout=5)
+    try:
+        await wait_for_async(lambda: daemon.forgeo.cycles >= 1)
+    finally:
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=10)
 
     payload = json.loads(daemon.state_file.read_text(encoding="utf-8"))
     assert payload["pid"] == os.getpid()
@@ -257,10 +263,11 @@ async def test_daemon_snapshots_backlog_on_startup(git_repo, tmp_path):
     daemon = ForgeoDaemon(forgeo.config, forgeo)
     daemon.interval_seconds = 0.01
     task = asyncio.create_task(daemon.run_forever())
-    while daemon.last_outcome is None:
-        await asyncio.sleep(0.01)
-    daemon.stop()
-    await asyncio.wait_for(task, timeout=5)
+    try:
+        await wait_for_async(lambda: daemon.last_outcome is not None)
+    finally:
+        daemon.stop()
+        await asyncio.wait_for(task, timeout=10)
 
     bak = tmp_path / "backlog.json.bak"
     assert bak.is_file()
@@ -309,15 +316,13 @@ async def test_daemon_reloads_config_on_change(git_repo, tmp_path, caplog):
     daemon.interval_seconds = 0.02
     with caplog.at_level(logging.INFO, logger="forgeo"):
         task = asyncio.create_task(daemon.run_forever())
-        while daemon.forgeo.cycles == 0:
-            await asyncio.sleep(0.01)
-        _write_config(config_path, git_repo, interval_minutes=30)
-        for _ in range(200):
-            if daemon.config.interval_minutes == 30:
-                break
-            await asyncio.sleep(0.01)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.forgeo.cycles >= 1)
+            _write_config(config_path, git_repo, interval_minutes=30)
+            await wait_for_async(lambda: daemon.config.interval_minutes == 30)
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
 
     assert daemon.config.interval_minutes == 30
     assert daemon.forgeo.config.interval_minutes == 30
@@ -332,12 +337,13 @@ async def test_daemon_keeps_last_valid_config_on_invalid_change(git_repo, tmp_pa
     daemon.interval_seconds = 0.02
     with caplog.at_level(logging.WARNING, logger="forgeo"):
         task = asyncio.create_task(daemon.run_forever())
-        while daemon.forgeo.cycles == 0:
-            await asyncio.sleep(0.01)
-        config_path.write_text("not: [valid", encoding="utf-8")
-        await asyncio.sleep(0.2)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.forgeo.cycles >= 1)
+            config_path.write_text("not: [valid", encoding="utf-8")
+            await wait_for_async(lambda: "Config change rejected" in caplog.text)
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
 
     assert daemon.config.interval_minutes == 60
     assert daemon.forgeo.config.interval_minutes == 60
@@ -350,10 +356,11 @@ async def test_daemon_does_not_reload_unchanged_config(git_repo, tmp_path, caplo
     daemon.interval_seconds = 0.02
     with caplog.at_level(logging.INFO, logger="forgeo"):
         task = asyncio.create_task(daemon.run_forever())
-        while daemon.forgeo.cycles < 2:
-            await asyncio.sleep(0.01)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.forgeo.cycles >= 2)
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
 
     assert daemon.config.interval_minutes == 60
     assert "Config reloaded" not in caplog.text
@@ -365,15 +372,13 @@ async def test_daemon_pins_paths_on_config_change(git_repo, tmp_path, caplog):
     daemon.interval_seconds = 0.02
     with caplog.at_level(logging.WARNING, logger="forgeo"):
         task = asyncio.create_task(daemon.run_forever())
-        while daemon.forgeo.cycles == 0:
-            await asyncio.sleep(0.01)
-        _write_config(config_path, git_repo, interval_minutes=30, backlog="moved.json")
-        for _ in range(200):
-            if daemon.config.interval_minutes == 30:
-                break
-            await asyncio.sleep(0.01)
-        daemon.stop()
-        await asyncio.wait_for(task, timeout=5)
+        try:
+            await wait_for_async(lambda: daemon.forgeo.cycles >= 1)
+            _write_config(config_path, git_repo, interval_minutes=30, backlog="moved.json")
+            await wait_for_async(lambda: daemon.config.interval_minutes == 30)
+        finally:
+            daemon.stop()
+            await asyncio.wait_for(task, timeout=10)
 
     assert daemon.config.interval_minutes == 30
     assert daemon.config.backlog == original_backlog

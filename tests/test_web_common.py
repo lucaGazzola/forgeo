@@ -20,6 +20,7 @@ from forgeo.web_common import (
     safe_static_path,
     tail_lines,
 )
+from tests.conftest import requires_posix
 
 
 def test_json_bytes_pretty_with_newline() -> None:
@@ -65,6 +66,7 @@ def test_tail_lines_zero_or_negative(tmp_path: Path) -> None:
     assert tail_lines(path, -3) == []
 
 
+@requires_posix
 def test_tail_lines_unreadable_file(tmp_path: Path) -> None:
     path = tmp_path / "log.txt"
     path.write_text("a\nb\n", encoding="utf-8")

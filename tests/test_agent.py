@@ -16,7 +16,7 @@ from forgeo.agent import (
     _kill_process_group,
 )
 from forgeo.models import ExecutionStatus, RepoContext
-from tests.conftest import make_task
+from tests.conftest import make_task, requires_docker, requires_posix
 
 TASK = make_task(id="TASK-001", title="Add retries", description="Implement retry logic.")
 
@@ -27,6 +27,7 @@ async def test_exit_zero_is_success():
     assert result.status is ExecutionStatus.SUCCESS
 
 
+@requires_posix
 async def test_blocked_exit_code_is_blocked():
     agent = ShellAgent("echo need input; exit 2")
     result = await agent.run_task(TASK, RepoContext())
@@ -77,6 +78,7 @@ async def test_timeout_is_error():
     assert "timed out" in (result.error or "")
 
 
+@requires_posix
 async def test_timeout_includes_streamed_output():
     """Lines printed before a timeout must appear in output_logs."""
     agent = ShellAgent(
@@ -89,6 +91,7 @@ async def test_timeout_includes_streamed_output():
     assert any("pre-timeout-marker" in line for line in result.output_logs)
 
 
+@requires_posix
 async def test_timeout_kills_whole_process_group(tmp_path):
     """Timeout must reap the entire process tree, not just the shell.
 
@@ -109,6 +112,7 @@ async def test_timeout_kills_whole_process_group(tmp_path):
         os.kill(sleep_pid, 0)
 
 
+@requires_posix
 async def test_timeout_does_not_hang_when_grandchild_escapes_group():
     """A descendant that leaves the process group must not hang the forgeo.
 
@@ -125,6 +129,7 @@ async def test_timeout_does_not_hang_when_grandchild_escapes_group():
     assert "timed out" in (result.error or "")
 
 
+@requires_posix
 async def test_output_log_window_is_bounded():
     """A chatty agent must not retain more than the last 1000 process lines."""
     # 1500 numbered lines; only the trailing window should remain.
@@ -143,12 +148,14 @@ async def test_no_timeout_runs_to_completion():
     assert result.status is ExecutionStatus.SUCCESS
 
 
+@requires_posix
 async def test_argv_list_command(tmp_path):
     agent = ShellAgent(["sh", "-c", "exit 2"])
     result = await agent.run_task(TASK, RepoContext())
     assert result.status is ExecutionStatus.BLOCKED
 
 
+@requires_posix
 async def test_task_instruction_via_env(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -160,6 +167,7 @@ async def test_task_instruction_via_env(tmp_path):
     assert "Implement retry logic." in output
 
 
+@requires_posix
 async def test_instruction_override_replaces_task_instruction(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -176,6 +184,7 @@ async def test_instruction_override_replaces_task_instruction(tmp_path):
     assert "Implement retry logic." not in output
 
 
+@requires_posix
 async def test_per_task_command_override(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -210,6 +219,7 @@ async def test_per_task_timeout_null_uses_configured_timeout():
     assert result.status is ExecutionStatus.SUCCESS
 
 
+@requires_posix
 async def test_per_task_argv_list_override():
     agent = ShellAgent("exit 1")
     result = await agent.run_task(
@@ -277,6 +287,7 @@ def test_docker_rejects_blank_image():
         DockerSandboxAgent("true", image="  ")
 
 
+@requires_docker
 async def test_docker_runs_in_container_with_repo_mounted(monkeypatch, tmp_path):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -300,6 +311,7 @@ async def test_docker_runs_in_container_with_repo_mounted(monkeypatch, tmp_path)
     assert captured["cwd"] == str(repo)
 
 
+@requires_docker
 async def test_docker_forwards_task_env(monkeypatch, tmp_path):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -316,6 +328,7 @@ async def test_docker_forwards_task_env(monkeypatch, tmp_path):
     assert "FORGEO_BRANCH=feature" in args
 
 
+@requires_docker
 async def test_docker_forwards_agent_env(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -327,6 +340,7 @@ async def test_docker_forwards_agent_env(monkeypatch):
     assert "MODEL=claude" in args
 
 
+@requires_docker
 async def test_docker_network_configurable(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -337,6 +351,7 @@ async def test_docker_network_configurable(monkeypatch):
     assert args[args.index("--network") + 1] == "bridge"
 
 
+@requires_docker
 async def test_docker_mounts_are_read_only(monkeypatch, tmp_path):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -349,6 +364,7 @@ async def test_docker_mounts_are_read_only(monkeypatch, tmp_path):
     assert f"{creds}:{creds}:ro" in args
 
 
+@requires_docker
 async def test_docker_preserves_blocked_exit_code(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
@@ -360,6 +376,7 @@ async def test_docker_preserves_blocked_exit_code(monkeypatch):
     assert result.exit_code == 2
 
 
+@requires_docker
 async def test_docker_preserves_other_exit_code_as_error(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
@@ -371,6 +388,7 @@ async def test_docker_preserves_other_exit_code_as_error(monkeypatch):
     assert "exit code 1" in (result.error or "")
 
 
+@requires_docker
 async def test_docker_no_changes_exit_code(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(
@@ -383,6 +401,7 @@ async def test_docker_no_changes_exit_code(monkeypatch):
     assert result.exit_code == 3
 
 
+@requires_docker
 async def test_docker_accepts_argv_list_command(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr("forgeo.agent.asyncio.create_subprocess_exec", fake_docker_exec(captured))
@@ -394,6 +413,7 @@ async def test_docker_accepts_argv_list_command(monkeypatch):
     assert "sh" not in args
 
 
+@requires_posix
 def test_kill_process_group_falls_back_when_group_gone(monkeypatch):
     """When the process group is already gone, the direct child still dies."""
     proc = types.SimpleNamespace(pid=123)
@@ -450,6 +470,7 @@ async def test_drain_timeout_proceeds_without_hanging():
     assert any("Output streams stayed open" in line for line in result.output_logs)
 
 
+@requires_posix
 def test_kill_process_group_sends_sigkill(monkeypatch):
     """The whole process group receives SIGKILL, not just the child."""
     proc = types.SimpleNamespace(pid=456)

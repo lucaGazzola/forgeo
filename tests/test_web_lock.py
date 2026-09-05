@@ -27,6 +27,7 @@ from forgeo.central import (
 )
 from forgeo.cli import build_parser, cmd_web, cmd_web_status, cmd_web_stop
 from forgeo.daemon import read_lock_pid
+from tests.conftest import requires_posix
 
 
 def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
@@ -184,6 +185,7 @@ def test_web_lock_refuses_second(tmp_path, monkeypatch):
         first.release()
 
 
+@requires_posix
 def test_web_lock_takes_over_stale(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
     lock_path = tmp_path / "web.lock"
@@ -245,6 +247,7 @@ def test_web_stop_not_running(tmp_path, monkeypatch, capsys):
     assert "not running" in capsys.readouterr().out
 
 
+@requires_posix
 def test_web_stop_with_dead_pid(tmp_path, monkeypatch, capsys):
     """A lock recording a dead PID means the dashboard is not running."""
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
@@ -253,6 +256,7 @@ def test_web_stop_with_dead_pid(tmp_path, monkeypatch, capsys):
     assert "not running" in capsys.readouterr().out
 
 
+@requires_posix
 def test_web_stop_terminates_running_dashboard(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
     port = free_port()
@@ -425,6 +429,7 @@ def test_web_detach_explicit_token_flag_is_persisted(tmp_path, monkeypatch, caps
         WebLock().release()
 
 
+@requires_posix
 def test_web_detach_warns_on_stale_lock(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORGEO_CONFIG_DIR", str(tmp_path))
     (tmp_path / "web.lock").write_text("pid=999999999\n", encoding="utf-8")
@@ -487,6 +492,7 @@ def _run_foreground_noop(monkeypatch, tmp_path):
     monkeypatch.setattr("forgeo.central.CentralWebServer.start", lambda self: True)
 
 
+@requires_posix
 def test_run_foreground_prints_generated_token_once(tmp_path, monkeypatch, capsys):
     from forgeo.central import run_foreground
 
@@ -499,6 +505,7 @@ def test_run_foreground_prints_generated_token_once(tmp_path, monkeypatch, capsy
     assert not WebLock().is_held()
 
 
+@requires_posix
 def test_run_foreground_reuses_file_token_without_print(tmp_path, monkeypatch, capsys):
     from forgeo.central import run_foreground
 
@@ -510,6 +517,7 @@ def test_run_foreground_reuses_file_token_without_print(tmp_path, monkeypatch, c
     assert not WebLock().is_held()
 
 
+@requires_posix
 def test_run_foreground_no_token_stays_open(tmp_path, monkeypatch, capsys):
     from forgeo.central import run_foreground
 

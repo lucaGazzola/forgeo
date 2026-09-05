@@ -51,11 +51,19 @@ def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
     own session (``start_new_session=True``), so ``proc.pid`` is its process
     group id and killing the group reaps the entire process tree. Falls back
     to killing just the direct child when the group is already gone.
+
+    Platforms without process groups (Windows) fall back to killing the
+    direct child only.
     """
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        proc.kill()
+    killpg = getattr(os, "killpg", None)
+    if killpg is not None:
+        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        try:
+            killpg(proc.pid, sigkill)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        return
+    proc.kill()
 
 
 class SandboxUnavailableError(RuntimeError):

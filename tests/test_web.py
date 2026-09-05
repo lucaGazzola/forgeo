@@ -24,7 +24,7 @@ from forgeo.daemon_control import DaemonError
 from forgeo.instances import add_instance
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.runs import RunRecorder
-from tests.conftest import BacklogServer, make_task
+from tests.conftest import BacklogServer, make_task, requires_posix
 
 FINISHED = datetime(2026, 8, 1, 1, 0, 10, tzinfo=UTC)
 
@@ -314,7 +314,7 @@ def test_home_page_lists_registered_instances_via_api(web_env):
     names = [entry["name"] for entry in data]
     assert names == ["alpha", "beta"]
     alpha = data[0]
-    assert alpha["repo"].endswith("repos/alpha")
+    assert alpha["repo"].replace("\\", "/").endswith("repos/alpha")
     assert alpha["daemon_running"] is False
     assert alpha["last_outcome"] == "SUCCESS"
     assert alpha["backlog_counts"] == {
@@ -496,6 +496,7 @@ def test_status_reads_files_without_daemon(web_env):
     assert data["next_run_at"] is None
 
 
+@requires_posix
 def test_status_reports_running_daemon_and_next_run(web_env):
     server, registry = web_env
     lock = acquire_run_lock(registry / "alpha" / "backlog.lock")
@@ -534,6 +535,7 @@ def test_status_prefers_daemon_state_file(web_env):
     assert data["daemon_running"] is False
 
 
+@requires_posix
 def test_status_daemon_state_file_next_run(web_env):
     server, registry = web_env
     state_path = registry / "alpha" / "backlog.state.json"
@@ -1676,7 +1678,7 @@ def test_put_config_round_trips_relative_paths(web_env, registry):
     assert data["config"]["backlog"] == str((config_dir / "tasks.json").resolve())
 
     disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert disk["repo"] == "../repo"
+    assert disk["repo"] == str(Path("..") / "repo")
     assert disk["backlog"] == "tasks.json"
     assert disk["blocker_file"] == "BLOCKER.md"
     assert disk["log_file"] == "forgeo.log"
@@ -2028,6 +2030,7 @@ def test_web_bind_failure_exits_nonzero_and_releases_lock(tmp_path, monkeypatch)
 # --------------------------------------------------------------------------- #
 
 
+@requires_posix
 def test_post_start_starts_daemon(web_env, git_repo):
     server, registry = web_env
     write_daemon_instance(registry, "daemon-a", repo=str(git_repo))
@@ -2053,6 +2056,7 @@ def test_post_start_starts_daemon(web_env, git_repo):
         assert wait_for(lambda: not is_lock_held(lock_path))
 
 
+@requires_posix
 def test_post_start_already_running_409(web_env):
     server, registry = web_env
     lock_path = registry / "alpha" / "backlog.lock"
@@ -2079,6 +2083,7 @@ def test_post_stop_not_running_noop(web_env):
     assert data["daemon_running"] is False
 
 
+@requires_posix
 def test_post_stop_stops_running_daemon(web_env, git_repo):
     server, registry = web_env
     config_path = write_daemon_instance(registry, "daemon-b", repo=str(git_repo))
@@ -2100,6 +2105,7 @@ def test_post_stop_stops_running_daemon(web_env, git_repo):
         _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-b/stop", None)
 
 
+@requires_posix
 def test_post_restart_starts_daemon_when_not_running(web_env, git_repo):
     server, registry = web_env
     write_daemon_instance(registry, "daemon-c", repo=str(git_repo))
@@ -2117,6 +2123,7 @@ def test_post_restart_starts_daemon_when_not_running(web_env, git_repo):
         _post(f"http://127.0.0.1:{server.port}/api/instances/daemon-c/stop", None)
 
 
+@requires_posix
 def test_post_restart_replaces_running_daemon(web_env, git_repo):
     server, registry = web_env
     config_path = write_daemon_instance(registry, "daemon-d", repo=str(git_repo))

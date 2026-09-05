@@ -17,6 +17,7 @@ from forgeo.instances import (
     resolve_instance,
     save_registry,
 )
+from tests.conftest import requires_posix
 
 
 def write_config(tmp_path: Path, subdir: str) -> Path:
@@ -221,6 +222,7 @@ def test_list_instances_reports_name_config_repo(tmp_path, monkeypatch):
     assert info.config is not None
 
 
+@requires_posix
 def test_list_instances_reports_daemon_running(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
     config_path = write_config(tmp_path, "a")

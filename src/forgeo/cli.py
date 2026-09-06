@@ -1605,14 +1605,14 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
         store = GitlabTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GitlabTokenStore(api_base=api_base)
         data = store.load()
         if data is None:
-            console.print(f"[yellow]No GitLab token found at {store.path}.[/yellow]")
+            console.print(f"[yellow]No GitLab token found at {store.path}.[/yellow]", soft_wrap=True)
             console.print("[dim]Run `forgeo auth login --provider gitlab --client-id <id>` .[/dim]")
             return 1
         token = str(data.get("access_token", ""))
         masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
         expires = data.get("expires_in")
         scope = data.get("scope") or ""
-        console.print(f"[green]Token found[/green] at {store.path}")
+        console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
         console.print(f"  token: {masked}")
         if scope:
             console.print(f"  scope: {scope}")
@@ -1645,7 +1645,7 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
         store = JiraTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else JiraTokenStore(api_base=api_base)  # type: ignore[assignment]
         data = store.load()
         if data is None:
-            console.print(f"[yellow]No Jira token found at {store.path}.[/yellow]")
+            console.print(f"[yellow]No Jira token found at {store.path}.[/yellow]", soft_wrap=True)
             console.print("[dim]Run `forgeo auth login --provider jira --client-id <id>` .[/dim]")
             return 1
         token = str(data.get("access_token", ""))
@@ -1653,7 +1653,7 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
         expires = data.get("expires_in")
         scope = data.get("scope") or ""
         cloud_id = data.get("cloud_id") or ""
-        console.print(f"[green]Token found[/green] at {store.path}")
+        console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
         console.print(f"  token: {masked}")
         if cloud_id:
             console.print(f"  cloud_id: {cloud_id}")
@@ -1687,14 +1687,14 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
     store = GithubTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GithubTokenStore(api_base=api_base)  # type: ignore[assignment]
     data = store.load()
     if data is None:
-        console.print(f"[yellow]No GitHub token found at {store.path}.[/yellow]")
+        console.print(f"[yellow]No GitHub token found at {store.path}.[/yellow]", soft_wrap=True)
         console.print("[dim]Run `forgeo auth login --provider github --client-id <id>` .[/dim]")
         return 1
     token = str(data.get("access_token", ""))
     masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
     expires = data.get("expires_in")
     scope = data.get("scope") or data.get("scope", "")
-    console.print(f"[green]Token found[/green] at {store.path}")
+    console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
     console.print(f"  token: {masked}")
     if scope:
         console.print(f"  scope: {scope}")

@@ -156,8 +156,12 @@ def _run_install(
     }
     (tmp_path / "fake_binary").write_text(FAKE_BINARY, encoding="utf-8")
     _write_bin(bin_dir, stubs or ["uname", "curl"])
+    # Resolve sh by absolute path: the test restricts PATH to the stub dir,
+    # so the bare "sh" name cannot be found once PATH is narrowed.
+    sh = shutil.which("sh")
+    assert sh, "sh must be available to run install.sh"
     return subprocess.run(
-        ["sh", str(INSTALL_SH)],
+        [sh, str(INSTALL_SH)],
         env=env,
         capture_output=True,
         text=True,

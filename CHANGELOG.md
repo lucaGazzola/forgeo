@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-09-09
+
 ### Fixed
 
-- GitHub and GitLab backlogs no longer drop per-task customization (`acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`, `agent_timeout_seconds`, `run_at`, `retries_left`, `review_required`) when a task is created through `create_task`. The full author-set state is now embedded in the hidden `<!-- forgeo: {...} -->` marker at creation instead of being clobbered by a bare `{"state": "OPEN"}`.
-- OAuth issue-backlog login now supports printed browser URLs, fixed loopback callback ports, project-local config resolution for `auth status`/`logout`, and config-relative token files. Documentation now distinguishes browser OAuth from HTTP client credentials and records provider-specific flow, secret, and callback requirements.
+- GitHub/GitLab backlogs preserve per-task customization when a task is created.
+- OAuth issue-backlog login supports browser URLs, callback ports, and config-relative tokens.
 
 ### Removed
 
-- The unused `github.fields` and `gitlab.fields` field-mapping settings. GitHub and GitLab issues expose no custom-field mechanism on the REST issues API, so per-task customization is stored in the hidden `<!-- forgeo: {...} -->` marker (Jira keeps its `jira.fields` custom-field mapping).
+- Unused `github.fields`/`gitlab.fields` field mapping (GitHub/GitLab issues have no custom fields).
 
 ## [0.12.0] - 2026-09-03
 
@@ -448,7 +450,8 @@ Initial release of the scheduled, agent-driven software forgeo.
   overlapping-run skipping.
 - Dogfooding docs removed; local configs kept out of the repository.
 
-[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/lucaGazzola/forgeo/compare/v1.12.1...HEAD
+[1.12.1]: https://github.com/lucaGazzola/forgeo/compare/v0.12.0...v1.12.1
 [0.12.0]: https://github.com/lucaGazzola/forgeo/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/lucaGazzola/forgeo/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/lucaGazzola/forgeo/compare/v0.9.0...v0.10.0

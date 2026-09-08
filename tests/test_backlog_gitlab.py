@@ -207,6 +207,33 @@ async def test_create_update_delete() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_task_preserves_customization_fields() -> None:
+    backlog, client = make_gitlab([])
+    task = await backlog.create_task(
+        make_task(
+            title="Created",
+            description="Desc",
+            acceptance_criteria=["must pass tests"],
+            dependencies=["DEP-1"],
+            files_to_modify=["a.py"],
+            agent_command="claude --model haiku",
+            agent_timeout_seconds=42.0,
+            run_at=datetime(2026, 9, 1, tzinfo=UTC),
+            retries_left=2,
+            review_required=True,
+        )
+    )
+    assert task.acceptance_criteria == ["must pass tests"]
+    assert task.dependencies == ["DEP-1"]
+    assert task.files_to_modify == ["a.py"]
+    assert task.agent_command == "claude --model haiku"
+    assert task.agent_timeout_seconds == 42.0
+    assert task.run_at == datetime(2026, 9, 1, tzinfo=UTC)
+    assert task.retries_left == 2
+    assert task.review_required is True
+
+
+@pytest.mark.asyncio
 async def test_pagination() -> None:
     issues = [gl_issue(i) for i in range(1, 6)]
     client = FakeGitlabClient(issues)

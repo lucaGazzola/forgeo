@@ -203,7 +203,7 @@ github: {repo: owner/repo, auth: {token_env: GITHUB_TOKEN}}
 
 - Issue numbers → task IDs; `title`/`body`/`created_at`/`updated_at` → task fields.
 - `open` → `OPEN`, `closed` → `COMPLETED`; labels `forgeo-running`/`forgeo-blocked`/`forgeo-failed` for the rest.
-- Engine state in hidden `<!-- forgeo: {...} -->` block inside the body.
+- Per-task customization (`agent_command`, `agent_timeout_seconds`, `acceptance_criteria`, `dependencies`, `files_to_modify`, `run_at`, `retries_left`, `review_required`) and engine state both live in a hidden `<!-- forgeo: {...} -->` block inside the body. There is no `github.fields` custom-field mapping — GitHub issues expose no custom fields on the REST issues API.
 - Paginated `GET /repos/{owner}/{repo}/issues?state=all`; claiming adds `forgeo-running` + `claimed_at`.
 
 Test live with `scripts/test-github-backlog-e2e.sh`:
@@ -224,7 +224,7 @@ gitlab: {repo: group/project, auth: {token_env: GITLAB_TOKEN}}
 # # then: forgeo auth login --provider gitlab --client-id abc
 ```
 
-- `iid` → task ID; `opened`/`closed` → `OPEN`/`COMPLETED`; labels `forgeo-running`/`forgeo-blocked`/`forgeo-failed`; same hidden-block mechanics as GitHub. OAuth is an alternative to `token_env` and supports browser PKCE (or device flow when enabled by the GitLab instance).
+- `iid` → task ID; `opened`/`closed` → `OPEN`/`COMPLETED`; labels `forgeo-running`/`forgeo-blocked`/`forgeo-failed`; same hidden-block mechanics as GitHub (per-task customization and engine state in a hidden `<!-- forgeo: {...} -->` block in the description). OAuth is an alternative to `token_env` and supports browser PKCE (or device flow when enabled by the GitLab instance).
 - Paginated `GET /api/v4/projects/:id/issues?state=all`.
 
 ## Managing tasks

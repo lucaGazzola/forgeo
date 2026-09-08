@@ -39,6 +39,7 @@ from forgeo.backlog_issue_base import (
     parse_numeric_issue_id,
     parse_optional_datetime,
     require_env_token,
+    task_engine_state,
 )
 from forgeo.models import ExecutionResult, GithubBacklogConfig, Task, TaskStatus
 
@@ -571,14 +572,8 @@ class GithubBacklog(IssueBacklogBase):
             return task
 
     async def create_task(self, task: Task) -> Task:
-        engine: dict[str, Any] = {
-            "state": TaskStatus.OPEN.value,
-            "acceptance_criteria": task.acceptance_criteria,
-            "dependencies": task.dependencies,
-            "files_to_modify": task.files_to_modify,
-        }
-        if task.review_required is not None:
-            engine["review_required"] = task.review_required
+        engine: dict[str, Any] = {"state": TaskStatus.OPEN.value}
+        engine.update(task_engine_state(task))
         fields: dict[str, Any] = {
             "title": task.title,
             "body": embed_engine_state(task.description, engine),
@@ -590,7 +585,9 @@ class GithubBacklog(IssueBacklogBase):
             if not isinstance(number, int):
                 raise GithubRequestError("GitHub create response did not contain an issue number")
             issue_id = str(number)
-            await self.put_engine_state(issue_id, {"state": TaskStatus.OPEN.value})
+            # The full state (including the author-set per-task customization) is
+            # embedded in the body at creation; do not re-write the marker here,
+            # or a bare {"state": "OPEN"} would clobber those fields.
             result = await self.get_task(issue_id)
             if result is None:
                 raise GithubRequestError(f"Created GitHub issue {issue_id} could not be read back")
@@ -619,20 +616,7 @@ class GithubBacklog(IssueBacklogBase):
                 fields["title"] = candidate.title
             if not ENGINE_STATE_FIELDS.isdisjoint(updates):
                 state = await self.get_engine_state(task_id)
-                state.update(
-                    {
-                        "acceptance_criteria": candidate.acceptance_criteria,
-                        "dependencies": candidate.dependencies,
-                        "files_to_modify": candidate.files_to_modify,
-                        "agent_command": candidate.agent_command,
-                        "agent_timeout_seconds": candidate.agent_timeout_seconds,
-                        "run_at": candidate.run_at.isoformat() if candidate.run_at else None,
-                        "retries_left": candidate.retries_left,
-                        "review_required": candidate.review_required,
-                        "review_branch": candidate.review_branch,
-                        "review_commit_sha": candidate.review_commit_sha,
-                    }
-                )
+                state.update(task_engine_state(candidate))
                 fields["body"] = embed_engine_state(candidate.description, state)
             if fields:
                 await self._call(self.client.update_issue, number, fields)

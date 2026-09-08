@@ -300,6 +300,31 @@ ENGINE_STATE_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def task_engine_state(task: Any) -> dict[str, Any]:
+    """The author-controlled task fields stored in the hidden engine-state marker.
+
+    These are the per-task customization fields the human sets (as opposed to
+    engine-managed runtime state such as ``retry_count`` or ``agent_response``).
+    GitHub and GitLab issues expose no portable custom-field mechanism on their
+    REST issues API, so these fields travel in the hidden ``<!-- forgeo: ... -->``
+    marker; Jira maps them to custom fields instead. ``None`` values are kept
+    so a marker written by ``create_task`` and one refreshed by ``update_task``
+    stay identical, and absent values read back as ``None`` either way.
+    """
+    return {
+        "acceptance_criteria": task.acceptance_criteria,
+        "dependencies": task.dependencies,
+        "files_to_modify": task.files_to_modify,
+        "agent_command": task.agent_command,
+        "agent_timeout_seconds": task.agent_timeout_seconds,
+        "run_at": task.run_at.isoformat() if task.run_at is not None else None,
+        "retries_left": task.retries_left,
+        "review_required": task.review_required,
+        "review_branch": task.review_branch,
+        "review_commit_sha": task.review_commit_sha,
+    }
+
+
 # ------------------------------------------------------------------ #
 # Shared HTTP / auth helpers                                          #
 # ------------------------------------------------------------------ #

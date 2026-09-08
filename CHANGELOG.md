@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GitHub and GitLab backlogs no longer drop per-task customization (`acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`, `agent_timeout_seconds`, `run_at`, `retries_left`, `review_required`) when a task is created through `create_task`. The full author-set state is now embedded in the hidden `<!-- forgeo: {...} -->` marker at creation instead of being clobbered by a bare `{"state": "OPEN"}`.
 - OAuth issue-backlog login now supports printed browser URLs, fixed loopback callback ports, project-local config resolution for `auth status`/`logout`, and config-relative token files. Documentation now distinguishes browser OAuth from HTTP client credentials and records provider-specific flow, secret, and callback requirements.
+
+### Removed
+
+- The unused `github.fields` and `gitlab.fields` field-mapping settings. GitHub and GitLab issues expose no custom-field mechanism on the REST issues API, so per-task customization is stored in the hidden `<!-- forgeo: {...} -->` marker (Jira keeps its `jira.fields` custom-field mapping).
 
 ## [0.12.0] - 2026-09-03
 

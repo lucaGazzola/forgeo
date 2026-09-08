@@ -165,9 +165,8 @@ github:
 | `github.timeout_seconds` | `30` | HTTP timeout. |
 | `github.claim_timeout_seconds` | `86400` | Stale claim timeout. |
 | `github.workflow` | defaults | State/label mapping. |
-| `github.fields` | — | Field mappings for `acceptance_criteria`, `dependencies`, `files_to_modify`, `agent_command`, `agent_timeout_seconds`, `run_at`, `retries_left`. |
 
-Issue numbers become task IDs; `open`/`closed` maps to `OPEN`/`COMPLETED`; `forgeo-running`/`blocked`/`failed` labels cover the rest. Engine state is stored in a hidden `<!-- forgeo: {...} -->` block in the issue body.
+Issue numbers become task IDs; `open`/`closed` maps to `OPEN`/`COMPLETED`; `forgeo-running`/`blocked`/`failed` labels cover the rest. GitHub issues expose no custom-field mechanism on the REST issues API, so per-task customization (`agent_command`, `agent_timeout_seconds`, `acceptance_criteria`, `dependencies`, `files_to_modify`, `run_at`, `retries_left`, `review_required`) and engine state both live in a hidden `<!-- forgeo: {...} -->` block in the issue body. Engine-managed fields (`retry_count`, `agent_response`, `failure_reason`, ...) are written by Forgeo and not meant to be edited by hand.
 
 ### GitLab
 
@@ -192,7 +191,7 @@ gitlab:
 # # then: forgeo auth login --provider gitlab --client-id abc123
 ```
 
-Same backlog and task keys as GitHub (`gitlab.*`). Its auth must contain exactly one of `token_env` (PAT) or `oauth`; OAuth supports `client_id`, `flow`, `scope`, `token_file`, `callback_port`, and optional `client_secret_env`. Issue `iid` becomes task ID; `opened`/`closed` maps to `OPEN`/`COMPLETED`; hidden `<!-- forgeo: {...} -->` block for engine state.
+Same backlog and task keys as GitHub (`gitlab.*`). Its auth must contain exactly one of `token_env` (PAT) or `oauth`; OAuth supports `client_id`, `flow`, `scope`, `token_file`, `callback_port`, and optional `client_secret_env`. Issue `iid` becomes task ID; `opened`/`closed` maps to `OPEN`/`COMPLETED`; per-task customization and engine state live in a hidden `<!-- forgeo: {...} -->` block in the issue description, as with GitHub.
 
 ### Browser OAuth details
 

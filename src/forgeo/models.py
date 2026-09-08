@@ -709,14 +709,6 @@ class GitlabWorkflow(_IssueWorkflowBase):
     open_status: str = "opened"
 
 
-class GithubFieldMapping(_IssueFieldMappingBase):
-    """Optional field mappings for GitHub issues."""
-
-
-class GitlabFieldMapping(_IssueFieldMappingBase):
-    """Optional field mappings for GitLab issues."""
-
-
 def _require_non_blank(value: str, message: str) -> str:
     if not value.strip():
         raise ValueError(message)
@@ -739,7 +731,6 @@ class GithubBacklogConfig(_RepoBacklogConfigBase):
 
     auth: GithubAuth
     workflow: GithubWorkflow = Field(default_factory=GithubWorkflow)
-    fields: GithubFieldMapping = Field(default_factory=GithubFieldMapping)
 
 
 class GitlabBacklogConfig(_RepoBacklogConfigBase):
@@ -747,7 +738,6 @@ class GitlabBacklogConfig(_RepoBacklogConfigBase):
 
     auth: GitlabAuth
     workflow: GitlabWorkflow = Field(default_factory=GitlabWorkflow)
-    fields: GitlabFieldMapping = Field(default_factory=GitlabFieldMapping)
 
 
 class ForgeoConfig(BaseModel):

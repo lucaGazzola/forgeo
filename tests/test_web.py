@@ -6,10 +6,8 @@ import json
 import socket
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,121 +22,58 @@ from forgeo.daemon_control import DaemonError
 from forgeo.instances import add_instance
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.runs import RunRecorder
-from tests.conftest import BacklogServer, make_task, requires_posix
+from tests.conftest import BacklogServer, make_task, requires_posix, wait_for
 
 FINISHED = datetime(2026, 8, 1, 1, 0, 10, tzinfo=UTC)
 
 
-def _get(url: str) -> tuple[int, dict | list | str]:
-    try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            body = resp.read().decode("utf-8")
-            ctype = resp.headers.get_content_type()
-            if ctype == "application/json":
-                return resp.status, json.loads(body)
-            return resp.status, body
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(body)
-        except json.JSONDecodeError:
-            return exc.code, body
-
-
-def _get_headers(
-    url: str, headers: dict[str, str]
+def _req(
+    method: str,
+    url: str,
+    data: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict | list | str]:
-    request = urllib.request.Request(url, headers=headers)
+    body = data.encode("utf-8") if data is not None else None
+    request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(request, timeout=5) as resp:
-            body = resp.read().decode("utf-8")
+            resp_body = resp.read().decode("utf-8")
             ctype = resp.headers.get_content_type()
             if ctype == "application/json":
-                return resp.status, json.loads(body)
-            return resp.status, body
+                return resp.status, json.loads(resp_body)
+            return resp.status, resp_body
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8")
+        resp_body = exc.read().decode("utf-8")
         try:
-            return exc.code, json.loads(body)
+            return exc.code, json.loads(resp_body)
         except json.JSONDecodeError:
-            return exc.code, body
+            return exc.code, resp_body
+
+
+def _get(url: str) -> tuple[int, dict | list | str]:
+    return _req("GET", url)
+
+
+def _get_headers(url: str, headers: dict[str, str]) -> tuple[int, dict | list | str]:
+    return _req("GET", url, headers=headers)
 
 
 def _post(url: str, data: str | None) -> tuple[int, dict | list | str]:
-    body = data.encode("utf-8") if data is not None else None
-    request = urllib.request.Request(url, data=body, method="POST")
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=5) as resp:
-            resp_body = resp.read().decode("utf-8")
-            ctype = resp.headers.get_content_type()
-            if ctype == "application/json":
-                return resp.status, json.loads(resp_body)
-            return resp.status, resp_body
-    except urllib.error.HTTPError as exc:
-        resp_body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(resp_body)
-        except json.JSONDecodeError:
-            return exc.code, resp_body
+    return _req("POST", url, data)
 
 
 def _patch(url: str, data: str | None) -> tuple[int, dict | list | str]:
-    body = data.encode("utf-8") if data is not None else None
-    request = urllib.request.Request(url, data=body, method="PATCH")
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=5) as resp:
-            resp_body = resp.read().decode("utf-8")
-            ctype = resp.headers.get_content_type()
-            if ctype == "application/json":
-                return resp.status, json.loads(resp_body)
-            return resp.status, resp_body
-    except urllib.error.HTTPError as exc:
-        resp_body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(resp_body)
-        except json.JSONDecodeError:
-            return exc.code, resp_body
+    return _req("PATCH", url, data)
 
 
 def _delete(url: str) -> tuple[int, dict | list | str]:
-    request = urllib.request.Request(url, method="DELETE")
-    try:
-        with urllib.request.urlopen(request, timeout=5) as resp:
-            resp_body = resp.read().decode("utf-8")
-            ctype = resp.headers.get_content_type()
-            if ctype == "application/json":
-                return resp.status, json.loads(resp_body)
-            return resp.status, resp_body
-    except urllib.error.HTTPError as exc:
-        resp_body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(resp_body)
-        except json.JSONDecodeError:
-            return exc.code, resp_body
+    return _req("DELETE", url)
 
 
 def _put(url: str, data: str | None) -> tuple[int, dict | list | str]:
-    body = data.encode("utf-8") if data is not None else None
-    request = urllib.request.Request(url, data=body, method="PUT")
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(request, timeout=5) as resp:
-            resp_body = resp.read().decode("utf-8")
-            ctype = resp.headers.get_content_type()
-            if ctype == "application/json":
-                return resp.status, json.loads(resp_body)
-            return resp.status, resp_body
-    except urllib.error.HTTPError as exc:
-        resp_body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(resp_body)
-        except json.JSONDecodeError:
-            return exc.code, resp_body
+    return _req("PUT", url, data)
 
 
 def task_json(task_id: str, title: str, status: TaskStatus) -> dict:
@@ -241,16 +176,6 @@ def spawn_daemon(config_path: Path) -> subprocess.Popen[bytes]:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-
-
-def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
-    """Poll ``predicate`` until it holds; False on timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return False
 
 
 @pytest.fixture

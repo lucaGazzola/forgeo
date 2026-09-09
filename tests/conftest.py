@@ -76,6 +76,148 @@ async def wait_for_async(
     raise TimeoutError(f"condition not met within {timeout:g}s")
 
 
+def wait_for(
+    predicate: Callable[[], bool],
+    timeout: float = 15.0,
+    interval: float = 0.05,
+) -> bool:
+    """Poll ``predicate`` until truthy or ``timeout``; return whether it passed."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
+class FakeResponse:
+    """Minimal ``urlopen`` stub: ``status`` plus a JSON ``read()`` body."""
+
+    def __init__(self, payload: object = None, *, status: int = 200) -> None:
+        import io as _io
+
+        self._io = _io
+        self._payload = json.dumps(payload).encode("utf-8")
+        self.status = status
+        self._body: object = None
+
+    def __enter__(self) -> FakeResponse:
+        self._body = self._io.BytesIO(self._payload)
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def read(self, *args: object) -> bytes:
+        assert self._body is not None
+        return self._body.read(*args)  # type: ignore[operator]
+
+
+class FakeIssueClient:
+    """Generic marker-issue fake for GitHub/GitLab-style backlog tests.
+
+    ``id_key``/``body_key`` select the provider shape (``number``/``body``
+    for GitHub, ``iid``/``description`` for GitLab); ``note_attr`` names the
+    list recording comments (``comments`` vs ``notes``).
+    """
+
+    def __init__(
+        self,
+        issues: list[dict],
+        *,
+        id_key: str,
+        body_key: str,
+        note_attr: str = "comments",
+        error_cls: type[Exception] | None = None,
+    ) -> None:
+        import copy as _copy
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        self._copy = _copy
+        self._now = lambda: _datetime.now(_UTC).isoformat()
+        self.id_key = id_key
+        self.body_key = body_key
+        self.note_attr = note_attr
+        self.error_cls = error_cls
+        self.issues: dict[int, dict] = {_copy.deepcopy(i)[id_key]: _copy.deepcopy(i) for i in issues}
+        self._note_list: list = []
+        self.calls: list[tuple[str, object]] = []
+        self._next = max((i[id_key] for i in issues), default=0) + 1
+
+    @property
+    def comments(self) -> list:
+        return self._note_list
+
+    @property
+    def notes(self) -> list:
+        return self._note_list
+
+    def _new_issue(self, number: int, fields: dict) -> dict:
+        labels = fields.get("labels", [])
+        if isinstance(labels, str):
+            labels = [labels]
+        return {
+            self.id_key: number,
+            "id": number,
+            "title": fields.get("title", f"Task {number}"),
+            self.body_key: fields.get(self.body_key, ""),
+            "state": "open",
+            "labels": [{"name": n} for n in labels] if self.body_key == "body" else list(labels),
+            "created_at": "2026-08-21T10:00:00.000Z",
+            "updated_at": "2026-08-21T10:00:00.000Z",
+        }
+
+    def search_issues(self, *, page=1, per_page=30, **kwargs):
+        self.calls.append(("search", page))
+        rows = list(self.issues.values())
+        start = (page - 1) * per_page
+        return self._copy.deepcopy(rows[start : start + per_page])
+
+    def get_issue(self, number: int):
+        self.calls.append(("get", number))
+        if number not in self.issues:
+            assert self.error_cls is not None
+            raise self.error_cls("not found", status=404)
+        return self._copy.deepcopy(self.issues[number])
+
+    def update_issue(self, number: int, fields: dict):
+        self.calls.append(("update", number))
+        issue = self.issues[number]
+        for k, v in fields.items():
+            if k == "labels":
+                issue["labels"] = (
+                    [{"name": n} for n in v] if self.body_key == "body" else list(v)
+                )
+            elif k == "state":
+                issue["state"] = v
+            elif k == "state_event":
+                issue["state"] = "closed" if v == "close" else "opened"
+            else:
+                issue[k] = self._copy.deepcopy(v)
+        issue["updated_at"] = self._now()
+        return self._copy.deepcopy(issue)
+
+    def create_issue(self, fields: dict):
+        number = self._next
+        self._next += 1
+        self.calls.append(("create", number))
+        issue = self._new_issue(number, fields)
+        issue["state"] = "opened" if self.body_key != "body" else "open"
+        self.issues[number] = self._copy.deepcopy(issue)
+        return self._copy.deepcopy(issue)
+
+    def add_comment(self, number: int, body: str):
+        self._note_list.append((number, body))
+
+    def add_note(self, number: int, body: str):
+        self._note_list.append((number, body))
+
+    def delete_issue(self, number: int):
+        if number in self.issues:
+            del self.issues[number]
+
+
 def git(repo: Path, *args: str) -> str:
     """Run a git command inside ``repo`` and return its stdout."""
     proc = subprocess.run(
@@ -149,26 +291,21 @@ class FakeForgeo:
         self.block = False
         self.run_task_ids: list[str] = []
 
-    async def run_cycle(self) -> str:
+    async def _step(self) -> str:
         if self.block:
-            import asyncio
-
             await asyncio.sleep(3600)
         if self.crash:
             raise RuntimeError("boom")
         self.cycles += 1
         return "task"
+
+    async def run_cycle(self) -> str:
+        return await self._step()
 
     async def run_task_id(self, task_id: str) -> str:
-        if self.block:
-            import asyncio
-
-            await asyncio.sleep(3600)
-        if self.crash:
-            raise RuntimeError("boom")
-        self.cycles += 1
+        result = await self._step()
         self.run_task_ids.append(task_id)
-        return "task"
+        return result
 
 
 class BacklogServer:
@@ -258,13 +395,7 @@ def make_task(**overrides) -> Task:
 
 
 def make_result(**overrides) -> ExecutionResult:
-    """An agent result carrying no output, for transitions under test directly.
-
-    The backlog mutators require the result that drove the transition, but a
-    test exercising only the status bookkeeping has no agent run behind it.
-    This is that "nothing was captured" result: the transition records no
-    ``agent_response`` and leaves any previously stored one untouched.
-    """
+    """An agent result with no output, for transitions under test directly."""
     defaults = {"status": ExecutionStatus.SUCCESS}
     defaults.update(overrides)
     return ExecutionResult(**defaults)

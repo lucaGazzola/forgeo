@@ -6,7 +6,6 @@ import json
 import logging
 import urllib.parse
 from datetime import UTC, datetime
-from typing import Self
 
 import pytest
 
@@ -20,25 +19,7 @@ from forgeo.models import (
     ExecutionStatus,
     TaskStatus,
 )
-from tests.conftest import git, make_forgeo, make_result, make_task
-
-
-class FakeResponse:
-    """A minimal ``urllib`` response: 200 OK and context-manager support."""
-
-    status = 200
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc: object) -> bool:
-        return False
-
-
-class FakeErrorResponse(FakeResponse):
-    """An ``urllib`` response that is not an HTTP 200."""
-
-    status = 503
+from tests.conftest import FakeResponse, git, make_forgeo, make_result, make_task
 
 
 async def test_task_success_is_committed_on_main(git_repo, tmp_path):
@@ -405,7 +386,7 @@ async def test_telegram_non_200_logs_warning_and_keeps_outcome(
     agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
 
     def fake_urlopen(request, **kwargs):
-        return FakeErrorResponse()
+        return FakeResponse(status=503)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
@@ -642,7 +623,7 @@ async def test_webhook_non_200_logs_warning_and_keeps_outcome(
     agent.result = ExecutionResult(status=ExecutionStatus.BLOCKED, questions=["?"])
 
     def fake_urlopen(request, **kwargs):
-        return FakeErrorResponse()
+        return FakeResponse(status=503)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 

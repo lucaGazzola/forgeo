@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Self
 
 import pytest
 
@@ -17,28 +15,13 @@ from forgeo.update import (
     upgrade_notice,
     version_is_newer,
 )
+from tests.conftest import FakeResponse
 
 
 @pytest.fixture(autouse=True)
 def _update_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-enable the check for these tests (conftest disables it globally)."""
     monkeypatch.delenv("FORGEO_UPDATE_CHECK", raising=False)
-
-
-class FakeResponse:
-    """A minimal ``urllib`` response whose payload is a canned JSON body."""
-
-    def __init__(self, payload: object) -> None:
-        self._payload = json.dumps(payload).encode("utf-8")
-
-    def read(self) -> bytes:
-        return self._payload
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
 
 
 def _pypi_response(version: str) -> FakeResponse:

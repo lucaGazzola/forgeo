@@ -1170,14 +1170,18 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return
             self._send_json(200, updated.model_dump(mode="json"))
 
-        def _reopen_instance_task(self, path: str) -> None:
-            """Reopen a BLOCKED task: status back to OPEN, reason cleared.
-
-            A dedicated endpoint rather than a generic ``status`` via PATCH,
-            so the status transition stays outside the editable-fields model.
-            """
+        def _transition_instance_task(
+            self,
+            path: str,
+            *,
+            action: str,
+            from_statuses: tuple[TaskStatus, ...],
+            error_message: str,
+            method: str,
+        ) -> None:
+            """Run one single-status task transition (reopen/complete-review/...)."""
             parts = _instance_parts(path)
-            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "reopen":
+            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != action:
                 self._send_not_found()
                 return
             name = unquote(parts[0])
@@ -1188,21 +1192,31 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if config is None:
                 return
             task_id = unquote(parts[2])
-
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
             if task is None:
                 self._send_not_found()
                 return
-            if task.status is not TaskStatus.BLOCKED:
-                self._send_json(
-                    400,
-                    {"error": "only BLOCKED tasks can be reopened"},
-                )
+            if task.status not in from_statuses:
+                self._send_json(400, {"error": error_message})
                 return
-            reopened = asyncio.run(backlog.reopen_task(task_id))
-            assert reopened is not None  # task was just found in the backlog
-            self._send_json(200, reopened.model_dump(mode="json"))
+            updated = asyncio.run(getattr(backlog, method)(task_id))
+            assert updated is not None  # task was just found in the backlog
+            self._send_json(200, updated.model_dump(mode="json"))
+
+        def _reopen_instance_task(self, path: str) -> None:
+            """Reopen a BLOCKED task: status back to OPEN, reason cleared.
+
+            A dedicated endpoint rather than a generic ``status`` via PATCH,
+            so the status transition stays outside the editable-fields model.
+            """
+            self._transition_instance_task(
+                path,
+                action="reopen",
+                from_statuses=(TaskStatus.BLOCKED,),
+                error_message="only BLOCKED tasks can be reopened",
+                method="reopen_task",
+            )
 
         def _delete_instance_task(self, path: str) -> None:
             """Delete an OPEN, BLOCKED or REVIEW task from an instance's backlog."""
@@ -1229,55 +1243,23 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
 
         def _complete_review_instance_task(self, path: str) -> None:
             """Mark a REVIEW task COMPLETED after human merged the branch."""
-            parts = _instance_parts(path)
-            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "complete-review":
-                self._send_not_found()
-                return
-            name = unquote(parts[0])
-            info = self._resolve_instance(name)
-            if info is None:
-                return
-            config = self._instance_config(info)
-            if config is None:
-                return
-            task_id = unquote(parts[2])
-            backlog = open_backlog(config)
-            task = asyncio.run(backlog.get_task(task_id))
-            if task is None:
-                self._send_not_found()
-                return
-            if task.status is not TaskStatus.REVIEW:
-                self._send_json(400, {"error": "only REVIEW tasks can be completed"})
-                return
-            completed = asyncio.run(backlog.complete_review(task_id))
-            assert completed is not None
-            self._send_json(200, completed.model_dump(mode="json"))
+            self._transition_instance_task(
+                path,
+                action="complete-review",
+                from_statuses=(TaskStatus.REVIEW,),
+                error_message="only REVIEW tasks can be completed",
+                method="complete_review",
+            )
 
         def _request_changes_instance_task(self, path: str) -> None:
             """Move a REVIEW task back to OPEN for rework."""
-            parts = _instance_parts(path)
-            if len(parts) != 4 or parts[1] != "tasks" or parts[3] != "request-changes":
-                self._send_not_found()
-                return
-            name = unquote(parts[0])
-            info = self._resolve_instance(name)
-            if info is None:
-                return
-            config = self._instance_config(info)
-            if config is None:
-                return
-            task_id = unquote(parts[2])
-            backlog = open_backlog(config)
-            task = asyncio.run(backlog.get_task(task_id))
-            if task is None:
-                self._send_not_found()
-                return
-            if task.status is not TaskStatus.REVIEW:
-                self._send_json(400, {"error": "only REVIEW tasks can be sent back"})
-                return
-            reopened = asyncio.run(backlog.request_changes(task_id))
-            assert reopened is not None
-            self._send_json(200, reopened.model_dump(mode="json"))
+            self._transition_instance_task(
+                path,
+                action="request-changes",
+                from_statuses=(TaskStatus.REVIEW,),
+                error_message="only REVIEW tasks can be sent back",
+                method="request_changes",
+            )
 
         def _put_instance_api(self, path: str) -> None:
             """Route a PUT under ``/api/instances/`` to its handler."""

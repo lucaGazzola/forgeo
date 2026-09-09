@@ -8,7 +8,10 @@ import re
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from forgeo.models import Task, TaskStatus
 
 
 def plain_text_to_adf(text: str) -> dict[str, Any]:
@@ -298,6 +301,57 @@ ENGINE_STATE_FIELDS: frozenset[str] = frozenset(
         "review_commit_sha",
     }
 )
+
+
+def build_task(
+    *,
+    issue_id: str,
+    title: str | None,
+    description: str,
+    status: TaskStatus,
+    created: Any,
+    updated: Any,
+    run_at: Any,
+    state: dict[str, Any],
+) -> Task:
+    """Build a :class:`Task` from provider fields plus decoded engine ``state``.
+
+    Unifies the 22-kwarg ``Task(...)`` block duplicated across the GitHub,
+    GitLab and Jira providers. ``title`` falls back to ``issue_id`` when blank.
+    """
+    from forgeo.models import Task
+
+    clean_title = title.strip() if isinstance(title, str) and title.strip() else issue_id
+    clean_description = description.strip() if description.strip() else clean_title
+    agent_command = state.get("agent_command")
+    agent_response = state.get("agent_response")
+    review_branch = state.get("review_branch")
+    review_commit_sha = state.get("review_commit_sha")
+    review_required = state.get("review_required")
+    return Task(
+        id=issue_id,
+        title=clean_title,
+        description=clean_description,
+        dependencies=as_string_list(state.get("dependencies")),
+        acceptance_criteria=as_string_list(state.get("acceptance_criteria")),
+        files_to_modify=as_string_list(state.get("files_to_modify")),
+        status=status,
+        created_at=created,
+        updated_at=updated,
+        run_at=run_at,
+        agent_command=agent_command if isinstance(agent_command, str) else None,
+        agent_timeout_seconds=as_optional_float(state.get("agent_timeout_seconds")),
+        blocker_reason=as_string_list(state.get("blocker_reason")),
+        blocked_count=as_nonnegative_int(state.get("blocked_count")),
+        failure_reason=as_string_list(state.get("failure_reason")),
+        agent_response=agent_response if isinstance(agent_response, str) else None,
+        retries_left=as_optional_int(state.get("retries_left")),
+        retry_count=as_nonnegative_int(state.get("retry_count")),
+        failed_wait_cycles=as_nonnegative_int(state.get("failed_wait_cycles")),
+        review_branch=review_branch if isinstance(review_branch, str) else None,
+        review_commit_sha=review_commit_sha if isinstance(review_commit_sha, str) else None,
+        review_required=review_required if isinstance(review_required, bool) else None,
+    )
 
 
 def task_engine_state(task: Any) -> dict[str, Any]:

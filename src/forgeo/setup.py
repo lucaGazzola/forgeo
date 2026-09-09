@@ -148,6 +148,40 @@ def _ask_callback_port(input_fn: SetupInput | None, provider: str, out: Console)
         out.print("[red]Callback port must be an integer between 1 and 65535, or blank for ephemeral.[/red]")
 
 
+def _ask_oauth_client_id(
+    input_fn: SetupInput | None,
+    out: Console,
+    *,
+    provider: str,
+    env_var: str,
+    hint: str = "",
+    retry_suffix: str = "",
+) -> str:
+    """Prompt for an OAuth client ID until non-blank."""
+    default_client_id = os.environ.get(env_var)
+    prompt = f"[bold]{provider} OAuth client ID[/bold]"
+    if hint:
+        prompt += f" ({hint})"
+    if default_client_id:
+        prompt += f" [default {default_client_id}]"
+    client_id = _ask_text(input_fn, prompt, default=default_client_id).strip()
+    while not client_id:
+        out.print(f"[red]Client ID must not be blank{retry_suffix}.[/red]")
+        client_id = _ask_text(
+            input_fn, f"[bold]{provider} OAuth client ID[/bold]", default=default_client_id
+        ).strip()
+    return client_id
+
+
+def _ask_oauth_flow(input_fn: SetupInput | None, out: Console, *, prompt: str, default: str) -> str:
+    """Prompt for a device/browser OAuth flow, normalising unknown values to ``default``."""
+    flow_raw = _ask_text(input_fn, prompt, default=default).strip().lower() or default
+    if flow_raw not in ("device", "browser"):
+        out.print(f"[yellow]Unknown flow {flow_raw!r}, using {default}.[/yellow]")
+        flow_raw = default
+    return flow_raw
+
+
 def _detect_github_repo(project_root: Path) -> str | None:
     """Try to infer owner/repo from git remote origin."""
     try:
@@ -288,28 +322,20 @@ def _setup_github(
     ).strip()
     if token_env_raw.lower() in ("browser", "oauth", "device"):
         # OAuth / browser login path
-        default_client_id = os.environ.get("FORGEO_GITHUB_CLIENT_ID")
-        client_id = _ask_text(
+        client_id = _ask_oauth_client_id(
             input_fn,
-            "[bold]GitHub OAuth client ID[/bold] (from https://github.com/settings/developers > OAuth Apps)"
-            + (f" [default {default_client_id}]" if default_client_id else ""),
-            default=default_client_id,
-        ).strip()
-        while not client_id:
-            out.print("[red]Client ID must not be blank (or press Ctrl-C to abort).[/red]")
-            client_id = _ask_text(
-                input_fn,
-                "[bold]GitHub OAuth client ID[/bold]",
-                default=default_client_id,
-            ).strip()
-        flow_raw = _ask_text(
+            out,
+            provider="GitHub",
+            env_var="FORGEO_GITHUB_CLIENT_ID",
+            hint="from https://github.com/settings/developers > OAuth Apps",
+            retry_suffix=" (or press Ctrl-C to abort)",
+        )
+        flow_raw = _ask_oauth_flow(
             input_fn,
-            "[bold]OAuth flow[/bold] [device/browser] [default device]",
+            out,
+            prompt="[bold]OAuth flow[/bold] [device/browser] [default device]",
             default="device",
-        ).strip().lower() or "device"
-        if flow_raw not in ("device", "browser"):
-            out.print(f"[yellow]Unknown flow {flow_raw!r}, using device.[/yellow]")
-            flow_raw = "device"
+        )
         scope = _ask_text(
             input_fn,
             "[bold]OAuth scope[/bold] [default repo]",
@@ -428,23 +454,19 @@ def _setup_gitlab(
         default=DEFAULT_TOKEN_ENV_GITLAB,
     ).strip()
     if token_env_raw.lower() in ("browser", "oauth", "device"):
-        default_client_id = os.environ.get("FORGEO_GITLAB_CLIENT_ID")
-        client_id = _ask_text(
+        client_id = _ask_oauth_client_id(
             input_fn,
-            "[bold]GitLab OAuth client ID[/bold] (from GitLab Admin > Applications)",
-            default=default_client_id,
-        ).strip()
-        while not client_id:
-            out.print("[red]Client ID must not be blank.[/red]")
-            client_id = _ask_text(input_fn, "[bold]GitLab OAuth client ID[/bold]", default=default_client_id).strip()
-        flow_raw = _ask_text(
+            out,
+            provider="GitLab",
+            env_var="FORGEO_GITLAB_CLIENT_ID",
+            hint="from GitLab Admin > Applications",
+        )
+        flow_raw = _ask_oauth_flow(
             input_fn,
-            "[bold]OAuth flow[/bold] [browser/device] [default browser]",
+            out,
+            prompt="[bold]OAuth flow[/bold] [browser/device] [default browser]",
             default="browser",
-        ).strip().lower() or "browser"
-        if flow_raw not in ("browser", "device"):
-            out.print(f"[yellow]Unknown flow {flow_raw!r}, using browser.[/yellow]")
-            flow_raw = "browser"
+        )
         scope = _ask_text(
             input_fn,
             "[bold]OAuth scope[/bold] [default api]",
@@ -551,15 +573,13 @@ def _setup_jira(
         default="JIRA_TOKEN",
     ).strip()
     if token_env_raw.lower() in ("browser", "oauth"):
-        default_client_id = os.environ.get("FORGEO_JIRA_CLIENT_ID")
-        client_id = _ask_text(
+        client_id = _ask_oauth_client_id(
             input_fn,
-            "[bold]Jira OAuth client ID[/bold] (from https://developer.atlassian.com/console/myapps/)",
-            default=default_client_id,
-        ).strip()
-        while not client_id:
-            out.print("[red]Client ID must not be blank.[/red]")
-            client_id = _ask_text(input_fn, "[bold]Jira OAuth client ID[/bold]", default=default_client_id).strip()
+            out,
+            provider="Jira",
+            env_var="FORGEO_JIRA_CLIENT_ID",
+            hint="from https://developer.atlassian.com/console/myapps/",
+        )
         client_secret_env = _ask_text(
             input_fn,
             "[bold]Jira OAuth client secret env var[/bold] [default JIRA_CLIENT_SECRET]",

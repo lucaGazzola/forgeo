@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Deduplicated the marker-issue backlogs: `GithubBacklog`/`GitlabBacklog` are now thin adapters over a shared `MarkerIssueBacklog` (claim/transition/review lifecycle lives once), with a shared `build_task()` constructor.
+- Wired the OAuth providers to the shared `oauth_common` helpers (token stores, cached providers, PKCE, loopback, device-grant polling); provider modules now only carry their endpoint/scope defaults.
+- Unified the CLI OAuth param resolution, client-secret lookup, setup client-ID/flow prompts, and the central dashboard's single-status task transitions behind one table-driven helper each.
+- Merged the GitHub/GitLab backlog suites into one parametrized `test_backlog_issues.py`; shared test fakes (`wait_for`, `FakeResponse`, `FakeIssueClient`) live in `conftest.py`.
+- Removed dead code: unused `_PatAuthBase` model, per-provider OAuth/Auth model duplication (shared bases keep the same names and validation).
+
 ## [1.12.1] - 2026-09-09
 
 ### Fixed

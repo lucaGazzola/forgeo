@@ -1216,19 +1216,49 @@ def _auth_config_path(args: argparse.Namespace) -> Path | None:
     return default if default.exists() else None
 
 
-def _resolve_github_auth_params(
-    args: argparse.Namespace,
-) -> tuple[str, str, str, str, Path, int | None] | None:
-    """Resolve GitHub OAuth params from CLI args and optional config.
+_OAUTH_PARAM_DEFAULTS: dict[str, dict[str, str]] = {
+    "github": {
+        "api_base": "https://api.github.com",
+        "flow": "device",
+        "scope": "repo",
+        "missing": (
+            "GitHub OAuth client_id is required. Provide --client-id or set github.auth.oauth.client_id "
+            "in forgeo.yaml (create an OAuth App at https://github.com/settings/developers)."
+        ),
+    },
+    "gitlab": {
+        "api_base": "https://gitlab.com",
+        "flow": "browser",
+        "scope": "api",
+        "missing": (
+            "GitLab OAuth client_id is required. Provide --client-id or set gitlab.auth.oauth.client_id "
+            "in forgeo.yaml (create an Application at https://gitlab.com/-/profile/applications)."
+        ),
+    },
+    "jira": {
+        "api_base": "https://jira.example.com",
+        "flow": "browser",
+        "scope": "offline_access read:jira-user read:jira-work",
+        "missing": (
+            "Jira OAuth client_id is required. Provide --client-id or set jira.auth.oauth.client_id "
+            "in forgeo.yaml (create an App at https://developer.atlassian.com/console/myapps/)."
+        ),
+    },
+}
 
-    Returns (api_base, client_id, flow, scope, token_file, callback_port) or None after
-    printing an error.
+
+def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, Any] | None:
+    """Resolve OAuth params for ``provider`` from CLI args and optional config.
+
+    Returns a dict with ``api_base``, ``client_id``, ``flow``, ``scope``,
+    ``token_file``, ``callback_port`` (plus ``cloud_id`` for Jira), or ``None``
+    after printing an error.
     """
     from pathlib import Path as _P
 
     from forgeo.config import load_config
-    from forgeo.oauth_github import github_default_token_path
 
+    defaults = _OAUTH_PARAM_DEFAULTS[provider]
     config_path = _auth_config_path(args)
     config = None
     if config_path is not None and _P(config_path).exists():
@@ -1238,158 +1268,146 @@ def _resolve_github_auth_params(
             console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
             return None
 
+    provider_cfg = getattr(config, provider, None) if config is not None else None
     api_base = getattr(args, "api_base", None)
-    if api_base is None and config is not None and config.github is not None:
-        # config.backlog is the API base for github provider
-        if isinstance(config.backlog, str):
-            api_base = config.backlog
+    # config.backlog is the API base for issue providers
+    cfg_backlog = config.backlog if config is not None else None
+    if api_base is None and provider_cfg is not None and isinstance(cfg_backlog, str):
+        api_base = cfg_backlog
     if api_base is None:
-        api_base = "https://api.github.com"
+        api_base = defaults["api_base"]
 
     client_id = getattr(args, "client_id", None)
     flow = getattr(args, "flow", None)
     scope = getattr(args, "scope", None)
     token_file_arg = getattr(args, "token_file", None)
     callback_port = getattr(args, "callback_port", None)
+    cloud_id = getattr(args, "cloud_id", None) if provider == "jira" else None
 
-    # Fall back to config's oauth block
-    if config is not None and config.github is not None and config.github.auth.oauth is not None:
-        oauth = config.github.auth.oauth
+    oauth = (
+        provider_cfg.auth.oauth
+        if provider_cfg is not None and provider_cfg.auth is not None
+        else None
+    )
+    if oauth is not None:
         if client_id is None:
             client_id = oauth.client_id
         if flow is None:
             flow = oauth.flow
         if scope is None:
-            scope = oauth.scope or "repo"
+            scope = oauth.scope or defaults["scope"]
         if token_file_arg is None and oauth.token_file is not None:
             token_file_arg = _P(oauth.token_file)
         if callback_port is None:
             callback_port = oauth.callback_port
+        if provider == "jira" and cloud_id is None:
+            cloud_id = oauth.cloud_id
 
     if client_id is None or not str(client_id).strip():
-        console.print(
-            "[red]GitHub OAuth client_id is required. Provide --client-id or set github.auth.oauth.client_id in forgeo.yaml "
-            "(create an OAuth App at https://github.com/settings/developers).[/red]"
-        )
+        console.print(f"[red]{defaults['missing']}[/red]")
         return None
 
     if flow is None:
-        flow = "device"
+        flow = defaults["flow"]
     if scope is None:
-        scope = "repo"
-    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else github_default_token_path(api_base)
-    return api_base, str(client_id).strip(), str(flow), str(scope), token_file, callback_port
+        scope = defaults["scope"]
+    if provider == "github":
+        from forgeo.oauth_github import github_default_token_path as _default_token_path
+    elif provider == "gitlab":
+        from forgeo.oauth_gitlab import gitlab_default_token_path as _default_token_path
+    else:
+        from forgeo.oauth_jira import jira_default_token_path as _default_token_path
+    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else _default_token_path(api_base)
+    resolved: dict[str, Any] = {
+        "api_base": api_base,
+        "client_id": str(client_id).strip(),
+        "flow": str(flow),
+        "scope": str(scope),
+        "token_file": token_file,
+        "callback_port": callback_port,
+    }
+    if provider == "jira":
+        resolved["cloud_id"] = cloud_id
+    return resolved
+
+
+def _resolve_github_auth_params(
+    args: argparse.Namespace,
+) -> tuple[str, str, str, str, Path, int | None] | None:
+    """Resolve GitHub OAuth params from CLI args and optional config.
+
+    Returns (api_base, client_id, flow, scope, token_file, callback_port) or None after
+    printing an error.
+    """
+    resolved = _resolve_oauth_params("github", args)
+    if resolved is None:
+        return None
+    return (
+        resolved["api_base"],
+        resolved["client_id"],
+        resolved["flow"],
+        resolved["scope"],
+        resolved["token_file"],
+        resolved["callback_port"],
+    )
 
 
 def _resolve_gitlab_auth_params(
     args: argparse.Namespace,
 ) -> tuple[str, str, str, str, Path, int | None] | None:
     """Resolve GitLab OAuth params."""
-    from pathlib import Path as _P
-
-    from forgeo.config import load_config
-    from forgeo.oauth_gitlab import gitlab_default_token_path
-
-    config_path = _auth_config_path(args)
-    config = None
-    if config_path is not None and _P(config_path).exists():
-        try:
-            config = load_config(config_path)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
-            return None
-    api_base = getattr(args, "api_base", None)
-    if api_base is None and config is not None and config.gitlab is not None:
-        if isinstance(config.backlog, str):
-            api_base = config.backlog
-    if api_base is None:
-        api_base = "https://gitlab.com"
-    client_id = getattr(args, "client_id", None)
-    flow = getattr(args, "flow", None)
-    scope = getattr(args, "scope", None)
-    token_file_arg = getattr(args, "token_file", None)
-    callback_port = getattr(args, "callback_port", None)
-    if config is not None and config.gitlab is not None and config.gitlab.auth.oauth is not None:
-        oauth = config.gitlab.auth.oauth
-        if client_id is None:
-            client_id = oauth.client_id
-        if flow is None:
-            flow = oauth.flow
-        if scope is None:
-            scope = oauth.scope or "api"
-        if token_file_arg is None and oauth.token_file is not None:
-            token_file_arg = _P(oauth.token_file)
-        if callback_port is None:
-            callback_port = oauth.callback_port
-    if client_id is None or not str(client_id).strip():
-        console.print(
-            "[red]GitLab OAuth client_id is required. Provide --client-id or set gitlab.auth.oauth.client_id in forgeo.yaml "
-            "(create an Application at https://gitlab.com/-/profile/applications).[/red]"
-        )
+    resolved = _resolve_oauth_params("gitlab", args)
+    if resolved is None:
         return None
-    if flow is None:
-        flow = "browser"
-    if scope is None:
-        scope = "api"
-    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else gitlab_default_token_path(api_base)
-    return api_base, str(client_id).strip(), str(flow), str(scope), token_file, callback_port
+    return (
+        resolved["api_base"],
+        resolved["client_id"],
+        resolved["flow"],
+        resolved["scope"],
+        resolved["token_file"],
+        resolved["callback_port"],
+    )
 
 
 def _resolve_jira_auth_params(
     args: argparse.Namespace,
 ) -> tuple[str, str, str, str, Path, int | None, str | None] | None:
     """Resolve Jira OAuth params."""
-    from pathlib import Path as _P
-
-    from forgeo.config import load_config
-    from forgeo.oauth_jira import jira_default_token_path
-
-    config_path = _auth_config_path(args)
-    config = None
-    if config_path is not None and _P(config_path).exists():
-        try:
-            config = load_config(config_path)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
-            return None
-    api_base = getattr(args, "api_base", None)
-    if api_base is None and config is not None and config.jira is not None:
-        if isinstance(config.backlog, str):
-            api_base = config.backlog
-    if api_base is None:
-        api_base = "https://jira.example.com"
-    client_id = getattr(args, "client_id", None)
-    flow = getattr(args, "flow", None)
-    scope = getattr(args, "scope", None)
-    token_file_arg = getattr(args, "token_file", None)
-    callback_port = getattr(args, "callback_port", None)
-    cloud_id = getattr(args, "cloud_id", None)
-    if config is not None and config.jira is not None and config.jira.auth.oauth is not None:
-        oauth = config.jira.auth.oauth
-        if client_id is None:
-            client_id = oauth.client_id
-        if flow is None:
-            flow = oauth.flow
-        if scope is None:
-            scope = oauth.scope or "offline_access read:jira-user read:jira-work"
-        if token_file_arg is None and oauth.token_file is not None:
-            token_file_arg = _P(oauth.token_file)
-        if callback_port is None:
-            callback_port = oauth.callback_port
-        if cloud_id is None:
-            cloud_id = oauth.cloud_id
-    if client_id is None or not str(client_id).strip():
-        console.print(
-            "[red]Jira OAuth client_id is required. Provide --client-id or set jira.auth.oauth.client_id in forgeo.yaml "
-            "(create an App at https://developer.atlassian.com/console/myapps/).[/red]"
-        )
+    resolved = _resolve_oauth_params("jira", args)
+    if resolved is None:
         return None
-    if flow is None:
-        flow = "browser"
-    if scope is None:
-        scope = "offline_access read:jira-user read:jira-work"
-    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else jira_default_token_path(api_base)
-    return api_base, str(client_id).strip(), str(flow), str(scope), token_file, callback_port, cloud_id
+    return (
+        resolved["api_base"],
+        resolved["client_id"],
+        resolved["flow"],
+        resolved["scope"],
+        resolved["token_file"],
+        resolved["callback_port"],
+        resolved["cloud_id"],
+    )
+
+
+def _resolve_client_secret(args: argparse.Namespace, provider: str) -> str | None:
+    """Read the OAuth client secret from the env var named in the config, if any."""
+    from forgeo.config import load_config
+
+    try:
+        cfg_path = _auth_config_path(args)
+        if cfg_path and cfg_path.exists():
+            cfg = load_config(cfg_path)
+            provider_cfg = getattr(cfg, provider, None)
+            oauth = (
+                provider_cfg.auth.oauth
+                if provider_cfg is not None and provider_cfg.auth is not None
+                else None
+            )
+            if oauth is not None and oauth.client_secret_env:
+                import os
+
+                return os.environ.get(oauth.client_secret_env)
+    except Exception:
+        pass
+    return None
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -1417,21 +1435,7 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
         oauth_base = gitlab_oauth_base(api_base)
         console.print(f"[bold]GitLab auth[/bold]: provider=gitlab api_base={api_base} oauth_base={oauth_base} flow={flow}")
         # Resolve client_secret if configured
-        from forgeo.config import load_config
-
-        client_secret = None
-        # Try to get client_secret_env from config
-        try:
-            cfg_path = _auth_config_path(args)
-            if cfg_path and cfg_path.exists():
-                cfg = load_config(cfg_path)
-                if cfg.gitlab and cfg.gitlab.auth.oauth and cfg.gitlab.auth.oauth.client_secret_env:
-                    env = cfg.gitlab.auth.oauth.client_secret_env
-                    import os
-
-                    client_secret = os.environ.get(env)
-        except Exception:
-            pass
+        client_secret = _resolve_client_secret(args, "gitlab")
         try:
             if flow == "browser":
                 token_data = run_browser_flow(
@@ -1476,19 +1480,7 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
             console.print("[red]Jira OAuth supports browser flow only; use --flow browser.[/red]")
             return 2
         # Resolve client_secret
-        client_secret = None
-        try:
-            from forgeo.config import load_config
-
-            cfg_path = _auth_config_path(args)
-            if cfg_path and cfg_path.exists():
-                cfg = load_config(cfg_path)
-                if cfg.jira and cfg.jira.auth.oauth and cfg.jira.auth.oauth.client_secret_env:
-                    import os
-
-                    client_secret = os.environ.get(cfg.jira.auth.oauth.client_secret_env)
-        except Exception:
-            pass
+        client_secret = _resolve_client_secret(args, "jira")
         try:
             token_data = run_jira_browser_flow(
                 client_id,
@@ -1535,19 +1527,7 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
     try:
         if flow == "browser":
             # Resolve client_secret for confidential apps
-            client_secret = None
-            try:
-                from forgeo.config import load_config
-
-                cfg_path = _auth_config_path(args)
-                if cfg_path and cfg_path.exists():
-                    cfg = load_config(cfg_path)
-                    if cfg.github and cfg.github.auth.oauth and cfg.github.auth.oauth.client_secret_env:
-                        import os
-
-                        client_secret = os.environ.get(cfg.github.auth.oauth.client_secret_env)
-            except Exception:
-                pass
+            client_secret = _resolve_client_secret(args, "github")
             token_data = run_browser_flow(
                 client_id,
                 oauth_base,

@@ -8,8 +8,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -41,25 +39,7 @@ from forgeo.instances import list_instances, load_registry
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
 from forgeo.paths import lock_path, runs_path
 from forgeo.runs import RunRecorder
-from tests.conftest import FakeForgeo, git, make_config, make_task, requires_posix
-
-
-def write_config(git_repo: Path, tmp_path: Path, **overrides) -> Path:
-    """A config file wired to the fixture repo; returns its path."""
-    config = make_config(git_repo, tmp_path, **overrides)
-    path = tmp_path / "forgeo.yaml"
-    path.write_text(
-        f"name: {config.name}\n"
-        f"repo: {config.repo}\n"
-        f"backlog: {config.backlog}\n"
-        f"blocker_file: {config.blocker_file}\n"
-        f"agent_command: {config.agent_command}\n"
-        f"log_file: {config.log_file}\n"
-        f"interval_minutes: {config.interval_minutes}\n"
-        f"branch: {config.branch}\n",
-        encoding="utf-8",
-    )
-    return path
+from tests.conftest import FakeForgeo, git, make_config, make_task, requires_posix, wait_for
 
 
 def write_config_in(dir_path: Path, git_repo: Path, tmp_path: Path, **overrides) -> Path:
@@ -78,6 +58,11 @@ def write_config_in(dir_path: Path, git_repo: Path, tmp_path: Path, **overrides)
         encoding="utf-8",
     )
     return path
+
+
+def write_config(git_repo: Path, tmp_path: Path, **overrides) -> Path:
+    """A config file wired to the fixture repo; returns its path."""
+    return write_config_in(tmp_path, git_repo, tmp_path, **overrides)
 
 
 def once_args(config_path: Path) -> argparse.Namespace:
@@ -110,16 +95,6 @@ def start_args(config_path: Path) -> argparse.Namespace:
         interval_minutes=None,
         foreground=False,
     )
-
-
-def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
-    """Poll ``predicate`` until it holds; False on timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return False
 
 
 def spawn_daemon(config_path: Path) -> subprocess.Popen[bytes]:

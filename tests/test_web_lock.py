@@ -8,8 +8,6 @@ import os
 import socket
 import subprocess
 import sys
-import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -27,17 +25,7 @@ from forgeo.central import (
 )
 from forgeo.cli import build_parser, cmd_web, cmd_web_status, cmd_web_stop
 from forgeo.daemon import read_lock_pid
-from tests.conftest import requires_posix
-
-
-def wait_for(predicate: Callable[[], bool], timeout: float = 15.0) -> bool:
-    """Poll ``predicate`` until it holds; False on timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.02)
-    return False
+from tests.conftest import requires_posix, wait_for
 
 
 def free_port() -> int:

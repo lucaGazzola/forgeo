@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -477,12 +477,6 @@ class JiraWorkflow(BaseModel):
         return value
 
 
-def _field_names_not_blank(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return _require_non_blank(value, "field names must not be blank")
-
-
 _ISSUE_FIELD_NAMES: tuple[str, ...] = (
     "acceptance_criteria",
     "dependencies",
@@ -508,7 +502,9 @@ class _IssueFieldMappingBase(BaseModel):
     @field_validator(*_ISSUE_FIELD_NAMES)
     @classmethod
     def _check_field_names(cls, value: str | None) -> str | None:
-        return _field_names_not_blank(value)
+        if value is None:
+            return None
+        return _require_non_blank(value, "field names must not be blank")
 
 
 class JiraFieldMapping(_IssueFieldMappingBase):
@@ -559,21 +555,8 @@ class JiraBacklogConfig(_IssueBacklogConfigBase):
 # ------------------------------------------------------------------ #
 
 
-class _PatAuthBase(BaseModel):
-    """Shared PAT authentication for issue providers."""
-
-    token_env: str
-
-    @field_validator("token_env")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
-
-
-class GithubOAuthConfig(BaseModel):
-    """OAuth / browser login for GitHub."""
+class _OAuthConfigBase(BaseModel):
+    """Shared OAuth / browser-login fields for issue providers."""
 
     client_id: str
     scope: str | None = None
@@ -597,82 +580,58 @@ class GithubOAuthConfig(BaseModel):
         return value
 
 
-class GithubAuth(BaseModel):
+class GithubOAuthConfig(_OAuthConfigBase):
+    """OAuth / browser login for GitHub."""
+
+
+class _TokenOrOAuthAuthBase(BaseModel):
+    """Exactly one of PAT (``token_env``) or ``oauth`` must be set."""
+
+    provider_label: ClassVar[str] = "issue"
+    token_env: str | None = None
+
+    @field_validator("token_env")
+    @classmethod
+    def _token_env_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("token_env must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_auth(self) -> _TokenOrOAuthAuthBase:
+        has_pat = self.token_env is not None
+        has_oauth = getattr(self, "oauth", None) is not None
+        if has_pat == has_oauth:
+            raise ValueError(f"{self.provider_label}.auth must have exactly one of token_env or oauth")
+        return self
+
+
+class GithubAuth(_TokenOrOAuthAuthBase):
     """PAT or OAuth authentication for GitHub REST API.
 
     Exactly one of ``token_env`` (PAT) or ``oauth`` (browser/device flow)
     must be set. ``token_env`` preserves the historical behaviour.
     """
 
-    token_env: str | None = None
+    provider_label: ClassVar[str] = "github"
     oauth: GithubOAuthConfig | None = None
 
-    @field_validator("token_env")
-    @classmethod
-    def _token_env_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
 
-    @model_validator(mode="after")
-    def _exactly_one_auth(self) -> GithubAuth:
-        has_pat = self.token_env is not None
-        has_oauth = self.oauth is not None
-        if has_pat == has_oauth:
-            raise ValueError("github.auth must have exactly one of token_env or oauth")
-        return self
-
-
-
-class GitlabOAuthConfig(BaseModel):
+class GitlabOAuthConfig(_OAuthConfigBase):
     """OAuth / browser login for GitLab."""
 
-    client_id: str
-    scope: str | None = None
-    token_file: str | Path | None = None
-    callback_port: int | None = Field(default=None, ge=1, le=65535)
     flow: Literal["device", "browser"] = "browser"
-    client_secret_env: str | None = None
-
-    @field_validator("client_id")
-    @classmethod
-    def _client_id_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("client_id must not be blank")
-        return value
-
-    @field_validator("client_secret_env")
-    @classmethod
-    def _secret_env_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("client_secret_env must not be blank")
-        return value
 
 
-class GitlabAuth(BaseModel):
+class GitlabAuth(_TokenOrOAuthAuthBase):
     """PAT or OAuth authentication for GitLab REST API.
 
     Exactly one of ``token_env`` (PAT) or ``oauth`` (browser/device flow)
     must be set.
     """
 
-    token_env: str | None = None
+    provider_label: ClassVar[str] = "gitlab"
     oauth: GitlabOAuthConfig | None = None
-
-    @field_validator("token_env")
-    @classmethod
-    def _token_env_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
-
-    @model_validator(mode="after")
-    def _exactly_one_auth(self) -> GitlabAuth:
-        has_pat = self.token_env is not None
-        has_oauth = self.oauth is not None
-        if has_pat == has_oauth:
-            raise ValueError("gitlab.auth must have exactly one of token_env or oauth")
-        return self
 
 
 

@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import logging
 import os
 import secrets
 import threading
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
-import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlencode, urlparse
+
+from forgeo.oauth_common import (
+    CallbackHandler,
+    FileTokenStore,
+    bind_loopback,
+    open_authorize_url,
+    pkce_pair,
+    post_form,
+    wait_for_callback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,56 +58,15 @@ def jira_oauth_base(api_base: str | None = None) -> str:
     return ATLASSIAN_AUTH_BASE
 
 
-class JiraTokenStore:
+class JiraTokenStore(FileTokenStore):
     def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
-        if path is not None:
-            self.path = Path(path).expanduser()
-        else:
-            self.path = jira_default_token_path(api_base)
-
-    def load(self) -> dict[str, Any] | None:
-        if not self.path.is_file():
-            return None
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(data, dict) or not data.get("access_token"):
-            return None
-        return data
+        super().__init__(Path(path).expanduser() if path is not None else jira_default_token_path(api_base))
 
     def save(self, data: dict[str, Any]) -> None:
         data = dict(data)
         if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
             data["issued_at"] = time.time()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.path)
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
-
-    def clear(self) -> bool:
-        try:
-            self.path.unlink()
-            return True
-        except FileNotFoundError:
-            return False
-        except OSError:
-            return False
-
-    def token(self) -> str | None:
-        data = self.load()
-        if data is None:
-            return None
-        token = data.get("access_token")
-        return token if isinstance(token, str) and token else None
+        super().save(data)
 
 
 EXPIRY_MARGIN_SECONDS = 60.0
@@ -204,33 +167,7 @@ class JiraOAuthTokenProvider:
 
 
 def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:
-    body = urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise JiraOAuthError(f"Unexpected response from {url}: not a JSON object")
-            if data.get("error"):
-                desc = data.get("error_description") or data.get("error") or ""
-                raise JiraOAuthError(f"Jira OAuth error at {url}: {data.get('error')}: {desc}")
-            return data
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")
-            if detail:
-                detail = f": {detail[:500]}"
-        except Exception:
-            pass
-        raise JiraOAuthError(f"Jira OAuth request to {url} failed with HTTP {exc.code}{detail}") from exc
-    except OSError as exc:
-        raise JiraOAuthError(f"Jira OAuth request to {url} failed: {exc}") from exc
+    return post_form(url, fields, timeout, JiraOAuthError, label="Jira OAuth")
 
 
 def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> dict[str, Any]:
@@ -262,41 +199,11 @@ def _fetch_accessible_resources(access_token: str) -> list[dict[str, Any]]:
 
 
 def _pkce_pair() -> tuple[str, str]:
-    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
-    return verifier, challenge
+    return pkce_pair()
 
 
-class _CallbackHandler(BaseHTTPRequestHandler):
-    code: str | None = None
-    state: str | None = None
-    error: str | None = None
-
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
-        code_vals = qs.get("code")
-        state_vals = qs.get("state")
-        error_vals = qs.get("error")
-        self.code = code_vals[0] if code_vals else None
-        self.state = state_vals[0] if state_vals else None
-        self.error = error_vals[0] if error_vals else None
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        if self.error:
-            self.wfile.write(
-                f"<html><body><h1>Forgeo Jira login failed</h1><p>{self.error}</p><p>You may close this window.</p></body></html>".encode()
-            )
-        elif self.code:
-            self.wfile.write(
-                b"<html><body><h1>Forgeo Jira login succeeded</h1><p>You may close this window and return to the terminal.</p></body></html>"
-            )
-        else:
-            self.wfile.write(b"<html><body><h1>Forgeo Jira login</h1><p>No code received.</p></body></html>")
-
-    def log_message(self, format: str, *args: Any) -> None:
-        logger.debug("oauth callback %s", format % args)
+class _CallbackHandler(CallbackHandler):
+    provider_label = "Jira"
 
 
 def run_browser_flow(
@@ -314,14 +221,7 @@ def run_browser_flow(
     del oauth_base  # Atlassian base is fixed
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(16)
-    if callback_port is not None and not 1 <= callback_port <= 65535:
-        raise JiraOAuthError("OAuth callback port must be between 1 and 65535")
-    # Use an ephemeral port by default; a fixed port can be supplied when the
-    # provider requires an exact callback URL to be registered.
-    try:
-        server = HTTPServer(("127.0.0.1", callback_port or 0), _CallbackHandler)
-    except OSError as exc:
-        raise JiraOAuthError(f"Could not bind OAuth callback port: {exc}") from exc
+    server = bind_loopback(_CallbackHandler, callback_port, JiraOAuthError)
     addr = server.server_address
     host: str = str(addr[0])
     port: int = int(addr[1])
@@ -343,42 +243,8 @@ def run_browser_flow(
         "code_challenge_method": "S256",
     }
     auth_url = f"{ATLASSIAN_AUTH_BASE}/authorize?{urlencode(params)}"
-    if open_browser:
-        print(f"\nOpening browser for Jira login:\n  {auth_url}\n")
-        try:
-            webbrowser.open(auth_url)
-        except Exception:
-            print(f"Could not open browser automatically; please open:\n  {auth_url}")
-    else:
-        print(f"\nOpen this URL in your browser to authorize Forgeo:\n  {auth_url}\n")
-    server.timeout = timeout
-    last_handler: list[_CallbackHandler] = []
-
-    def _finish(request: Any, client_address: Any) -> None:
-        handler_inst = _CallbackHandler(request, client_address, server)
-        last_handler.append(handler_inst)
-
-    server.finish_request = _finish  # type: ignore[method-assign]
-    start = time.monotonic()
-    code: str | None = None
-    received_state: str | None = None
-    error: str | None = None
-    while time.monotonic() - start < timeout:
-        server.handle_request()
-        if last_handler:
-            h = last_handler[-1]
-            code = h.code
-            received_state = h.state
-            error = h.error
-            if code or error:
-                break
-    server.server_close()
-    if error:
-        raise JiraOAuthError(f"Jira OAuth authorize error: {error}")
-    if not code:
-        raise JiraOAuthError("Browser login timed out waiting for Jira callback.")
-    if received_state != state:
-        raise JiraOAuthError("OAuth state mismatch (possible CSRF); try again.")
+    open_authorize_url(auth_url, "Jira", open_browser=open_browser)
+    code, redirect_uri = wait_for_callback(server, _CallbackHandler, state, timeout, JiraOAuthError, "Jira")
     token_url = f"{ATLASSIAN_AUTH_BASE}/oauth/token"
     fields: dict[str, str] = {
         "grant_type": "authorization_code",
@@ -408,3 +274,17 @@ def run_browser_flow(
     else:
         token_data["cloud_id"] = cloud_id
     return token_data
+
+
+__all__ = [
+    "ATLASSIAN_API_BASE",
+    "ATLASSIAN_AUTH_BASE",
+    "DEFAULT_JIRA_TOKEN_DIR",
+    "EXPIRY_MARGIN_SECONDS",
+    "JiraOAuthError",
+    "JiraOAuthTokenProvider",
+    "JiraTokenStore",
+    "jira_default_token_path",
+    "jira_oauth_base",
+    "run_browser_flow",
+]

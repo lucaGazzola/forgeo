@@ -232,9 +232,6 @@ def run_browser_flow(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    # Clean empty scope handling
-    if not scope:
-        params["scope"] = "repo"
     auth_url = f"{oauth_base.rstrip('/')}/login/oauth/authorize?{urlencode(params)}"
     open_authorize_url(auth_url, "GitHub", open_browser=open_browser)
     code, redirect_uri = wait_for_callback(server, _CallbackHandler, state, timeout, GithubOAuthError, "GitHub")

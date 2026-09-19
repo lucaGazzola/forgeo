@@ -13,6 +13,7 @@ so loading fills in ``state_dir`` with the config file's own directory (see
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -119,10 +120,9 @@ def save_config(path: str | Path, config: ForgeoConfig) -> ForgeoConfig:
             continue
         value = Path(payload[field])
         if value.is_absolute():
-            try:
+            with contextlib.suppress(ValueError):
+                # different drive (Windows): keep the absolute path
                 payload[field] = os.path.relpath(value, base)
-            except ValueError:
-                pass  # different drive (Windows): keep the absolute path
     for name in ("jira", "github", "gitlab"):
         provider = payload.get(name)
         if not isinstance(provider, dict):

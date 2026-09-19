@@ -181,28 +181,27 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
-_REMOTE_MESSAGES: dict[str, tuple[str, str]] = {
-    "jira": ("Jira backlog could not be read", "Jira backlog answers"),
-    "github": ("GitHub backlog could not be read", "GitHub backlog answers"),
-    "gitlab": ("GitLab backlog could not be read", "GitLab backlog answers"),
-    "http": ("backlog endpoint could not be read", "backlog endpoint answers"),
-}
+def _remote_label(provider: str) -> str:
+    return {
+        "jira": "Jira backlog",
+        "github": "GitHub backlog",
+        "gitlab": "GitLab backlog",
+    }.get(provider, "backlog endpoint")
 
 
 def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     """Fetch a remote backlog once to prove it answers before a cycle needs it."""
     provider = config.effective_backlog_provider
+    label = _remote_label(provider)
     try:
         if config.backlog_is_issue_provider:
             asyncio.run(open_backlog(config).validate_connection())
-            note = _REMOTE_MESSAGES.get(provider, ("", "backlog endpoint answers"))[1]
-            report.notes.append(f"{note} ({config.backlog})")
+            report.notes.append(f"{label} answers ({config.backlog})")
         else:
             tasks = asyncio.run(open_backlog(config).list_tasks())
             report.notes.append(f"backlog endpoint answers ({len(tasks)} tasks)")
     except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
-        prefix = _REMOTE_MESSAGES.get(provider, ("backlog could not be read", ""))[0]
-        report.problems.append(f"{prefix}: {exc}")
+        report.problems.append(f"{label} could not be read: {exc}")
 
 
 def _check_task_context(config: ForgeoConfig, report: ValidationReport) -> None:

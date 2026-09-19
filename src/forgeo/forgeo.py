@@ -22,6 +22,7 @@ writes the file once and keeps Forgeo paused until the file is deleted.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from dataclasses import dataclass
@@ -701,6 +702,16 @@ class Forgeo:
         """
         return [result.error] if result.error else ["no error detail provided"]
 
+    async def _push(self, sha: str, branch: str) -> None:
+        """Push ``sha`` to ``branch`` when a remote is set; never raises."""
+        if not self.config.remote:
+            return
+        try:
+            await self.git.a_push(self.config.remote, branch)
+            logger.info("Pushed %s to %s/%s", sha, self.config.remote, branch)
+        except GitError as exc:
+            logger.error("Push failed (work stays committed locally): %s", exc)
+
     async def _commit_and_push(self, message: str, *, task: Task) -> bool:
         """Commit everything on the main branch and push when a remote is set.
 
@@ -721,12 +732,7 @@ class Forgeo:
             return True
         self._last_commit_sha = sha
         logger.info("Committed %s: %s", sha, message)
-        if self.config.remote:
-            try:
-                await self.git.a_push(self.config.remote, self.config.branch)
-                logger.info("Pushed %s to %s/%s", sha, self.config.remote, self.config.branch)
-            except GitError as exc:
-                logger.error("Push failed (work stays committed locally): %s", exc)
+        await self._push(sha, self.config.branch)
         return True
 
     async def _commit_on_review_branch(self, task: Task, message: str) -> bool:
@@ -742,15 +748,11 @@ class Forgeo:
         except GitError as exc:
             self._last_commit_sha = None
             # Return to base branch before failing
-            try:
+            with contextlib.suppress(GitError):
                 await self.git.a_ensure_branch(self.config.branch)
-            except GitError:
-                pass
             # Discard any uncommitted changes left after failed commit attempt
-            try:
+            with contextlib.suppress(GitError):
                 await self.git.a_reset_hard()
-            except GitError:
-                pass
             await self._fail(
                 task,
                 ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
@@ -765,12 +767,7 @@ class Forgeo:
             return True
         self._last_commit_sha = sha
         logger.info("Committed %s on branch %s: %s", sha, review_branch, message)
-        if self.config.remote:
-            try:
-                await self.git.a_push(self.config.remote, review_branch)
-                logger.info("Pushed %s to %s/%s", sha, self.config.remote, review_branch)
-            except GitError as exc:
-                logger.error("Push failed (work stays committed locally): %s", exc)
+        await self._push(sha, review_branch)
         try:
             await self.git.a_ensure_branch(self.config.branch)
         except GitError as exc:

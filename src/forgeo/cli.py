@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -693,15 +694,11 @@ def _cmd_start_foreground(args: argparse.Namespace) -> int:
         )
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
+            with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(sig, daemon.stop)
-            except NotImplementedError:
-                pass
         if hasattr(signal, "SIGHUP"):
-            try:
+            with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(signal.SIGHUP, daemon.request_reload)
-            except NotImplementedError:
-                pass
         console.print(
             Panel.fit(
                 f"[bold]Forgeo:[/bold] {config.name}\n"
@@ -1426,7 +1423,13 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth login``: run OAuth flow and store token."""
     provider = getattr(args, "provider", "github")
     if provider == "gitlab":
-        from forgeo.oauth_gitlab import GitlabOAuthError, GitlabTokenStore, gitlab_oauth_base, run_browser_flow, run_device_flow
+        from forgeo.oauth_gitlab import (
+            GitlabOAuthError,
+            GitlabTokenStore,
+            gitlab_oauth_base,
+            run_browser_flow,
+            run_device_flow,
+        )
 
         gitlab_params = _resolve_gitlab_auth_params(args)
         if gitlab_params is None:
@@ -1468,6 +1471,8 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
         from forgeo.oauth_jira import (
             JiraOAuthError,
             JiraTokenStore,
+        )
+        from forgeo.oauth_jira import (
             run_browser_flow as run_jira_browser_flow,
         )
 

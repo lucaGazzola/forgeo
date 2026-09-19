@@ -18,6 +18,7 @@ The result is written as ``forgeo.yaml`` next to the project.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from collections.abc import Callable
@@ -226,10 +227,8 @@ def _persist_token(token_env: str, token_value: str, console: Console) -> None:
             f"export {token_env}='{token_value.strip()}'\n",
             encoding="utf-8",
         )
-        try:
+        with contextlib.suppress(Exception):  # noqa: BLE001, S110 - chmod is best-effort
             os.chmod(env_file, 0o600)
-        except Exception:  # noqa: BLE001, S110 - chmod is best-effort, ignore failures
-            pass
         # Wire bashrc
         bashrc = Path.home() / ".bashrc"
         marker = "github_token_env.sh"

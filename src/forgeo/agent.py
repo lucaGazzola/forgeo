@@ -23,6 +23,7 @@ is indistinguishable from an agent that simply did nothing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shutil
 import signal
@@ -219,10 +220,8 @@ class ShellAgent(BaseAgent):
             try:
                 await asyncio.wait_for(proc.wait(), timeout=self.drain_timeout_seconds)
             except TimeoutError:
-                try:
+                with contextlib.suppress(Exception):  # noqa: BLE001, S110 - close must not fail the task
                     proc._transport.close()  # type: ignore[attr-defined]
-                except Exception:  # noqa: BLE001, S110 - close must not fail the task
-                    pass
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=1.0)
                 except TimeoutError:
@@ -239,10 +238,8 @@ class ShellAgent(BaseAgent):
             await asyncio.wait_for(readers, timeout=self.drain_timeout_seconds)
         except TimeoutError:
             readers.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await readers
-            except asyncio.CancelledError:
-                pass
             logs.append(
                 f"[{self.name}] Output streams stayed open beyond "
                 f"{self.drain_timeout_seconds:g}s; proceeding without them."

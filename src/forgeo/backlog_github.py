@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import urllib.error
@@ -10,9 +11,9 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from forgeo.backlog import BacklogUnavailableError
-from forgeo.backlog_issue_base import embed_engine_state, execute_json_request, require_env_token
+from forgeo.backlog_issue_base import execute_json_request, require_env_token
 from forgeo.backlog_marker import MarkerIssueBacklog
-from forgeo.models import GithubBacklogConfig, Task
+from forgeo.models import GithubBacklogConfig
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +112,8 @@ class GithubClient:
                     and self.config.auth.oauth is not None
                     and self._oauth_provider is not None
                 ):
-                    try:
-                        self._oauth_provider.invalidate()  # noqa: BLE001
-                    except Exception:  # noqa: BLE001
-                        pass
+                    with contextlib.suppress(Exception):  # noqa: BLE001
+                        self._oauth_provider.invalidate()
                     continue
                 raise
 
@@ -195,13 +194,3 @@ class GithubBacklog(MarkerIssueBacklog):
     def _created_id(self, created: Any) -> str | None:
         number = created.get("number") if isinstance(created, dict) else None
         return str(number) if isinstance(number, int) else None
-
-    def _create_fields(self, task: Task, engine: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "title": task.title,
-            "body": embed_engine_state(task.description, engine),
-            "labels": [self.config.label_prefix],
-        }
-
-    def _update_body_field(self, candidate: Task, state: dict[str, Any]) -> dict[str, Any]:
-        return {"body": embed_engine_state(candidate.description, state)}

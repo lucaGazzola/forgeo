@@ -40,17 +40,10 @@ def jira_default_token_path(api_base: str | None = None) -> Path:
     base = (api_base or "https://jira.example.com").rstrip("/")
     parsed = urlparse(base)
     host = parsed.hostname or "jira"
-    if "atlassian.net" in host or "atlassian.com" in host:
-        # Use host prefix to avoid collisions, but keep generic name for many Atlassian sites
-        safe = host.replace(".", "_")
-        name = f"jira_{safe}.json"
-    else:
-        safe = host.replace(".", "_")
-        name = f"jira_{safe}.json"
-    # Fallback generic
-    if name == "jira_jira.example.com.json":
-        name = "jira.json"
-    return DEFAULT_JIRA_TOKEN_DIR / name
+    if host == "jira.example.com":
+        return DEFAULT_JIRA_TOKEN_DIR / "jira.json"
+    safe = host.replace(".", "_")
+    return DEFAULT_JIRA_TOKEN_DIR / f"jira_{safe}.json"
 
 
 def jira_oauth_base(api_base: str | None = None) -> str:

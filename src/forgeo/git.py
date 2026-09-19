@@ -69,21 +69,20 @@ class GitManager:
         except GitError:
             return False
 
-    def branch_exists(self, branch: str) -> bool:
-        """Return True when ``branch`` exists locally."""
+    def _ref_exists(self, *args: str) -> bool:
         try:
-            self._run("rev-parse", "--verify", f"refs/heads/{branch}")
+            self._run("rev-parse", "--verify", *args)
             return True
         except GitError:
             return False
 
+    def branch_exists(self, branch: str) -> bool:
+        """Return True when ``branch`` exists locally."""
+        return self._ref_exists(f"refs/heads/{branch}")
+
     def has_commits(self) -> bool:
         """Return True when the repository has at least one commit."""
-        try:
-            self._run("rev-parse", "--verify", "HEAD")
-            return True
-        except GitError:
-            return False
+        return self._ref_exists("HEAD")
 
     def remote_url(self, remote: str) -> str:
         """Return the URL of ``remote`` or raise :class:`GitError`."""

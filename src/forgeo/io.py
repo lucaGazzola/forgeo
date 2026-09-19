@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -30,3 +31,10 @@ def atomic_write_text(path: str | Path, content: str) -> None:
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
         raise
+
+
+def atomic_write_private(path: str | Path, content: str) -> None:
+    """Like :func:`atomic_write_text` but restricts to ``0600`` when possible."""
+    atomic_write_text(path, content)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)

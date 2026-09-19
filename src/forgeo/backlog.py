@@ -337,6 +337,7 @@ class BacklogStore(ABC):
 
     async def recover_claims(self) -> None:
         """Recover stale remote claims before a new cycle starts."""
+        return None
 
     async def validate_connection(self) -> None:
         """Verify that this provider can be read without mutating it."""

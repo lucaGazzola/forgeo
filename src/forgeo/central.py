@@ -53,6 +53,7 @@ exactly as before (no auth).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
@@ -386,10 +387,10 @@ class WebLock:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
+        except FileExistsError as err:
             raise WebLockError(
                 f"Another central dashboard just took the lock {self.lock_path}; retry."
-            )
+            ) from err
         try:
             os.write(
                 fd,
@@ -401,10 +402,8 @@ class WebLock:
 
     def release(self) -> None:
         """Remove the lock file (idempotent)."""
-        try:
+        with contextlib.suppress(FileNotFoundError):
             self.lock_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def web_task_id_for(tasks: list[Task]) -> str:
@@ -1510,10 +1509,8 @@ async def _serve_forever(
         stop_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _on_signal)
-        except NotImplementedError:
-            pass
     if stop_requested.is_set():
         stop_event.set()
     Console(stderr=True).print(
@@ -1628,10 +1625,8 @@ def run_foreground(
         stop_requested.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(ValueError, OSError):
             signal.signal(sig, _request_stop)
-        except (ValueError, OSError):
-            pass
     lock = WebLock()
     try:
         lock.acquire(host=host, port=port)

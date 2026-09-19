@@ -17,6 +17,7 @@ acceptance criteria and dependencies.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -200,10 +201,8 @@ class JiraClient:
                     and self.config.auth.oauth is not None
                     and self._oauth_provider is not None
                 ):
-                    try:
-                        self._oauth_provider.invalidate()  # noqa: BLE001
-                    except Exception:  # noqa: BLE001
-                        pass
+                    with contextlib.suppress(Exception):  # noqa: BLE001
+                        self._oauth_provider.invalidate()
                     continue
                 raise
             if not isinstance(data, dict):

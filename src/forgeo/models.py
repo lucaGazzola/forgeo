@@ -7,8 +7,8 @@ forgeo should work on it.
 
 from __future__ import annotations
 
-import enum
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
@@ -80,11 +80,23 @@ def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | 
     return value
 
 
+def _require_non_blank(value: str, message: str) -> str:
+    if not value.strip():
+        raise ValueError(message)
+    return value
+
+
+def _require_optional_non_blank(value: str | None, message: str) -> str | None:
+    if value is not None and not value.strip():
+        raise ValueError(message)
+    return value
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-class TaskStatus(str, enum.Enum):
+class TaskStatus(StrEnum):
     OPEN = "OPEN"
     REVIEW = "REVIEW"
     BLOCKED = "BLOCKED"
@@ -92,13 +104,13 @@ class TaskStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
-class ExecutionStatus(str, enum.Enum):
+class ExecutionStatus(StrEnum):
     SUCCESS = "SUCCESS"
     BLOCKED = "BLOCKED"
     ERROR = "ERROR"
 
 
-class SandboxMode(str, enum.Enum):
+class SandboxMode(StrEnum):
     """How the agent process is isolated from the host machine.
 
     ``NONE`` runs the agent directly on the host with the user's full
@@ -110,14 +122,14 @@ class SandboxMode(str, enum.Enum):
     DOCKER = "docker"
 
 
-class RunKind(str, enum.Enum):
+class RunKind(StrEnum):
     """What kind of work a finished cycle performed."""
 
     TASK = "task"
     REFACTOR = "refactor"
 
 
-class RunOutcome(str, enum.Enum):
+class RunOutcome(StrEnum):
     """The outcome of a finished cycle.
 
     ``SUCCESS``, ``BLOCKED`` and ``ERROR`` mirror the agent execution status;
@@ -367,9 +379,7 @@ class BacklogAuth(BaseModel):
     @field_validator("client_id", "client_secret_env")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
+        return _require_non_blank(value, "must not be blank")
 
 
 class JiraOAuthConfig(BaseModel):
@@ -386,16 +396,12 @@ class JiraOAuthConfig(BaseModel):
     @field_validator("client_id")
     @classmethod
     def _client_id_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("client_id must not be blank")
-        return value
+        return _require_non_blank(value, "client_id must not be blank")
 
     @field_validator("client_secret_env", "cloud_id")
     @classmethod
     def _not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("value must not be blank")
-        return value
+        return _require_optional_non_blank(value, "value must not be blank")
 
 
 class JiraAuth(BaseModel):
@@ -420,16 +426,12 @@ class JiraAuth(BaseModel):
     @field_validator("token_env", "username_env")
     @classmethod
     def _env_name_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("environment variable names must not be blank")
-        return value
+        return _require_optional_non_blank(value, "environment variable names must not be blank")
 
     @field_validator("username")
     @classmethod
     def _username_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("username must not be blank")
-        return value
+        return _require_optional_non_blank(value, "username must not be blank")
 
     @model_validator(mode="after")
     def _check_auth(self) -> JiraAuth:
@@ -524,8 +526,7 @@ class _IssueBacklogConfigBase(BaseModel):
     @field_validator("label_prefix", "property_key")
     @classmethod
     def _safe_identifier(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("labels and property keys must not be blank")
+        _require_non_blank(value, "labels and property keys must not be blank")
         if any(character.isspace() for character in value):
             raise ValueError("labels and property keys must not contain whitespace")
         return value
@@ -545,9 +546,7 @@ class JiraBacklogConfig(_IssueBacklogConfigBase):
     @field_validator("jql", "issue_type")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("Jira configuration values must not be blank")
-        return value
+        return _require_non_blank(value, "Jira configuration values must not be blank")
 
 
 # ------------------------------------------------------------------ #
@@ -568,16 +567,12 @@ class _OAuthConfigBase(BaseModel):
     @field_validator("client_id")
     @classmethod
     def _client_id_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("client_id must not be blank")
-        return value
+        return _require_non_blank(value, "client_id must not be blank")
 
     @field_validator("client_secret_env")
     @classmethod
     def _secret_env_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("client_secret_env must not be blank")
-        return value
+        return _require_optional_non_blank(value, "client_secret_env must not be blank")
 
 
 class GithubOAuthConfig(_OAuthConfigBase):
@@ -593,9 +588,7 @@ class _TokenOrOAuthAuthBase(BaseModel):
     @field_validator("token_env")
     @classmethod
     def _token_env_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("token_env must not be blank")
-        return value
+        return _require_optional_non_blank(value, "token_env must not be blank")
 
     @model_validator(mode="after")
     def _exactly_one_auth(self) -> _TokenOrOAuthAuthBase:
@@ -666,12 +659,6 @@ class GitlabWorkflow(_IssueWorkflowBase):
 
     open_statuses: list[str] = Field(default_factory=lambda: ["opened"])
     open_status: str = "opened"
-
-
-def _require_non_blank(value: str, message: str) -> str:
-    if not value.strip():
-        raise ValueError(message)
-    return value
 
 
 class _RepoBacklogConfigBase(_IssueBacklogConfigBase):

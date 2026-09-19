@@ -9,10 +9,10 @@ helpers are shared.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import logging
-import os
 import secrets
 import time
 import urllib.error
@@ -213,10 +213,8 @@ def poll_device_grant(
                 data = _json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = ""
-            try:
+            with contextlib.suppress(Exception):
                 detail = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
             raise error_cls(f"Device poll failed with HTTP {exc.code}: {detail[:500]}") from exc
         except OSError as exc:
             raise error_cls(f"Device poll failed: {exc}") from exc
@@ -261,43 +259,13 @@ def announce_device_code(
         raise error_cls(f"Device code response missing fields: {data}")
     print(f"\nOpen {verification_uri} in your browser and enter code: {user_code}\n")
     if verification_uri and open_browser:
-        try:
+        with contextlib.suppress(Exception):
             webbrowser.open(verification_uri)
             print(f"(opened browser to {verification_uri})")
-        except Exception:
-            pass
     if expires_in:
         print(f"Code expires in {expires_in}s")
     print("Waiting for approval...", flush=True)
     return device_code, interval
-
-
-def run_loopback(state: str, timeout: float = 300.0) -> tuple[str | None, str | None, str | None]:
-    """Run loopback server and capture code/state/error."""
-    server = HTTPServer(("127.0.0.1", 0), CallbackHandler)
-    server.timeout = timeout
-    last_handler: list[CallbackHandler] = []
-
-    def _finish(request: Any, client_address: Any) -> None:
-        handler_inst = CallbackHandler(request, client_address, server)
-        last_handler.append(handler_inst)
-
-    server.finish_request = _finish  # type: ignore[method-assign]
-    start = time.monotonic()
-    code: str | None = None
-    received_state: str | None = None
-    error: str | None = None
-    while time.monotonic() - start < timeout:
-        server.handle_request()
-        if last_handler:
-            h = last_handler[-1]
-            code = h.code
-            received_state = h.state
-            error = h.error
-            if code or error:
-                break
-    server.server_close()
-    return code, received_state, error  # caller checks state & error; redirect_uri is derived externally
 
 
 class FileTokenStore:
@@ -318,18 +286,9 @@ class FileTokenStore:
         return data
 
     def save(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.path)
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:
-            pass
+        from forgeo.io import atomic_write_private
+
+        atomic_write_private(self.path, json.dumps(data, indent=2) + "\n")
 
     def clear(self) -> bool:
         try:

@@ -179,8 +179,6 @@ def run_browser_flow(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    if not scope:
-        params["scope"] = "api"
     auth_url = f"{oauth_base.rstrip('/')}/oauth/authorize?{urlencode(params)}"
     open_authorize_url(auth_url, "GitLab", open_browser=open_browser)
     code, redirect_uri = wait_for_callback(server, _CallbackHandler, state, timeout, GitlabOAuthError, "GitLab")

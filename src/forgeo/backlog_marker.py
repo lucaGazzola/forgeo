@@ -81,10 +81,14 @@ class MarkerIssueBacklog(IssueBacklogBase):
         raise NotImplementedError
 
     def _create_fields(self, task: Task, engine: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError
+        return {
+            "title": task.title,
+            self.body_key: embed_engine_state(task.description, engine),
+            "labels": [self.config.label_prefix],
+        }
 
     def _update_body_field(self, candidate: Task, state: dict[str, Any]) -> dict[str, Any]:
-        raise NotImplementedError
+        return {self.body_key: embed_engine_state(candidate.description, state)}
 
     def _not_found(self, issue_id: str) -> Exception:
         return self.request_error_cls(f"{self.provider_label} issue {issue_id} response was not an object")

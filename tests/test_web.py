@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import subprocess
@@ -2057,10 +2058,8 @@ def test_post_restart_replaces_running_daemon(web_env, git_repo):
     try:
         assert wait_for(lambda: is_lock_held(lock_path))
         old_pid = None
-        try:
+        with contextlib.suppress(OSError, IndexError, ValueError):
             old_pid = int((lock_path.read_text(encoding="utf-8")).split("=", 1)[1])
-        except (OSError, IndexError, ValueError):
-            pass
 
         status, data = _post(
             f"http://127.0.0.1:{server.port}/api/instances/daemon-d/restart", None

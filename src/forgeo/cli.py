@@ -53,18 +53,21 @@ Commands:
    (``forgeo task show TASK-003``) or with ``--task`` — never both;
    short ids work everywhere (``3``, ``TASK-3`` or ``#3`` for
    ``TASK-003``):
-    ``forgeo task show [TASK_ID]`` prints one task's full
-    detail (description, acceptance, dependencies, blocker/failure
-    reasons) — with no id it shows the next task the scheduler would
-    pick (oldest ``BLOCKED`` first, else the oldest runnable ``OPEN``),
-    so the ``next -> show`` triage loop needs no copy-paste; ``forgeo task edit [TASK_ID]`` updates a task's title,
-   description, acceptance criteria, dependencies, files or ``--run-at``
-   schedule in place
-    (the terminal equivalent of editing it in the dashboard — fix a
-     ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
-     next; ``--description-file`` / ``-`` stdin works here too);
-     ``forgeo task reopen [TASK_ID]``
-    moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
+     ``forgeo task show [TASK_ID]`` prints one task's full
+     detail (description, acceptance, dependencies, blocker/failure
+     reasons) — with no id it shows the next task the scheduler would
+     pick (oldest ``BLOCKED`` first, else the oldest runnable ``OPEN``),
+     so the ``next -> show`` triage loop needs no copy-paste; ``forgeo task edit [TASK_ID]`` updates a task's title,
+    description, acceptance criteria, dependencies, files or ``--run-at``
+    schedule in place
+     (the terminal equivalent of editing it in the dashboard — fix a
+      ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
+      next; ``--description-file`` / ``-`` stdin works here too; ``--run``
+      fixes and retries it in the same command, reopening a ``BLOCKED``
+      task — or retrying a ``FAILED`` one — first);
+      ``forgeo task reopen [TASK_ID]``
+     moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN`` (``--run``
+     reopens and runs it in the same command);
     ``forgeo task rm [TASK_ID]`` deletes a task (typos, duplicates, or
     tasks that will never be done — no JSON editing or dashboard
     needed); ``forgeo task complete-review [TASK_ID]`` marks a ``REVIEW``
@@ -471,6 +474,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Clear the files-to-modify list.",
     )
+    task_edit_parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Update the task and run it immediately in one step (same "
+        "lock as `forgeo run`; a BLOCKED task is reopened — and a FAILED "
+        "one retried — first, so fix-and-retry needs no second command; "
+        "not with --run-at).",
+    )
 
     task_reopen_parser = task_sub.add_parser(
         "reopen", help="Move a BLOCKED or FAILED task back to OPEN."
@@ -489,6 +500,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TASK_ID",
         help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+    )
+    task_reopen_parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Reopen the task and run it immediately in one step (same "
+        "lock as `forgeo run`; refuses while a daemon holds it).",
     )
 
     task_rm_parser = task_sub.add_parser(
@@ -1521,12 +1538,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     return _run_created_task_now(config, created.id)
 
 
-def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
-    """Run a just-created task immediately (``task add --run``).
+def _run_task_now(config: ForgeoConfig, task_id: str, *, reopen: bool = False) -> int:
+    """Run an existing task immediately (``task add/edit/reopen --run``).
 
     Shares the per-forgeo lock with ``once``/``run`` and the daemon, so it
     never overlaps them; the task already exists, so a busy lock (or any
-    run failure) still leaves the created task behind for the next cycle.
+    run failure) still leaves the created/updated/reopened task behind for
+    the next cycle. With ``reopen=True`` a ``BLOCKED`` task is reopened
+    (and a ``FAILED`` one retried) first, like ``forgeo run --reopen``.
     """
     setup_logging(config.log_file)
     log = logging.getLogger("forgeo.cli")
@@ -1544,7 +1563,7 @@ def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
     async def _execute() -> int:
         check_for_update(update_state_path(config), print_fn=console.print)
         try:
-            outcome = await forgeo.run_task_id(task_id)
+            outcome = await forgeo.run_task_id(task_id, reopen=reopen)
         except TaskNotRunnableError as exc:
             console.print(f"[red]{exc}[/red]")
             return 1
@@ -1552,6 +1571,11 @@ def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
         return 0
 
     return _run_worker_with_lock(lock, _execute)
+
+
+def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
+    """Run a just-created task immediately (``task add --run``)."""
+    return _run_task_now(config, task_id)
 
 
 def cmd_task_list(args: argparse.Namespace) -> int:
@@ -1645,8 +1669,9 @@ def _task_show_hint(task: Task) -> str | None:
     """The most useful next step after showing ``task``, if any."""
     if task.status is TaskStatus.BLOCKED or task.status is TaskStatus.FAILED:
         return (
-            f"hint: fix it with `forgeo task edit --task {task.id} "
-            f"--description ...`, then `forgeo task reopen --task {task.id}` to retry"
+            f"hint: fix and retry it in one step with `forgeo task edit --task {task.id} "
+            f"--description ... --run` (or `forgeo task reopen --task {task.id} --run` "
+            f"when no fix is needed)"
         )
     if task.status is TaskStatus.REVIEW:
         return (
@@ -1764,13 +1789,17 @@ def _cmd_task_show_next(args: argparse.Namespace) -> int:
 def cmd_task_edit(args: argparse.Namespace) -> int:
     """Handle ``forgeo task edit``: update a task's editable fields in place.
 
-    Never starts an agent. The terminal equivalent of editing the task in
-    the dashboard — the missing step between ``task show`` (see why a task
-    is ``BLOCKED``) and ``task reopen`` (retry it). ``--acceptance``,
+    Never starts an agent, unless ``--run`` is passed — then the task is
+    updated and run immediately in the same command (the ``edit ->
+    reopen -> run`` BLOCKED-recovery loop in one step: a ``BLOCKED`` task
+    is reopened — and a ``FAILED`` one retried — first, sharing the
+    per-forgeo lock with ``once``/``run``/daemon). ``--acceptance``,
     ``--depends-on`` and ``--files`` replace the whole list; the
     ``--clear-*`` flags empty one instead. ``--run-at now`` (or an
     ISO-8601 time) schedules the task — due tasks jump ahead of
     oldest-first order; ``--clear-run-at`` returns it to oldest-first.
+    ``--run`` cannot be combined with ``--run-at`` (a future schedule and
+    "run now" contradict each other).
     The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
@@ -1782,6 +1811,12 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         console.print(f"[red]{task_error}[/red]")
         return 2
     assert task_id is not None
+    if bool(getattr(args, "run", False)) and getattr(args, "run_at", None) is not None:
+        console.print(
+            "[red]Pass either --run or --run-at, not both "
+            "(--run runs the task now).[/red]"
+        )
+        return 1
     updates: dict[str, Any] = {}
     if args.title is not None:
         if not args.title.strip():
@@ -1857,13 +1892,18 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     console.print(f"[green]Updated task {updated.id}.[/green]")
-    return 0
+    if not bool(getattr(args, "run", False)):
+        return 0
+    return _run_task_now(config, updated.id, reopen=True)
 
 
 def cmd_task_reopen(args: argparse.Namespace) -> int:
     """Handle ``forgeo task reopen``: move a ``BLOCKED``/``FAILED`` task to ``OPEN``.
 
-    Never starts an agent. ``BLOCKED`` tasks reopen directly; ``FAILED``
+    Never starts an agent, unless ``--run`` is passed — then the task is
+    reopened and run immediately in the same command (the ``reopen -> run``
+    loop in one step, sharing the per-forgeo lock with ``once``/``run``/
+    daemon). ``BLOCKED`` tasks reopen directly; ``FAILED``
     tasks re-queue through the retry path. Tasks that are ``OPEN``,
     ``REVIEW`` or ``COMPLETED`` are refused with an explanation.
     The id may be passed positionally or with ``--task``.
@@ -1910,7 +1950,9 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     console.print(
         f"[green]Reopened task {updated.id} (was {previous.value}) — now OPEN.[/green]"
     )
-    return 0
+    if not bool(getattr(args, "run", False)):
+        return 0
+    return _run_task_now(config, updated.id)
 
 
 def cmd_task_rm(args: argparse.Namespace) -> int:

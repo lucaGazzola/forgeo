@@ -2600,6 +2600,146 @@ def test_task_edit_refuses_run_at_conflict(git_repo, tmp_path, capsys):
     assert "not both" in capsys.readouterr().out
 
 
+def test_parser_parses_run_flag_for_task_edit_and_reopen():
+    edit_args = build_parser().parse_args(
+        ["task", "edit", "--task", "TASK-001", "--description", "New.", "--run"]
+    )
+    assert edit_args.task_action == "edit"
+    assert edit_args.run is True
+
+    reopen_args = build_parser().parse_args(["task", "reopen", "3", "--run"])
+    assert reopen_args.task_action == "reopen"
+    assert reopen_args.task_id == "3"
+    assert reopen_args.run is True
+
+
+def test_task_edit_run_updates_and_runs_immediately(
+    git_repo, tmp_path, monkeypatch, capsys
+):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-001", description="Fixed.", run=True)
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["description"] == "Fixed."
+    assert fake.run_task_ids == ["TASK-001"]
+    out = capsys.readouterr().out
+    assert "Updated task TASK-001" in out
+    assert "Cycle finished: task" in out
+
+
+def test_task_edit_run_reopens_blocked_first(
+    git_repo, tmp_path, monkeypatch, capsys
+):
+    """`task edit --run` on a BLOCKED task retries it without a `reopen` step."""
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="TASK-003", status="BLOCKED", blocker_reason=["Needs human."])],
+    )
+    reopens: list[bool] = []
+    fake = FakeForgeo()
+    original = fake.run_task_id
+
+    async def _recording(task_id: str, *, reopen: bool = False) -> str:
+        reopens.append(reopen)
+        return await original(task_id, reopen=reopen)
+
+    fake.run_task_id = _recording  # type: ignore[method-assign]
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-003", description="Fixed.", run=True)
+        )
+        == 0
+    )
+    assert reopens == [True]
+    assert fake.run_task_ids == ["TASK-003"]
+    assert "Cycle finished: task" in capsys.readouterr().out
+
+
+def test_task_edit_run_refuses_with_run_at(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(
+                config_path, "TASK-001", description="Fixed.", run_at="now", run=True
+            )
+        )
+        == 1
+    )
+    assert "not both" in capsys.readouterr().out
+    # The conflicting invocation applies no edit.
+    assert read_backlog_tasks(tmp_path)[0]["description"] != "Fixed."
+
+
+@requires_posix
+def test_task_edit_run_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    lock = acquire_run_lock(tmp_path / "backlog.lock")
+    assert lock is not None
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-001", description="Fixed.", run=True)
+        )
+        == 1
+    )
+    assert fake.run_task_ids == []
+    out = capsys.readouterr().out
+    assert "already running" in out
+    # The edit still lands, so the next cycle picks it up.
+    assert read_backlog_tasks(tmp_path)[0]["description"] == "Fixed."
+
+    lock.close()
+
+
+def test_task_reopen_run_reopens_and_runs_immediately(
+    git_repo, tmp_path, monkeypatch, capsys
+):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="TASK-003", status="BLOCKED", blocker_reason=["Needs human."])],
+    )
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    args = task_reopen_args(config_path, "TASK-003")
+    args.run = True
+    assert cmd_task_reopen(args) == 0
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+    assert fake.run_task_ids == ["TASK-003"]
+    out = capsys.readouterr().out
+    assert "Reopened task TASK-003" in out
+    assert "Cycle finished: task" in out
+
+
+def test_task_show_blocked_hint_mentions_one_step_retry(
+    git_repo, tmp_path, capsys
+):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="TASK-003", status="BLOCKED", blocker_reason=["Needs human."])],
+    )
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-003")) == 0
+    assert "--run" in capsys.readouterr().out
+
+
 def test_task_add_run_at_via_main_parser(git_repo, tmp_path):
     config_path = write_config(git_repo, tmp_path)
 

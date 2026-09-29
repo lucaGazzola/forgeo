@@ -175,17 +175,22 @@ forgeo task show   # next task the scheduler would pick
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint
-(`forgeo run --task <id>` for `OPEN` tasks, `forgeo task edit` +
-`forgeo task reopen --task <id>` for `BLOCKED`/`FAILED` tasks,
+(`forgeo run --task <id>` for `OPEN` tasks, `forgeo task edit --task
+<id> --description ... --run` (or `forgeo task reopen --task <id> --run`
+when no fix is needed) for `BLOCKED`/`FAILED` tasks,
 `forgeo task complete-review` / `forgeo task request-changes` for `REVIEW` tasks).
 
-### `forgeo task edit [TASK_ID] [--title <t>] [--description <d>] ...`
+### `forgeo task edit [TASK_ID] [--title <t>] [--description <d>] ... [--run]`
 
 Update a task's fields in place — the terminal equivalent of editing it
 in the dashboard, and the missing step between `task show` (see why a
 task is `BLOCKED`) and `task reopen` (retry it). The id may be passed
 positionally (`forgeo task edit TASK-003 ...`) or with `--task` — never
-both (short ids like `3` work). Never starts an agent.
+both (short ids like `3` work). Never starts an agent, unless `--run`
+is passed — then the task is fixed and retried in the same command (a
+`BLOCKED` task is reopened, a `FAILED` one retried, first; shares the
+run lock with `once`/`run`/daemon, so it refuses while one holds it;
+not with `--run-at`).
 
 ```bash
 forgeo task edit TASK-003 --description "Pick blue; see brand guide."
@@ -195,6 +200,7 @@ forgeo task edit --task TASK-003 --title "New title" --acceptance "pytest passes
 forgeo task edit --task TASK-003 --clear-depends-on
 forgeo task edit --task TASK-003 --run-at now   # run it next
 forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
+forgeo task edit --task TASK-003 --description "Pick blue." --run  # fix + retry now, no second command
 ```
 
 | Flag | Description |
@@ -211,23 +217,26 @@ forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
 | `--clear-depends-on` | Clear all dependencies (not with `--depends-on`). |
 | `--clear-files` | Clear the files-to-modify list (not with `--files`). |
 | `--clear-run-at` | Clear the scheduled run time (not with `--run-at`). |
+| `--run` | Update the task and run it immediately (same lock as `forgeo run`; a `BLOCKED` task is reopened — a `FAILED` one retried — first; refuses while a daemon holds it; not with `--run-at`). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 At least one edit flag is required. Prints `Updated task <id>` on
 success, `Unknown task: <id>` for missing ids.
 
-### `forgeo task reopen [TASK_ID]`
+### `forgeo task reopen [TASK_ID] [--run]`
 
-Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task` (short ids like `3` work). `FAILED` tasks re-queue through the retry path.
+Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task` (short ids like `3` work). `FAILED` tasks re-queue through the retry path. `--run` reopens and runs the task in the same command (the `reopen -> run` loop in one step; shares the run lock with `once`/`run`/daemon, so it refuses while one holds it).
 
 ```bash
 forgeo task reopen TASK-003
 forgeo task reopen --task TASK-003
+forgeo task reopen --task TASK-003 --run  # reopen + run now, no second command
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--task <id>` / `TASK_ID` | `BLOCKED` or `FAILED` task id, flag or positional (one required). |
+| `--run` | Reopen the task and run it immediately (same lock as `forgeo run`; refuses while a daemon holds it). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses unknown ids, tasks that are already `OPEN`, and `REVIEW`/`COMPLETED` tasks (triaged in the review flow instead).

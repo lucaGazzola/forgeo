@@ -32,6 +32,7 @@ from forgeo.cli import (
     cmd_stop,
     cmd_task,
     cmd_task_add,
+    cmd_task_edit,
     cmd_task_list,
     cmd_task_reopen,
     cmd_task_show,
@@ -2025,3 +2026,133 @@ def test_task_show_main_entrypoint(git_repo, tmp_path, capsys):
 
     assert main(["task", "show", "--task", "TASK-001", "--config", str(config_path)]) == 0
     assert "Shown via main." in capsys.readouterr().out
+
+
+def task_edit_args(config_path: Path, task_id: str, **overrides) -> argparse.Namespace:
+    params = {
+        "config": config_path,
+        "task": task_id,
+        "title": None,
+        "description": None,
+        "acceptance": None,
+        "depends_on": None,
+        "files": None,
+        "clear_acceptance": False,
+        "clear_depends_on": False,
+        "clear_files": False,
+    }
+    params.update(overrides)
+    return argparse.Namespace(**params)
+
+
+def test_task_edit_updates_description(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="BLOCKED")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-003", description="Pick blue; see brand guide.")
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["description"] == "Pick blue; see brand guide."
+    assert "Updated task TASK-003" in capsys.readouterr().out
+
+
+def test_task_edit_replaces_lists_and_clears(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(
+                config_path,
+                "TASK-001",
+                acceptance=["pytest passes"],
+                depends_on=["TASK-009"],
+                files=["src/a.py"],
+            )
+        )
+        == 0
+    )
+    task = read_backlog_tasks(tmp_path)[0]
+    assert task["acceptance_criteria"] == ["pytest passes"]
+    assert task["dependencies"] == ["TASK-009"]
+    assert task["files_to_modify"] == ["src/a.py"]
+
+    assert (
+        cmd_task_edit(task_edit_args(config_path, "TASK-001", clear_acceptance=True))
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["acceptance_criteria"] == []
+
+
+def test_task_edit_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_edit(task_edit_args(config_path, "TASK-999", title="New")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_edit_requires_a_field(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert cmd_task_edit(task_edit_args(config_path, "TASK-001")) == 1
+    assert "Nothing to update" in capsys.readouterr().out
+
+
+def test_task_edit_refuses_blank_title(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert cmd_task_edit(task_edit_args(config_path, "TASK-001", title="   ")) == 1
+    assert "must not be blank" in capsys.readouterr().out
+
+
+def test_task_edit_refuses_conflicting_flags(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(
+                config_path, "TASK-001", acceptance=["x"], clear_acceptance=True
+            )
+        )
+        == 1
+    )
+    assert "not both" in capsys.readouterr().out
+
+
+def test_task_edit_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        main(
+            [
+                "task",
+                "edit",
+                "--task",
+                "TASK-001",
+                "--description",
+                "Edited via main.",
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert "Updated task TASK-001" in capsys.readouterr().out
+
+
+def test_task_show_blocked_hint_mentions_edit(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="TASK-003", status="BLOCKED", blocker_reason=["Needs human."])],
+    )
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-003")) == 0
+    assert "forgeo task edit --task TASK-003" in capsys.readouterr().out

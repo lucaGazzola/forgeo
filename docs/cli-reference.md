@@ -116,8 +116,36 @@ forgeo task show --task TASK-003
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint
-(`forgeo run --task <id>` for `OPEN` tasks, `forgeo task reopen --task <id>`
-for `BLOCKED`/`FAILED` tasks).
+(`forgeo run --task <id>` for `OPEN` tasks, `forgeo task edit` +
+`forgeo task reopen --task <id>` for `BLOCKED`/`FAILED` tasks).
+
+### `forgeo task edit --task <id> [--title <t>] [--description <d>] ...`
+
+Update a task's fields in place — the terminal equivalent of editing it
+in the dashboard, and the missing step between `task show` (see why a
+task is `BLOCKED`) and `task reopen` (retry it). Never starts an agent.
+
+```bash
+forgeo task edit --task TASK-003 --description "Pick blue; see brand guide."
+forgeo task edit --task TASK-003 --title "New title" --acceptance "pytest passes"
+forgeo task edit --task TASK-003 --clear-depends-on
+```
+
+| Flag | Description |
+| --- | --- |
+| `--task <id>` | **Required.** Task id to update. |
+| `--title <t>` | New title (must not be blank). |
+| `--description <d>` | New description (must not be blank). |
+| `--acceptance <c>` | Acceptance criterion (repeatable; replaces the whole list). |
+| `--depends-on <id>` | Dependency task id (repeatable; replaces the whole list). |
+| `--files <path>` | File the agent may touch (repeatable; replaces the whole list). |
+| `--clear-acceptance` | Clear all acceptance criteria (not with `--acceptance`). |
+| `--clear-depends-on` | Clear all dependencies (not with `--depends-on`). |
+| `--clear-files` | Clear the files-to-modify list (not with `--files`). |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+At least one edit flag is required. Prints `Updated task <id>` on
+success, `Unknown task: <id>` for missing ids.
 
 ### `forgeo task reopen --task <id>`
 
@@ -208,7 +236,7 @@ Graceful shutdown via SIGTERM (cycle in progress finishes first).
 
 `stop` exits `1` if not running or timeout elapses; auto-registers with `--config` if missing. `restart` stops then starts detached, re-reading `forgeo.yaml`. Config edits apply on next cycle without restart, except `repo`/`backlog`/`blocker_file`/`log_file` which need `restart`.
 
-`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task show`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
+`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
 
 ## `forgeo instance`
 

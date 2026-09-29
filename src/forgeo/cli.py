@@ -34,8 +34,12 @@ Commands:
    given). ``forgeo task list [--status S]`` shows tasks from the
    terminal; ``forgeo task show --task ID`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
-   reasons); ``forgeo task reopen --task ID`` moves a ``BLOCKED`` or
-   ``FAILED`` task back to ``OPEN``. Never starts an agent.
+   reasons); ``forgeo task edit --task ID`` updates a task's title,
+   description, acceptance criteria, dependencies or files in place
+   (the terminal equivalent of editing it in the dashboard — fix a
+   ``BLOCKED`` task before reopening it); ``forgeo task reopen --task ID``
+   moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``. Never starts
+   an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -74,7 +78,7 @@ Commands:
    the flag. With no flag and no token file the dashboard stays open.
 
 ``start``, ``once``, ``run``, ``task add``, ``task list``, ``task show``,
-``task reopen``, ``status``, ``logs``, ``validate``, ``stop`` and
+``task edit``, ``task reopen``, ``status``, ``logs``, ``validate``, ``stop`` and
 ``restart`` each accept either ``--config PATH`` (a config file) or
 ``--name NAME`` (an instance resolved from the registry); the two options
 are mutually exclusive.
@@ -272,6 +276,58 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="TASK_ID",
         help="Id of the task to show in full.",
+    )
+
+    task_edit_parser = task_sub.add_parser(
+        "edit", help="Update a task's fields in place (never starts an agent)."
+    )
+    _add_config_or_name(task_edit_parser)
+    task_edit_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the task to update.",
+    )
+    task_edit_parser.add_argument("--title", default=None, help="New task title.")
+    task_edit_parser.add_argument(
+        "--description", default=None, help="New task description."
+    )
+    task_edit_parser.add_argument(
+        "--acceptance",
+        action="append",
+        default=None,
+        metavar="CRITERION",
+        help="Acceptance criterion (repeatable; replaces the whole list).",
+    )
+    task_edit_parser.add_argument(
+        "--depends-on",
+        action="append",
+        default=None,
+        metavar="TASK_ID",
+        dest="depends_on",
+        help="Dependency task id (repeatable; replaces the whole list).",
+    )
+    task_edit_parser.add_argument(
+        "--files",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="File path the agent may touch (repeatable; replaces the whole list).",
+    )
+    task_edit_parser.add_argument(
+        "--clear-acceptance",
+        action="store_true",
+        help="Clear all acceptance criteria.",
+    )
+    task_edit_parser.add_argument(
+        "--clear-depends-on",
+        action="store_true",
+        help="Clear all dependencies.",
+    )
+    task_edit_parser.add_argument(
+        "--clear-files",
+        action="store_true",
+        help="Clear the files-to-modify list.",
     )
 
     task_reopen_parser = task_sub.add_parser(
@@ -1082,8 +1138,8 @@ def _task_show_hint(task: Task) -> str | None:
     """The most useful next step after showing ``task``, if any."""
     if task.status is TaskStatus.BLOCKED or task.status is TaskStatus.FAILED:
         return (
-            f"hint: resolve the reason above, then "
-            f"`forgeo task reopen --task {task.id}` to retry"
+            f"hint: fix it with `forgeo task edit --task {task.id} "
+            f"--description ...`, then `forgeo task reopen --task {task.id}` to retry"
         )
     if task.status is TaskStatus.OPEN:
         return f"hint: run it now with `forgeo run --task {task.id}`"
@@ -1114,6 +1170,73 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     hint = _task_show_hint(task)
     if hint is not None:
         console.print(f"[dim]{hint}[/dim]")
+    return 0
+
+
+def cmd_task_edit(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task edit``: update a task's editable fields in place.
+
+    Never starts an agent. The terminal equivalent of editing the task in
+    the dashboard — the missing step between ``task show`` (see why a task
+    is ``BLOCKED``) and ``task reopen`` (retry it). ``--acceptance``,
+    ``--depends-on`` and ``--files`` replace the whole list; the
+    ``--clear-*`` flags empty one instead.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    updates: dict[str, Any] = {}
+    if args.title is not None:
+        if not args.title.strip():
+            console.print("[red]--title must not be blank.[/red]")
+            return 1
+        updates["title"] = args.title.strip()
+    if args.description is not None:
+        if not args.description.strip():
+            console.print("[red]--description must not be blank.[/red]")
+            return 1
+        updates["description"] = args.description.strip()
+    if args.acceptance is not None and args.clear_acceptance:
+        console.print("[red]Pass either --acceptance or --clear-acceptance, not both.[/red]")
+        return 1
+    if args.depends_on is not None and args.clear_depends_on:
+        console.print("[red]Pass either --depends-on or --clear-depends-on, not both.[/red]")
+        return 1
+    if args.files is not None and args.clear_files:
+        console.print("[red]Pass either --files or --clear-files, not both.[/red]")
+        return 1
+    if args.acceptance is not None:
+        updates["acceptance_criteria"] = list(args.acceptance)
+    elif args.clear_acceptance:
+        updates["acceptance_criteria"] = []
+    if args.depends_on is not None:
+        updates["dependencies"] = list(args.depends_on)
+    elif args.clear_depends_on:
+        updates["dependencies"] = []
+    if args.files is not None:
+        updates["files_to_modify"] = list(args.files)
+    elif args.clear_files:
+        updates["files_to_modify"] = []
+    if not updates:
+        console.print(
+            "[red]Nothing to update: pass --title, --description, --acceptance, "
+            "--depends-on, --files, or a --clear-* flag.[/red]"
+        )
+        return 1
+    backlog = open_backlog(config)
+    try:
+        updated = asyncio.run(backlog.update_task(args.task, updates))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    except (ValueError, TypeError) as exc:
+        console.print(f"[red]Invalid update: {exc}[/red]")
+        return 1
+    if updated is None:
+        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        return 1
+    console.print(f"[green]Updated task {updated.id}.[/green]")
     return 0
 
 
@@ -1173,6 +1296,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         return cmd_task_list(args)
     if action == "show":
         return cmd_task_show(args)
+    if action == "edit":
+        return cmd_task_edit(args)
     if action == "reopen":
         return cmd_task_reopen(args)
     build_parser().print_help()

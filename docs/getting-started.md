@@ -56,6 +56,14 @@ forgeo init --force    # overwrite existing config
 }
 ```
 
+You can also add tasks from the terminal — no file editing needed:
+
+```bash
+forgeo task add --title "Implement fibonacci module" \
+  --description "Write a fibonacci module with memoization and tests."
+forgeo task list
+```
+
 You can also add tasks from the dashboard once Forgeo is running — no file editing needed.
 
 **Remote providers** — `forgeo.yaml` already points at the provider. Authenticate with a PAT **or** browser OAuth:

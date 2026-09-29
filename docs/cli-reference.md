@@ -61,6 +61,59 @@ forgeo run --task TASK-012
 
 Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
+## `forgeo task`
+
+Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back.
+
+### `forgeo task add --title <t> --description <d>`
+
+Create a new `OPEN` task.
+
+```bash
+forgeo task add --title "Add login page" --description "Build it with tests."
+forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
+  --acceptance "pytest passes" --acceptance "ruff check is clean" \
+  --depends-on TASK-001
+```
+
+| Flag | Description |
+| --- | --- |
+| `--title <t>` | **Required.** Short task title. |
+| `--description <d>` | **Required.** What the agent should do. |
+| `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
+| `--acceptance <c>` | Acceptance criterion (repeatable). |
+| `--depends-on <id>` | Id of a task this task waits for (repeatable). |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+Refuses duplicates and blank titles/descriptions. Prints the created id plus the `forgeo run --task <id>` shortcut to try it immediately.
+
+### `forgeo task list [--status <s>] [--limit <n>]`
+
+List backlog tasks and their statuses as a table (`Id`, `Status`, `Title`).
+
+| Flag | Description |
+| --- | --- |
+| `--status <s>` | Only `open`, `blocked`, `failed`, `completed`, or `review` (default: all). |
+| `--limit <n>` | Show at most `N` tasks (default: all). |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+An empty backlog hints at `forgeo task add`.
+
+### `forgeo task reopen --task <id>`
+
+Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). `FAILED` tasks re-queue through the retry path.
+
+```bash
+forgeo task reopen --task TASK-003
+```
+
+| Flag | Description |
+| --- | --- |
+| `--task <id>` | **Required.** `BLOCKED` or `FAILED` task id. |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+Refuses unknown ids, tasks that are already `OPEN`, and `REVIEW`/`COMPLETED` tasks (triaged in the review flow instead).
+
 ## `forgeo status`
 
 Read-only summary (never starts agent).
@@ -80,15 +133,15 @@ daemon: not running
 last outcome: task
 waiting on: TASK-002 (needs COMPLETED: TASK-001 (OPEN))
 blocked: TASK-003 — Needs human — first line of the blocker reason
-action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then reopen to OPEN
+action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then `forgeo task reopen --task <id>`
 ```
 
 `waiting on` appears when the oldest `OPEN` task has unmet dependencies. `run_at` due tasks are shown ahead of older ones.
 
 `blocked:` / `failed:` lines (up to 3 each, oldest first, with the reason's
 first line) appear when tasks need attention, plus a single `action:` line
-with the most useful next step (resolve + reopen, `forgeo start`, or add
-tasks via `forgeo web`).
+with the most useful next step (resolve + `forgeo task reopen --task <id>`,
+`forgeo start`, or add tasks via `forgeo task add`).
 
 ## `forgeo logs`
 
@@ -135,7 +188,7 @@ Graceful shutdown via SIGTERM (cycle in progress finishes first).
 
 `stop` exits `1` if not running or timeout elapses; auto-registers with `--config` if missing. `restart` stops then starts detached, re-reading `forgeo.yaml`. Config edits apply on next cycle without restart, except `repo`/`backlog`/`blocker_file`/`log_file` which need `restart`.
 
-`--config` vs `--name` applies to `start`, `once`, `run`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
+`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
 
 ## `forgeo instance`
 

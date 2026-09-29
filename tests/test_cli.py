@@ -30,6 +30,10 @@ from forgeo.cli import (
     cmd_start,
     cmd_status,
     cmd_stop,
+    cmd_task,
+    cmd_task_add,
+    cmd_task_list,
+    cmd_task_reopen,
     cmd_validate,
     last_outcome_from_runs,
     main,
@@ -1729,3 +1733,213 @@ def test_two_instances_stay_fully_independent(
 
 def list_instances_names() -> list[str]:
     return [info.name for info in list_instances()]
+
+
+def task_add_args(
+    config_path: Path,
+    title: str = "Build the thing",
+    description: str = "Do the work.",
+    task_id: str | None = None,
+    acceptance: list[str] | None = None,
+    depends_on: list[str] | None = None,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        config=config_path,
+        title=title,
+        description=description,
+        id=task_id,
+        acceptance=acceptance,
+        depends_on=depends_on,
+    )
+
+
+def task_list_args(
+    config_path: Path, status: str | None = None, limit: int | None = None
+) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, status=status, limit=limit)
+
+
+def task_reopen_args(config_path: Path, task_id: str) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, task=task_id)
+
+
+def write_backlog(tmp_path: Path, tasks: list) -> Path:
+    backlog = tmp_path / "backlog.json"
+    backlog.write_text(
+        json.dumps({"tasks": [task.model_dump(mode="json") for task in tasks]}),
+        encoding="utf-8",
+    )
+    return backlog
+
+
+def read_backlog_tasks(tmp_path: Path) -> list[dict]:
+    return json.loads((tmp_path / "backlog.json").read_text(encoding="utf-8"))["tasks"]
+
+
+def test_task_add_creates_first_task_with_auto_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_add(task_add_args(config_path)) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert [task["id"] for task in tasks] == ["TASK-001"]
+    assert tasks[0]["status"] == "OPEN"
+    out = capsys.readouterr().out
+    assert "Created task TASK-001" in out
+    assert "forgeo run --task TASK-001" in out
+
+
+def test_task_add_increments_past_highest_task_id(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001"), make_task(id="TASK-007")])
+
+    assert cmd_task_add(task_add_args(config_path)) == 0
+    assert [task["id"] for task in read_backlog_tasks(tmp_path)] == [
+        "TASK-001",
+        "TASK-007",
+        "TASK-008",
+    ]
+
+
+def test_task_add_honors_explicit_id_and_extras(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+
+    args = task_add_args(
+        config_path,
+        task_id="CUSTOM-1",
+        acceptance=["pytest passes"],
+        depends_on=["TASK-001"],
+    )
+    assert cmd_task_add(args) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert tasks[0]["id"] == "CUSTOM-1"
+    assert tasks[0]["acceptance_criteria"] == ["pytest passes"]
+    assert tasks[0]["dependencies"] == ["TASK-001"]
+
+
+def test_task_add_refuses_duplicate_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert cmd_task_add(task_add_args(config_path, task_id="TASK-001")) == 1
+    assert "already exists" in capsys.readouterr().out
+
+
+def test_task_add_refuses_blank_title(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_add(task_add_args(config_path, title="   ")) == 1
+    assert "must not be blank" in capsys.readouterr().out
+
+
+def test_task_add_missing_config(tmp_path, capsys):
+    assert cmd_task_add(task_add_args(tmp_path / "missing.yaml")) == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_task_list_shows_tasks(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", title="First"),
+            make_task(id="TASK-002", title="Second", status="BLOCKED"),
+        ],
+    )
+
+    assert cmd_task_list(task_list_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "TASK-001" in out
+    assert "TASK-002" in out
+    assert "First" in out
+
+
+def test_task_list_status_filter(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", status="OPEN"),
+            make_task(id="TASK-002", status="BLOCKED"),
+        ],
+    )
+
+    assert cmd_task_list(task_list_args(config_path, status="open")) == 0
+    out = capsys.readouterr().out
+    assert "TASK-001" in out
+    assert "TASK-002" not in out
+
+
+def test_task_list_empty_backlog_hints_at_add(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_list(task_list_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "No tasks yet" in out
+    assert "forgeo task add" in out
+
+
+def test_task_list_rejects_bad_limit(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_list(task_list_args(config_path, limit=0)) == 1
+    assert "--limit" in capsys.readouterr().out
+
+
+def test_task_reopen_blocked_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="BLOCKED")])
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-001")) == 0
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+    out = capsys.readouterr().out
+    assert "Reopened task TASK-001" in out
+    assert "was BLOCKED" in out
+
+
+def test_task_reopen_failed_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="FAILED")])
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-001")) == 0
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+    assert "now OPEN" in capsys.readouterr().out
+
+
+def test_task_reopen_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-999")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_reopen_refuses_open_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="OPEN")])
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-001")) == 1
+    assert "already OPEN" in capsys.readouterr().out
+
+
+def test_task_reopen_refuses_completed_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="COMPLETED")])
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-001")) == 1
+    assert "cannot be reopened" in capsys.readouterr().out
+
+
+def test_task_group_dispatches_to_subcommands(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    args = argparse.Namespace(config=config_path, task_action="list", status=None, limit=None)
+    assert cmd_task(args) == 0
+    assert "TASK-001" in capsys.readouterr().out
+
+
+def test_task_main_entrypoint_lists_tasks(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert main(["task", "list", "--config", str(config_path)]) == 0
+    assert "TASK-001" in capsys.readouterr().out

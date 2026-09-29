@@ -28,6 +28,12 @@ Commands:
    reopening it) or try a risky task right now. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
+* ``forgeo task add --title T --description D`` — create a new ``OPEN``
+   task in the configured backlog without hand-editing JSON or opening
+   the dashboard (ids auto-assign as ``TASK-###`` unless ``--id`` is
+   given). ``forgeo task list [--status S]`` shows tasks from the
+   terminal; ``forgeo task reopen --task ID`` moves a ``BLOCKED`` or
+   ``FAILED`` task back to ``OPEN``. Never starts an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -65,7 +71,8 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``run``, ``status``, ``logs``, ``validate``, ``stop`` and
+``start``, ``once``, ``run``, ``task add``, ``task list``, ``task reopen``,
+``status``, ``logs``, ``validate``, ``stop`` and
 ``restart`` each accept either ``--config PATH`` (a config file) or
 ``--name NAME`` (an instance resolved from the registry); the two options
 are mutually exclusive.
@@ -78,6 +85,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -196,6 +204,72 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TASK_ID",
         help="Id of the OPEN task to run now (triage: rerun a FAILED task "
         "after reopening it, or try a risky task immediately).",
+    )
+
+    task_parser = sub.add_parser(
+        "task",
+        help="Manage backlog tasks from the terminal "
+        "(no JSON editing or dashboard needed).",
+    )
+    task_sub = task_parser.add_subparsers(dest="task_action")
+
+    task_add_parser = task_sub.add_parser(
+        "add", help="Create a new OPEN task in the backlog."
+    )
+    _add_config_or_name(task_add_parser)
+    task_add_parser.add_argument("--title", required=True, help="Short task title.")
+    task_add_parser.add_argument(
+        "--description", required=True, help="What the agent should do."
+    )
+    task_add_parser.add_argument(
+        "--id",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id (default: next TASK-###; must be unique).",
+    )
+    task_add_parser.add_argument(
+        "--acceptance",
+        action="append",
+        default=None,
+        metavar="CRITERION",
+        help="Acceptance criterion (repeatable).",
+    )
+    task_add_parser.add_argument(
+        "--depends-on",
+        action="append",
+        default=None,
+        metavar="TASK_ID",
+        dest="depends_on",
+        help="Id of a task this task waits for (repeatable).",
+    )
+
+    task_list_parser = task_sub.add_parser(
+        "list", help="List backlog tasks and their statuses."
+    )
+    _add_config_or_name(task_list_parser)
+    task_list_parser.add_argument(
+        "--status",
+        choices=["open", "blocked", "failed", "completed", "review"],
+        default=None,
+        help="Only show tasks with this status (default: all).",
+    )
+    task_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show at most N tasks (default: all).",
+    )
+
+    task_reopen_parser = task_sub.add_parser(
+        "reopen", help="Move a BLOCKED or FAILED task back to OPEN."
+    )
+    _add_config_or_name(task_reopen_parser)
+    task_reopen_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the BLOCKED or FAILED task to reopen.",
     )
 
     status_parser = sub.add_parser(
@@ -831,6 +905,179 @@ def cmd_run(args: argparse.Namespace) -> int:
     return _run_worker_once(args, _one)
 
 
+_TASK_ID_RE = re.compile(r"^TASK-(\d+)$")
+
+
+def _next_cli_task_id(tasks: list[Task]) -> str:
+    """Next ``TASK-###`` id after the highest existing ``TASK-###`` id."""
+    highest = 0
+    for task in tasks:
+        match = _TASK_ID_RE.match(task.id)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"TASK-{highest + 1:03d}"
+
+
+def cmd_task_add(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task add``: create a new ``OPEN`` task and exit.
+
+    Never starts an agent. The id auto-assigns as the next ``TASK-###``
+    unless ``--id`` names one explicitly; duplicates are refused.
+    On issue backlogs (GitHub/GitLab/Jira) the provider assigns the real
+    id and the created task's id is reported.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    title = args.title.strip()
+    if not title:
+        console.print("[red]--title must not be blank.[/red]")
+        return 1
+    description = args.description.strip()
+    if not description:
+        console.print("[red]--description must not be blank.[/red]")
+        return 1
+    backlog = open_backlog(config)
+    try:
+        existing = asyncio.run(backlog.list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if args.id is not None:
+        task_id = args.id.strip()
+        if not task_id:
+            console.print("[red]--id must not be blank.[/red]")
+            return 1
+    else:
+        task_id = _next_cli_task_id(existing)
+    try:
+        task = Task(
+            id=task_id,
+            title=title,
+            description=description,
+            acceptance_criteria=list(args.acceptance or []),
+            dependencies=list(args.depends_on or []),
+        )
+    except ValidationError as exc:
+        console.print(f"[red]Invalid task: {exc}[/red]")
+        return 1
+    try:
+        created = asyncio.run(backlog.create_task(task))
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 1
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    console.print(f"[green]Created task {created.id} — {created.title}[/green]")
+    console.print(
+        f"[dim]Run it now with `forgeo run --task {created.id}` "
+        f"or wait for the next cycle.[/dim]"
+    )
+    return 0
+
+
+def cmd_task_list(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task list``: print backlog tasks; never starts an agent."""
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    limit = args.limit
+    if limit is not None and limit < 1:
+        console.print("[red]--limit must be an integer >= 1.[/red]")
+        return 1
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    wanted = args.status
+    if wanted is not None:
+        tasks = [task for task in tasks if task.status is TaskStatus[wanted.upper()]]
+        if not tasks:
+            console.print(f"[yellow]No {wanted} tasks.[/yellow]")
+            return 0
+    if limit is not None:
+        tasks = tasks[:limit]
+    if not tasks:
+        console.print("[yellow]No tasks yet.[/yellow]")
+        console.print(
+            "[yellow]Add one with `forgeo task add --title ... --description ...` "
+            "or from the dashboard.[/yellow]"
+        )
+        return 0
+    table = Table(title="Backlog tasks")
+    table.add_column("Id")
+    table.add_column("Status")
+    table.add_column("Title", overflow="fold")
+    for task in tasks:
+        table.add_row(task.id, task.status.value, task.title)
+    console.print(table)
+    return 0
+
+
+def cmd_task_reopen(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task reopen``: move a ``BLOCKED``/``FAILED`` task to ``OPEN``.
+
+    Never starts an agent. ``BLOCKED`` tasks reopen directly; ``FAILED``
+    tasks re-queue through the retry path. Tasks that are ``OPEN``,
+    ``REVIEW`` or ``COMPLETED`` are refused with an explanation.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    backlog = open_backlog(config)
+    try:
+        task = asyncio.run(backlog.get_task(args.task))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if task is None:
+        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        return 1
+    previous = task.status
+    if previous is TaskStatus.OPEN:
+        console.print(f"[yellow]Task {task.id} is already OPEN.[/yellow]")
+        return 1
+    if previous in (TaskStatus.COMPLETED, TaskStatus.REVIEW):
+        console.print(
+            f"[red]Task {task.id} is {previous.value} and cannot be reopened "
+            "from the terminal.[/red]"
+        )
+        return 1
+    try:
+        if previous is TaskStatus.BLOCKED:
+            updated = asyncio.run(backlog.reopen_task(task.id))
+        else:
+            updated = asyncio.run(backlog.retry_task(task.id))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if updated is None:
+        console.print(f"[red]Could not reopen task {task.id}.[/red]")
+        return 1
+    console.print(
+        f"[green]Reopened task {updated.id} (was {previous.value}) — now OPEN.[/green]"
+    )
+    return 0
+
+
+def cmd_task(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task``: the task-management subcommand group."""
+    action = args.task_action
+    if action == "add":
+        return cmd_task_add(args)
+    if action == "list":
+        return cmd_task_list(args)
+    if action == "reopen":
+        return cmd_task_reopen(args)
+    build_parser().print_help()
+    return 0
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Handle ``forgeo init``: the guided first-time setup."""
     if args.config.exists() and not args.force:
@@ -899,17 +1146,23 @@ def _next_action(
     """The single most useful next step for ``forgeo status``, if any needs one."""
     counts = backlog_status_counts(tasks)
     if counts.get("BLOCKED", 0) > 0:
-        return "action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then reopen to OPEN"
+        return (
+            "action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), "
+            "then `forgeo task reopen --task <id>`"
+        )
     if counts.get("FAILED", 0) > 0:
-        return "action: inspect FAILED tasks above, reopen to OPEN to retry"
+        return (
+            "action: inspect FAILED tasks above, "
+            "then `forgeo task reopen --task <id>` to retry"
+        )
     if oldest_open is not None and not daemon_running:
         open_count = counts.get("OPEN", 0)
         plural = "s" if open_count != 1 else ""
         return f"action: run `forgeo start` to process {open_count} OPEN task{plural}"
     if oldest_open is None:
         if daemon_running:
-            return "action: backlog empty — add tasks via `forgeo web` or wait for refactor cycle"
-        return "action: backlog empty — add tasks via `forgeo web`, then run `forgeo start`"
+            return "action: backlog empty — add tasks via `forgeo task add` or wait for refactor cycle"
+        return "action: backlog empty — add tasks via `forgeo task add`, then run `forgeo start`"
     return None
 
 
@@ -1945,6 +2198,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "start": cmd_start,
     "once": cmd_once,
     "run": cmd_run,
+    "task": cmd_task,
     "init": cmd_init,
     "status": cmd_status,
     "logs": cmd_logs,

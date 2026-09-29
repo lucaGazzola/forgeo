@@ -2848,3 +2848,91 @@ async def test_run_accepts_short_id(git_repo, tmp_path):
     actual_id, task = await _resolve_backlog_task_id(backlog, "3")
     assert actual_id == "TASK-003"
     assert task is not None and task.id == "TASK-003"
+
+
+def test_resolved_config_path_uses_cwd_file(tmp_path, monkeypatch):
+    from forgeo.cli import _resolved_config_path
+
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "forgeo.yaml").write_text("x", encoding="utf-8")
+
+    resolved = _resolved_config_path(argparse.Namespace(config=DEFAULT_CONFIG))
+    assert resolved == Path("forgeo.yaml")
+
+
+def test_resolved_config_path_discovers_parent(tmp_path, monkeypatch):
+    from forgeo.cli import _resolved_config_path
+
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    root = tmp_path / "proj"
+    sub = root / "docs" / "sub"
+    sub.mkdir(parents=True)
+    (root / "forgeo.yaml").write_text("x", encoding="utf-8")
+    monkeypatch.chdir(sub)
+
+    resolved = _resolved_config_path(argparse.Namespace(config=DEFAULT_CONFIG))
+    assert resolved == root / "forgeo.yaml"
+
+
+def test_resolved_config_path_explicit_missing_is_kept(tmp_path, monkeypatch):
+    from forgeo.cli import _resolved_config_path
+
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    monkeypatch.chdir(tmp_path)
+
+    missing = tmp_path / "custom.yaml"
+    resolved = _resolved_config_path(argparse.Namespace(config=missing))
+    assert resolved == missing
+
+
+def test_resolved_config_path_single_instance_fallback(tmp_path, monkeypatch, git_repo):
+    from forgeo.cli import _resolved_config_path
+    from forgeo.instances import add_instance
+
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    config_path = write_config_in(cfg_dir, git_repo, tmp_path)
+    add_instance("only", config_path)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    resolved = _resolved_config_path(argparse.Namespace(config=DEFAULT_CONFIG))
+    assert resolved == config_path.resolve()
+
+
+def test_resolved_config_path_no_fallback_with_two_instances(
+    tmp_path, monkeypatch, git_repo
+):
+    from forgeo.cli import _resolved_config_path
+    from forgeo.instances import add_instance
+
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+    cfg1 = tmp_path / "cfg1"
+    cfg1.mkdir()
+    cfg2 = tmp_path / "cfg2"
+    cfg2.mkdir()
+    add_instance("one", write_config_in(cfg1, git_repo, tmp_path))
+    add_instance(
+        "two", write_config_in(cfg2, git_repo, tmp_path, name="other-forgeo")
+    )
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+
+    resolved = _resolved_config_path(argparse.Namespace(config=DEFAULT_CONFIG))
+    assert resolved == DEFAULT_CONFIG
+
+
+def test_cmd_status_works_from_subdirectory(git_repo, tmp_path, monkeypatch, capsys):
+    write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task()])
+    sub = tmp_path / "src" / "pkg"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    monkeypatch.setenv("FORGEO_REGISTRY", str(tmp_path / "instances.yaml"))
+
+    assert cmd_status(argparse.Namespace(config=DEFAULT_CONFIG)) == 0
+    assert "test-forgeo" in capsys.readouterr().out

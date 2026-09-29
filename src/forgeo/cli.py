@@ -811,7 +811,8 @@ def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG,
-        help="Forgeo YAML file (default: forgeo.yaml).",
+        help="Forgeo YAML file (default: forgeo.yaml, auto-discovered in "
+        "parent dirs; a lone registered instance is used when none is found).",
     )
     group.add_argument(
         "--name",
@@ -848,15 +849,77 @@ def _offer_setup(config_path: Path) -> bool:
     return run_setup(base_dir=config_path.parent.resolve(), config_path=config_path) is not None
 
 
+def _discover_default_config() -> Path | None:
+    """Find ``forgeo.yaml`` by walking ``cwd`` upward, or ``None``.
+
+    Lets ``forgeo status`` (etc.) work from any subdirectory of the
+    project instead of forcing ``--config ../../forgeo.yaml`` on every
+    call. Only the default filename is searched; an explicit ``--config``
+    path is never second-guessed.
+    """
+    name = DEFAULT_CONFIG.name
+    current = Path.cwd().resolve()
+    for candidate in (current, *current.parents):
+        found = candidate / name
+        try:
+            if found.is_file():
+                return found
+        except OSError:
+            continue
+    return None
+
+
+def _single_registered_config() -> Path | None:
+    """The registered instance's config when exactly one exists, else ``None``.
+
+    Last-resort fallback so a single-forgeo host never needs ``--config``
+    or ``--name``: with zero or several instances the choice is ambiguous
+    and the caller keeps the default ``forgeo.yaml`` error path.
+    """
+    from forgeo.instances import load_registry
+
+    try:
+        registry = load_registry()
+    except OSError:
+        return None
+    if len(registry) != 1:
+        return None
+    only = Path(next(iter(registry.values())))
+    try:
+        if only.is_file():
+            return only
+    except OSError:
+        return None
+    return None
+
+
 def _resolved_config_path(args: argparse.Namespace) -> Path | None:
     """Resolve the config path: ``--name`` from the registry, else ``--config``.
 
-    Prints an error and returns ``None`` when the instance name is not
-    registered.
+    With the default ``--config`` (``forgeo.yaml``) and no such file in
+    ``cwd``, the parents are searched upward, then a lone registered
+    instance is used — so commands work from subdirectories and on
+    single-forgeo hosts without extra flags. Prints an error and returns
+    ``None`` when the instance name is not registered.
     """
     name = getattr(args, "name", None)
     if name is None:
-        return Path(args.config)
+        candidate = Path(getattr(args, "config", DEFAULT_CONFIG))
+        try:
+            if candidate.exists():
+                return candidate
+        except OSError:
+            return candidate
+        if candidate != DEFAULT_CONFIG:
+            return candidate
+        discovered = _discover_default_config()
+        if discovered is not None:
+            return discovered
+        fallback = _single_registered_config()
+        if fallback is not None:
+            console.print(f"[dim]Using registered instance config {fallback}.[/dim]")
+            return fallback
+        return candidate
     config_path = resolve_instance(name)
     if config_path is None:
         console.print(
@@ -2420,7 +2483,10 @@ def cmd_restart(args: argparse.Namespace) -> int:
 
 def cmd_default() -> int:
     """Bare ``forgeo``: show help when configured, run the wizard otherwise."""
-    if DEFAULT_CONFIG.exists():
+    if DEFAULT_CONFIG.exists() or _discover_default_config() is not None:
+        build_parser().print_help()
+        return 0
+    if _single_registered_config() is not None:
         build_parser().print_help()
         return 0
     console.print("[yellow]No forgeo.yaml found — starting the guided setup.[/yellow]")
@@ -2618,7 +2684,9 @@ def _auth_config_path(args: argparse.Namespace) -> Path | None:
     if config_path is not None:
         return Path(config_path)
     default = Path("forgeo.yaml")
-    return default if default.exists() else None
+    if default.exists():
+        return default
+    return _discover_default_config() or _single_registered_config()
 
 
 _OAUTH_PARAM_DEFAULTS: dict[str, dict[str, str]] = {

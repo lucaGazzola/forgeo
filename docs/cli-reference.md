@@ -79,9 +79,16 @@ next: TASK-001 — First open
 daemon: not running
 last outcome: task
 waiting on: TASK-002 (needs COMPLETED: TASK-001 (OPEN))
+blocked: TASK-003 — Needs human — first line of the blocker reason
+action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then reopen to OPEN
 ```
 
 `waiting on` appears when the oldest `OPEN` task has unmet dependencies. `run_at` due tasks are shown ahead of older ones.
+
+`blocked:` / `failed:` lines (up to 3 each, oldest first, with the reason's
+first line) appear when tasks need attention, plus a single `action:` line
+with the most useful next step (resolve + reopen, `forgeo start`, or add
+tasks via `forgeo web`).
 
 ## `forgeo validate`
 

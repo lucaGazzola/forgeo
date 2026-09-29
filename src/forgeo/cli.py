@@ -828,6 +828,65 @@ def last_outcome_from_runs(config: ForgeoConfig) -> str | None:
     return last_run.outcome.value
 
 
+_STATUS_REASON_SHOWN = 3
+_STATUS_REASON_CHARS = 100
+
+
+def _reason_first_line(reason: list[str]) -> str:
+    """First non-blank line of a blocker/failure reason, truncated for status."""
+    for line in reason:
+        stripped = " ".join(line.split())
+        if stripped:
+            if len(stripped) > _STATUS_REASON_CHARS:
+                return stripped[: _STATUS_REASON_CHARS - 1] + "…"
+            return stripped
+    return ""
+
+
+def _status_reason_lines(tasks: list[Task], status: TaskStatus) -> list[str]:
+    """One ``status: ID — title — reason`` line per task, oldest first.
+
+    Shows at most ``_STATUS_REASON_SHOWN`` tasks, then a ``+N more`` line so
+    ``forgeo status`` stays readable with a large blocked/failed backlog.
+    """
+    matching = sorted(
+        (task for task in tasks if task.status is status),
+        key=lambda task: task.created_at,
+    )
+    lines: list[str] = []
+    for task in matching[:_STATUS_REASON_SHOWN]:
+        reason = (
+            task.blocker_reason if status is TaskStatus.BLOCKED else task.failure_reason
+        )
+        first = _reason_first_line(reason)
+        suffix = f" — {first}" if first else ""
+        lines.append(f"{status.value.lower()}: {task.id} — {task.title}{suffix}")
+    hidden = len(matching) - len(lines)
+    if hidden > 0:
+        lines.append(f"... +{hidden} more {status.value.lower()} (see web console)")
+    return lines
+
+
+def _next_action(
+    tasks: list[Task], *, daemon_running: bool, oldest_open: Task | None
+) -> str | None:
+    """The single most useful next step for ``forgeo status``, if any needs one."""
+    counts = backlog_status_counts(tasks)
+    if counts.get("BLOCKED", 0) > 0:
+        return "action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then reopen to OPEN"
+    if counts.get("FAILED", 0) > 0:
+        return "action: inspect FAILED tasks above, reopen to OPEN to retry"
+    if oldest_open is not None and not daemon_running:
+        open_count = counts.get("OPEN", 0)
+        plural = "s" if open_count != 1 else ""
+        return f"action: run `forgeo start` to process {open_count} OPEN task{plural}"
+    if oldest_open is None:
+        if daemon_running:
+            return "action: backlog empty — add tasks via `forgeo web` or wait for refactor cycle"
+        return "action: backlog empty — add tasks via `forgeo web`, then run `forgeo start`"
+    return None
+
+
 def render_status(
     config: ForgeoConfig,
     tasks: list[Task],
@@ -855,6 +914,11 @@ def render_status(
     waiting = _waiting_hint(tasks)
     if waiting is not None:
         lines.append(waiting)
+    lines.extend(_status_reason_lines(tasks, TaskStatus.BLOCKED))
+    lines.extend(_status_reason_lines(tasks, TaskStatus.FAILED))
+    action = _next_action(tasks, daemon_running=daemon_running, oldest_open=nxt)
+    if action is not None:
+        lines.append(action)
     return "\n".join(lines)
 
 

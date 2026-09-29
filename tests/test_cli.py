@@ -381,6 +381,76 @@ def test_render_status_no_waiting_line_when_runnable(git_repo, tmp_path):
     assert "waiting on:" not in text
 
 
+def test_render_status_shows_blocked_reason_and_action(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [
+        make_task(
+            id="TASK-007",
+            title="Needs human",
+            status=TaskStatus.BLOCKED,
+            blocker_reason=["Need the DB password", "second line"],
+        ),
+    ]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert "blocked: TASK-007 — Needs human — Need the DB password" in text
+    assert "action: resolve BLOCKED" in text
+
+
+def test_render_status_shows_failed_reason_and_action(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [
+        make_task(
+            id="TASK-009",
+            title="Crashed",
+            status=TaskStatus.FAILED,
+            failure_reason=["exit 3: boom"],
+        ),
+    ]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert "failed: TASK-009 — Crashed — exit 3: boom" in text
+    assert "action: inspect FAILED" in text
+
+
+def test_render_status_truncates_many_blocked(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    now = datetime.now(UTC)
+    tasks = [
+        make_task(
+            id=f"TASK-{i:03d}",
+            title=f"Blocked {i}",
+            status=TaskStatus.BLOCKED,
+            created_at=now - timedelta(hours=i),
+        )
+        for i in range(5)
+    ]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert text.count("blocked: TASK-") == 3
+    assert "+2 more blocked" in text
+
+
+def test_render_status_action_empty_backlog(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    stopped = render_status(config, [], daemon_running=False, last_outcome=None)
+    assert "action: backlog empty" in stopped
+    assert "forgeo start" in stopped
+    running = render_status(config, [], daemon_running=True, last_outcome=None)
+    assert "refactor cycle" in running
+
+
+def test_render_status_action_start_when_open_and_stopped(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [make_task(id="TASK-001", title="Do the thing", status=TaskStatus.OPEN)]
+    text = render_status(config, tasks, daemon_running=False, last_outcome=None)
+    assert "action: run `forgeo start` to process 1 OPEN task" in text
+
+
+def test_render_status_no_action_when_running_with_open(git_repo, tmp_path):
+    config = make_config(git_repo, tmp_path)
+    tasks = [make_task(id="TASK-001", title="Do the thing", status=TaskStatus.OPEN)]
+    text = render_status(config, tasks, daemon_running=True, last_outcome=None)
+    assert "action:" not in text
+
+
 def test_status_prints_summary_and_exits_zero(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
     backlog = tmp_path / "backlog.json"

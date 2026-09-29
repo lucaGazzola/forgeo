@@ -2422,6 +2422,60 @@ def test_task_add_refuses_bad_run_at(git_repo, tmp_path, capsys):
     assert "Invalid task" in capsys.readouterr().out
 
 
+def test_parser_parses_run_flag_for_task_add():
+    args = build_parser().parse_args(["task", "add", "--title", "Quick", "--run"])
+    assert args.task_action == "add"
+    assert args.run is True
+
+
+def test_task_add_run_creates_and_runs_immediately(
+    git_repo, tmp_path, monkeypatch, capsys
+):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+
+    args = task_add_args(config_path)
+    args.run = True
+    assert cmd_task_add(args) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert [task["id"] for task in tasks] == ["TASK-001"]
+    assert fake.run_task_ids == ["TASK-001"]
+    out = capsys.readouterr().out
+    assert "Created task TASK-001" in out
+    assert "Cycle finished: task" in out
+
+
+def test_task_add_run_refuses_with_run_at(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    args = task_add_args(config_path, run_at="2026-10-01T09:00:00Z")
+    args.run = True
+    assert cmd_task_add(args) == 1
+    assert "not both" in capsys.readouterr().out
+    assert not (tmp_path / "backlog.json").exists()
+
+
+@requires_posix
+def test_task_add_run_refuses_while_lock_held(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    lock = acquire_run_lock(tmp_path / "backlog.lock")
+    assert lock is not None
+
+    args = task_add_args(config_path)
+    args.run = True
+    assert cmd_task_add(args) == 1
+    assert fake.cycles == 0
+    out = capsys.readouterr().out
+    assert "already running" in out
+    # The task is still created, so the next cycle picks it up.
+    assert [task["id"] for task in read_backlog_tasks(tmp_path)] == ["TASK-001"]
+
+    lock.close()
+
+
 def test_task_edit_sets_and_clears_run_at(git_repo, tmp_path):
     config_path = write_config(git_repo, tmp_path)
     write_backlog(tmp_path, [make_task(id="TASK-001")])

@@ -63,6 +63,7 @@ forgeo task add --title "Implement fibonacci module" \
   --description "Write a fibonacci module with memoization and tests."
 forgeo task list
 forgeo task show --task TASK-001
+forgeo task add --title "Quick idea" --run   # create + run in one step, no second command
 forgeo task rm --task TASK-001   # delete typos/duplicates, no file editing
 ```
 

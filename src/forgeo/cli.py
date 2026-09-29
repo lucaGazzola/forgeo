@@ -32,7 +32,7 @@ Commands:
    command. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add [--title T | "T"] [--description D] [--description-file F]`` — create a
+* ``forgeo task add [--title T | "T"] [--description D] [--description-file F] [--run]`` — create a
    new ``OPEN`` task in the configured backlog without hand-editing JSON
    or opening the dashboard (the title may be passed positionally as
    ``forgeo task add "Fix typo"`` or with ``--title`` — never both; ids auto-assign as ``TASK-###`` unless
@@ -40,7 +40,9 @@ Commands:
    one-liners need only ``--title``; ``--description -`` /
    ``--description-file -`` reads
    stdin and ``--description-file PATH`` reads a file, so multiline specs
-   never need shell quoting; ``--run-at now`` jumps the queue, an ISO-8601
+   never need shell quoting; ``--run`` runs the new task immediately in
+   the same command instead of waiting for the next cycle (not with
+   ``--run-at``); ``--run-at now`` jumps the queue, an ISO-8601
    time schedules it).    ``forgeo task list [--status S]`` shows tasks from
    the terminal; ``forgeo task next`` shows which task the scheduler would
    pick next and why the rest wait (dependencies, future ``run-at``, queue
@@ -324,6 +326,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="run_at",
         help="Earliest moment the task may be picked (ISO-8601, or 'now' "
         "to run next: due tasks jump ahead of oldest-first order).",
+    )
+    task_add_parser.add_argument(
+        "--run",
+        action="store_true",
+        help="Create the task and run it immediately in one step (same "
+        "lock as `forgeo run`; refuses while a daemon holds it; "
+        "not with --run-at).",
     )
 
     task_list_parser = task_sub.add_parser(
@@ -1277,7 +1286,10 @@ def _next_cli_task_id(tasks: list[Task]) -> str:
 def cmd_task_add(args: argparse.Namespace) -> int:
     """Handle ``forgeo task add``: create a new ``OPEN`` task and exit.
 
-    Never starts an agent. The id auto-assigns as the next ``TASK-###``
+    Never starts an agent, unless ``--run`` is passed — then the new task
+    runs immediately in the same command (the ``add -> run`` loop in one
+    step, sharing the per-forgeo lock with ``once``/``run``/daemon).
+    The id auto-assigns as the next ``TASK-###``
     unless ``--id`` names one explicitly; duplicates are refused.
     The title may be passed positionally or with ``--title``;
     ``--description`` defaults to the title, so quick one-liners need only
@@ -1289,6 +1301,13 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
+    run_now = bool(getattr(args, "run", False))
+    if run_now and getattr(args, "run_at", None) is not None:
+        console.print(
+            "[red]Pass either --run or --run-at, not both "
+            "(--run runs the task now).[/red]"
+        )
+        return 1
     title_text, title_error = _resolve_task_title(args)
     if title_error is not None:
         console.print(f"[red]{title_error}[/red]")
@@ -1353,11 +1372,46 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
     console.print(f"[green]Created task {created.id} — {created.title}[/green]")
-    console.print(
-        f"[dim]Run it now with `forgeo run --task {created.id}` "
-        f"or wait for the next cycle.[/dim]"
-    )
-    return 0
+    if not run_now:
+        console.print(
+            f"[dim]Run it now with `forgeo run --task {created.id}` "
+            f"or wait for the next cycle.[/dim]"
+        )
+        return 0
+    return _run_created_task_now(config, created.id)
+
+
+def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
+    """Run a just-created task immediately (``task add --run``).
+
+    Shares the per-forgeo lock with ``once``/``run`` and the daemon, so it
+    never overlaps them; the task already exists, so a busy lock (or any
+    run failure) still leaves the created task behind for the next cycle.
+    """
+    setup_logging(config.log_file)
+    log = logging.getLogger("forgeo.cli")
+    lock = _acquire_run_lock(config)
+    if lock is None:
+        return 1
+    try:
+        forgeo = _make_forgeo(config)
+    except SandboxUnavailableError as exc:
+        lock.close()
+        console.print(f"[red]{exc}[/red]")
+        log.error("Sandbox unavailable: %s", exc)
+        return 1
+
+    async def _execute() -> int:
+        check_for_update(update_state_path(config), print_fn=console.print)
+        try:
+            outcome = await forgeo.run_task_id(task_id)
+        except TaskNotRunnableError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 1
+        console.print(f"[green]Cycle finished: {outcome}[/green]")
+        return 0
+
+    return _run_worker_with_lock(lock, _execute)
 
 
 def cmd_task_list(args: argparse.Namespace) -> int:

@@ -67,13 +67,16 @@ Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
 Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task next` explains the scheduler's next pick (dependencies, `run-at`, queue order). `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted). `task complete-review` / `task request-changes` triage `REVIEW` tasks from the terminal (merge the branch first, then complete it).
 
-### `forgeo task add [--title <t> | <t>] [--description <d>]`
+### `forgeo task add [--title <t> | <t>] [--description <d>] [--run]`
 
 Create a new `OPEN` task. The title may be passed positionally
 (`forgeo task add "Fix typo"`) or with `--title` — never both.
 `--description` defaults to the title, so
 one-liners need only a title; pass `--description`/`--description-file`
-for anything needing a real spec.
+for anything needing a real spec. `--run` creates the task and runs it
+immediately in the same command (the `add -> run` loop in one step;
+shares the run lock with `once`/`run`/daemon, so it refuses while one
+holds it; not with `--run-at`).
 
 ```bash
 forgeo task add "Fix typo in README"
@@ -84,6 +87,7 @@ forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
   --depends-on TASK-001
 forgeo task add --title "Hotfix" --description "Ship today." --run-at now
 forgeo task add --title "After deploy" --description "Migrate." --run-at 2026-10-01T09:00:00Z
+forgeo task add --title "Hotfix" --description "Ship today." --run   # create + run now, no second command
 # Multiline specs without shell quoting — file or stdin:
 forgeo task add --title "Big spec" --description-file spec.md
 cat spec.md | forgeo task add --title "Big spec" --description-file -
@@ -98,7 +102,8 @@ echo "Do it." | forgeo task add --title "Quick" --description -
 | `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
 | `--acceptance <c>` | Acceptance criterion (repeatable). |
 | `--depends-on <id>` | Id of a task this task waits for (repeatable). |
-| `--run-at <time>` | Earliest pick time: ISO-8601, or `now` to run next (due tasks jump ahead of oldest-first order). |
+| `--run-at <time>` | Earliest pick time: ISO-8601, or `now` to run next (due tasks jump ahead of oldest-first order; not with `--run`). |
+| `--run` | Create the task and run it immediately (same lock as `forgeo run`; refuses while a daemon holds it; not with `--run-at`). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses duplicates and blank titles/descriptions (an explicitly passed blank `--description` is still refused; omitting it files the title as the description). Prints the created id plus the `forgeo run --task <id>` shortcut to try it immediately.

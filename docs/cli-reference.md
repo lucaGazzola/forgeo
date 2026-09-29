@@ -343,6 +343,23 @@ Checks: config schema, repo is a git tree, branch/remote resolve, backlog parses
 - Missing file backlog → fine (empty on first cycle); missing branch → warning (created on first cycle).
 - No commits + clean tree → warning; no commits + dirty tree → error (run `git add -A && git commit`).
 
+## `forgeo check`
+
+Run the contributor quality gates in one step — the single-command version
+of the `CONTRIBUTING.md` checklist. Read-only; needs no config file and
+never starts an agent.
+
+```bash
+forgeo check
+```
+
+Runs `pytest`, then `ruff check`, then `mypy src/forgeo` (each via the
+current Python environment), prints each tool's output under its own
+header, and ends with a summary line such as
+`check: PASS (pytest: PASS, ruff: PASS, mypy: PASS)`. Exits `0` only when
+every gate passes; exits `1` when any gate fails or a gate tool is not
+installed (with a `pip install -e ".[dev]"` hint).
+
 ## `forgeo stop` / `forgeo restart`
 
 Graceful shutdown via SIGTERM (cycle in progress finishes first).

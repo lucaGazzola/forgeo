@@ -69,6 +69,10 @@ Commands:
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
    exits non-zero when any problem is found.
+* ``forgeo check`` — run the contributor quality gates (``pytest``,
+   ``ruff check``, ``mypy src/forgeo``) one after another and print a
+   PASS/FAIL summary. Read-only; needs no config file and never starts an
+   agent. Exits non-zero when any gate fails or a gate tool is not installed.
 * ``forgeo status --config forgeo.yaml`` — print a read-only summary of the
    forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
    starts an agent.
@@ -149,6 +153,7 @@ from forgeo.central import (
     WEB_START_TIMEOUT_SECONDS,
     WEB_STOP_TIMEOUT_SECONDS,
 )
+from forgeo.check import run_all_gates
 from forgeo.config import load_config
 from forgeo.daemon import ForgeoDaemon, acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.daemon_control import (
@@ -562,6 +567,12 @@ def build_parser() -> argparse.ArgumentParser:
         "agent command and lock state without starting anything.",
     )
     _add_config_or_name(validate_parser)
+
+    sub.add_parser(
+        "check",
+        help="Run the contributor quality gates (pytest, ruff check, "
+        "mypy src/forgeo) and print a PASS/FAIL summary.",
+    )
 
     stop_parser = sub.add_parser(
         "stop",
@@ -2213,6 +2224,29 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0 if report.healthy else 1
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Handle ``forgeo check``: run pytest, ruff, and mypy, then summarize.
+
+    Read-only; needs no config file and never starts an agent. Prints each
+    gate's output under its own header, then a ``check: PASS/FAIL (pytest:
+    ..., ruff: ..., mypy: ...)`` summary line. Exits 0 only when every gate
+    passes — the single-command version of the CONTRIBUTING.md quality gates.
+    """
+    del args  # No options: the gate set is fixed.
+    report = run_all_gates()
+    for outcome in report.outcomes:
+        console.print(f"[bold]=== {outcome.name} ===[/bold]")
+        if outcome.output:
+            console.print(
+                outcome.output, markup=False, highlight=False, soft_wrap=True
+            )
+    if report.healthy:
+        console.print(f"[green]{report.summary()}[/green]")
+        return 0
+    console.print(f"[red]{report.summary()}[/red]")
+    return 1
+
+
 def _stop_daemon(config: ForgeoConfig, timeout: float) -> bool:
     """SIGTERM the running daemon and wait for it to exit; False on failure."""
     try:
@@ -3029,6 +3063,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "status": cmd_status,
     "logs": cmd_logs,
     "validate": cmd_validate,
+    "check": cmd_check,
     "stop": cmd_stop,
     "restart": cmd_restart,
     "instance": cmd_instance,

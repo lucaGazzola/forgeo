@@ -34,6 +34,7 @@ from forgeo.cli import (
     cmd_task_add,
     cmd_task_list,
     cmd_task_reopen,
+    cmd_task_show,
     cmd_validate,
     last_outcome_from_runs,
     main,
@@ -1943,3 +1944,84 @@ def test_task_main_entrypoint_lists_tasks(git_repo, tmp_path, capsys):
 
     assert main(["task", "list", "--config", str(config_path)]) == 0
     assert "TASK-001" in capsys.readouterr().out
+
+
+def task_show_args(config_path: Path, task_id: str) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, task=task_id)
+
+
+def test_task_show_full_detail(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-001",
+                title="First",
+                description="Build it with [brackets] intact.",
+                acceptance_criteria=["pytest passes"],
+                dependencies=["TASK-000"],
+            )
+        ],
+    )
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-001")) == 0
+    out = capsys.readouterr().out
+    assert "id: TASK-001" in out
+    assert "status: OPEN" in out
+    assert "title: First" in out
+    assert "Build it with [brackets] intact." in out
+    assert "pytest passes" in out
+    assert "TASK-000" in out
+    assert "forgeo run --task TASK-001" in out
+
+
+def test_task_show_minimal_task_omits_empty_sections(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-001")) == 0
+    out = capsys.readouterr().out
+    assert "acceptance criteria:" not in out
+    assert "blocker reason:" not in out
+    assert "failure reason:" not in out
+
+
+def test_task_show_blocked_reason_and_reopen_hint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-003",
+                status="BLOCKED",
+                blocker_reason=["Needs human: pick the color."],
+            )
+        ],
+    )
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-003")) == 0
+    out = capsys.readouterr().out
+    assert "status: BLOCKED" in out
+    assert "Needs human: pick the color." in out
+    assert "forgeo task reopen --task TASK-003" in out
+
+
+def test_task_show_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-999")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_show_missing_config(tmp_path, capsys):
+    assert cmd_task_show(task_show_args(tmp_path / "missing.yaml", "TASK-001")) == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_task_show_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", description="Shown via main.")])
+
+    assert main(["task", "show", "--task", "TASK-001", "--config", str(config_path)]) == 0
+    assert "Shown via main." in capsys.readouterr().out

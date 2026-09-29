@@ -99,6 +99,26 @@ List backlog tasks and their statuses as a table (`Id`, `Status`, `Title`).
 
 An empty backlog hints at `forgeo task add`.
 
+### `forgeo task show --task <id>`
+
+Show one task's full detail — description, acceptance criteria,
+dependencies, blocker/failure reasons, and agent response. Read-only; never
+starts an agent. `task list` only shows `Id`/`Status`/`Title`, so this is the
+terminal equivalent of opening the task in the dashboard.
+
+```bash
+forgeo task show --task TASK-003
+```
+
+| Flag | Description |
+| --- | --- |
+| `--task <id>` | **Required.** Task id to show. |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint
+(`forgeo run --task <id>` for `OPEN` tasks, `forgeo task reopen --task <id>`
+for `BLOCKED`/`FAILED` tasks).
+
 ### `forgeo task reopen --task <id>`
 
 Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). `FAILED` tasks re-queue through the retry path.
@@ -188,7 +208,7 @@ Graceful shutdown via SIGTERM (cycle in progress finishes first).
 
 `stop` exits `1` if not running or timeout elapses; auto-registers with `--config` if missing. `restart` stops then starts detached, re-reading `forgeo.yaml`. Config edits apply on next cycle without restart, except `repo`/`backlog`/`blocker_file`/`log_file` which need `restart`.
 
-`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
+`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task show`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
 
 ## `forgeo instance`
 

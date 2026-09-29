@@ -32,7 +32,9 @@ Commands:
    task in the configured backlog without hand-editing JSON or opening
    the dashboard (ids auto-assign as ``TASK-###`` unless ``--id`` is
    given). ``forgeo task list [--status S]`` shows tasks from the
-   terminal; ``forgeo task reopen --task ID`` moves a ``BLOCKED`` or
+   terminal; ``forgeo task show --task ID`` prints one task's full
+   detail (description, acceptance, dependencies, blocker/failure
+   reasons); ``forgeo task reopen --task ID`` moves a ``BLOCKED`` or
    ``FAILED`` task back to ``OPEN``. Never starts an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
@@ -71,8 +73,8 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``run``, ``task add``, ``task list``, ``task reopen``,
-``status``, ``logs``, ``validate``, ``stop`` and
+``start``, ``once``, ``run``, ``task add``, ``task list``, ``task show``,
+``task reopen``, ``status``, ``logs``, ``validate``, ``stop`` and
 ``restart`` each accept either ``--config PATH`` (a config file) or
 ``--name NAME`` (an instance resolved from the registry); the two options
 are mutually exclusive.
@@ -259,6 +261,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help="Show at most N tasks (default: all).",
+    )
+
+    task_show_parser = task_sub.add_parser(
+        "show", help="Show one task's full detail (never starts an agent)."
+    )
+    _add_config_or_name(task_show_parser)
+    task_show_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the task to show in full.",
     )
 
     task_reopen_parser = task_sub.add_parser(
@@ -1018,6 +1031,92 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def render_task_detail(task: Task) -> str:
+    """Render one task's full detail as plain text.
+
+    Plain text (no Rich markup) so descriptions containing ``[...]`` print
+    literally. Sections with no content are omitted, except ``description``
+    which is always shown — ``task list`` only shows id/status/title, so
+    this is the terminal equivalent of opening the task in the dashboard.
+    """
+    lines = [
+        f"id: {task.id}",
+        f"status: {task.status.value}",
+        f"title: {task.title}",
+        f"description: {task.description}",
+    ]
+    if task.acceptance_criteria:
+        lines.append("acceptance criteria:")
+        lines.extend(f"  - {criterion}" for criterion in task.acceptance_criteria)
+    if task.dependencies:
+        lines.append(f"dependencies: {', '.join(task.dependencies)}")
+    if task.files_to_modify:
+        lines.append(f"files: {', '.join(task.files_to_modify)}")
+    lines.append(f"created: {task.created_at.isoformat()}")
+    lines.append(f"updated: {task.updated_at.isoformat()}")
+    if task.run_at is not None:
+        lines.append(f"run_at: {task.run_at.isoformat()}")
+    if task.blocked_count:
+        lines.append(f"blocked_count: {task.blocked_count}")
+    if task.retry_count:
+        lines.append(f"retry_count: {task.retry_count}")
+    if task.retries_left is not None:
+        lines.append(f"retries_left: {task.retries_left}")
+    if task.blocker_reason:
+        lines.append("blocker reason:")
+        lines.extend(f"  {line}" for line in task.blocker_reason)
+    if task.failure_reason:
+        lines.append("failure reason:")
+        lines.extend(f"  {line}" for line in task.failure_reason)
+    if task.agent_response:
+        lines.append("agent response:")
+        lines.extend(f"  {line}" for line in task.agent_response.splitlines())
+    if task.review_branch:
+        lines.append(f"review_branch: {task.review_branch}")
+    if task.review_commit_sha:
+        lines.append(f"review_commit: {task.review_commit_sha}")
+    return "\n".join(lines)
+
+
+def _task_show_hint(task: Task) -> str | None:
+    """The most useful next step after showing ``task``, if any."""
+    if task.status is TaskStatus.BLOCKED or task.status is TaskStatus.FAILED:
+        return (
+            f"hint: resolve the reason above, then "
+            f"`forgeo task reopen --task {task.id}` to retry"
+        )
+    if task.status is TaskStatus.OPEN:
+        return f"hint: run it now with `forgeo run --task {task.id}`"
+    return None
+
+
+def cmd_task_show(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task show``: print one task's full detail.
+
+    Read-only; never starts an agent. Works with every provider via
+    ``get_task``.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    try:
+        task = asyncio.run(open_backlog(config).get_task(args.task))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if task is None:
+        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        return 1
+    console.print(
+        render_task_detail(task), markup=False, highlight=False, soft_wrap=True
+    )
+    hint = _task_show_hint(task)
+    if hint is not None:
+        console.print(f"[dim]{hint}[/dim]")
+    return 0
+
+
 def cmd_task_reopen(args: argparse.Namespace) -> int:
     """Handle ``forgeo task reopen``: move a ``BLOCKED``/``FAILED`` task to ``OPEN``.
 
@@ -1072,6 +1171,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         return cmd_task_add(args)
     if action == "list":
         return cmd_task_list(args)
+    if action == "show":
+        return cmd_task_show(args)
     if action == "reopen":
         return cmd_task_reopen(args)
     build_parser().print_help()

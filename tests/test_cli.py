@@ -1747,6 +1747,7 @@ def task_add_args(
     task_id: str | None = None,
     acceptance: list[str] | None = None,
     depends_on: list[str] | None = None,
+    run_at: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         config=config_path,
@@ -1755,6 +1756,7 @@ def task_add_args(
         id=task_id,
         acceptance=acceptance,
         depends_on=depends_on,
+        run_at=run_at,
     )
 
 
@@ -2040,9 +2042,11 @@ def task_edit_args(config_path: Path, task_id: str, **overrides) -> argparse.Nam
         "acceptance": None,
         "depends_on": None,
         "files": None,
+        "run_at": None,
         "clear_acceptance": False,
         "clear_depends_on": False,
         "clear_files": False,
+        "clear_run_at": False,
     }
     params.update(overrides)
     return argparse.Namespace(**params)
@@ -2126,6 +2130,108 @@ def test_task_edit_refuses_conflicting_flags(git_repo, tmp_path, capsys):
         == 1
     )
     assert "not both" in capsys.readouterr().out
+
+
+def test_task_add_with_run_at_iso(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert (
+        cmd_task_add(task_add_args(config_path, run_at="2026-10-01T09:00:00Z")) == 0
+    )
+    tasks = read_backlog_tasks(tmp_path)
+    assert tasks[0]["run_at"] == "2026-10-01T09:00:00Z"
+
+
+def test_task_add_with_run_at_now_is_due(git_repo, tmp_path):
+    from forgeo.backlog import oldest_open_task
+    from forgeo.models import Task
+
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    before = datetime.now(UTC) - timedelta(seconds=5)
+    assert cmd_task_add(task_add_args(config_path, run_at="now")) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert len(tasks) == 2
+    run_at = Task.model_validate(tasks[1]).run_at
+    assert run_at is not None and run_at >= before
+    picked = oldest_open_task([Task.model_validate(entry) for entry in tasks])
+    assert picked is not None and picked.id == "TASK-002"
+
+
+def test_task_add_refuses_bad_run_at(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_add(task_add_args(config_path, run_at="not-a-date")) == 1
+    assert "Invalid task" in capsys.readouterr().out
+
+
+def test_task_edit_sets_and_clears_run_at(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-001", run_at="2026-10-01T09:00:00Z")
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["run_at"] == "2026-10-01T09:00:00Z"
+
+    assert (
+        cmd_task_edit(task_edit_args(config_path, "TASK-001", clear_run_at=True))
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["run_at"] is None
+
+
+def test_task_edit_run_at_now_jumps_queue(git_repo, tmp_path):
+    from forgeo.backlog import oldest_open_task
+    from forgeo.models import Task
+
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001"), make_task(id="TASK-002")])
+
+    assert cmd_task_edit(task_edit_args(config_path, "TASK-002", run_at="now")) == 0
+    tasks = [Task.model_validate(entry) for entry in read_backlog_tasks(tmp_path)]
+    picked = oldest_open_task(tasks)
+    assert picked is not None and picked.id == "TASK-002"
+
+
+def test_task_edit_refuses_run_at_conflict(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert (
+        cmd_task_edit(
+            task_edit_args(config_path, "TASK-001", run_at="now", clear_run_at=True)
+        )
+        == 1
+    )
+    assert "not both" in capsys.readouterr().out
+
+
+def test_task_add_run_at_via_main_parser(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert (
+        main(
+            [
+                "task",
+                "add",
+                "--title",
+                "Scheduled",
+                "--description",
+                "Later.",
+                "--run-at",
+                "2026-10-01T09:00:00Z",
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["run_at"] == "2026-10-01T09:00:00Z"
 
 
 def test_task_edit_main_entrypoint(git_repo, tmp_path, capsys):

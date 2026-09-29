@@ -28,16 +28,19 @@ Commands:
    reopening it) or try a risky task right now. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add --title T --description D`` — create a new ``OPEN``
-   task in the configured backlog without hand-editing JSON or opening
-   the dashboard (ids auto-assign as ``TASK-###`` unless ``--id`` is
-   given). ``forgeo task list [--status S]`` shows tasks from the
-   terminal; ``forgeo task show --task ID`` prints one task's full
+* ``forgeo task add --title T --description D [--run-at ...]`` — create a
+   new ``OPEN`` task in the configured backlog without hand-editing JSON
+   or opening the dashboard (ids auto-assign as ``TASK-###`` unless
+   ``--id`` is given; ``--run-at now`` jumps the queue, an ISO-8601
+   time schedules it). ``forgeo task list [--status S]`` shows tasks from
+   the terminal; ``forgeo task show --task ID`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
    reasons); ``forgeo task edit --task ID`` updates a task's title,
-   description, acceptance criteria, dependencies or files in place
+   description, acceptance criteria, dependencies, files or ``--run-at``
+   schedule in place
    (the terminal equivalent of editing it in the dashboard — fix a
-   ``BLOCKED`` task before reopening it); ``forgeo task reopen --task ID``
+   ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
+   next); ``forgeo task reopen --task ID``
    moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
    ``forgeo task rm --task ID`` deletes a task (typos, duplicates, or
    tasks that will never be done — no JSON editing or dashboard
@@ -255,6 +258,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="depends_on",
         help="Id of a task this task waits for (repeatable).",
     )
+    task_add_parser.add_argument(
+        "--run-at",
+        default=None,
+        metavar="DATETIME",
+        dest="run_at",
+        help="Earliest moment the task may be picked (ISO-8601, or 'now' "
+        "to run next: due tasks jump ahead of oldest-first order).",
+    )
 
     task_list_parser = task_sub.add_parser(
         "list", help="List backlog tasks and their statuses."
@@ -330,6 +341,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--clear-depends-on",
         action="store_true",
         help="Clear all dependencies.",
+    )
+    task_edit_parser.add_argument(
+        "--run-at",
+        default=None,
+        metavar="DATETIME",
+        dest="run_at",
+        help="Earliest moment the task may be picked (ISO-8601, or 'now' "
+        "to run next; due tasks jump ahead of oldest-first order).",
+    )
+    task_edit_parser.add_argument(
+        "--clear-run-at",
+        action="store_true",
+        help="Clear the scheduled run time (back to oldest-first order).",
     )
     task_edit_parser.add_argument(
         "--clear-files",
@@ -1023,6 +1047,24 @@ def cmd_run(args: argparse.Namespace) -> int:
 _TASK_ID_RE = re.compile(r"^TASK-(\d+)$")
 
 
+def _resolve_run_at(value: str | None) -> str | None:
+    """Normalize a ``--run-at`` value to an ISO-8601 string.
+
+    ``'now'`` (any case) means "due immediately", so a task jumps ahead of
+    the oldest-first order on the next cycle — the terminal shortcut for
+    "run this next" without delete/recreate. Anything else is passed
+    through for :class:`Task` validation (which rejects it clearly when
+    it is not ISO-8601).
+    """
+    if value is None:
+        return None
+    if value.strip().lower() == "now":
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat()
+    return value.strip()
+
+
 def _next_cli_task_id(tasks: list[Task]) -> str:
     """Next ``TASK-###`` id after the highest existing ``TASK-###`` id."""
     highest = 0
@@ -1066,6 +1108,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
             return 1
     else:
         task_id = _next_cli_task_id(existing)
+    run_at_raw = _resolve_run_at(getattr(args, "run_at", None))
     try:
         task = Task(
             id=task_id,
@@ -1073,6 +1116,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
             description=description,
             acceptance_criteria=list(args.acceptance or []),
             dependencies=list(args.depends_on or []),
+            run_at=run_at_raw,  # type: ignore[arg-type]
         )
     except ValidationError as exc:
         console.print(f"[red]Invalid task: {exc}[/red]")
@@ -1231,7 +1275,9 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     the dashboard — the missing step between ``task show`` (see why a task
     is ``BLOCKED``) and ``task reopen`` (retry it). ``--acceptance``,
     ``--depends-on`` and ``--files`` replace the whole list; the
-    ``--clear-*`` flags empty one instead.
+    ``--clear-*`` flags empty one instead. ``--run-at now`` (or an
+    ISO-8601 time) schedules the task — due tasks jump ahead of
+    oldest-first order; ``--clear-run-at`` returns it to oldest-first.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
@@ -1257,6 +1303,11 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     if args.files is not None and args.clear_files:
         console.print("[red]Pass either --files or --clear-files, not both.[/red]")
         return 1
+    run_at = getattr(args, "run_at", None)
+    clear_run_at = getattr(args, "clear_run_at", False)
+    if run_at is not None and clear_run_at:
+        console.print("[red]Pass either --run-at or --clear-run-at, not both.[/red]")
+        return 1
     if args.acceptance is not None:
         updates["acceptance_criteria"] = list(args.acceptance)
     elif args.clear_acceptance:
@@ -1269,10 +1320,18 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         updates["files_to_modify"] = list(args.files)
     elif args.clear_files:
         updates["files_to_modify"] = []
+    if run_at is not None:
+        resolved_run_at = _resolve_run_at(run_at)
+        if resolved_run_at is not None and not resolved_run_at.strip():
+            console.print("[red]--run-at must not be blank.[/red]")
+            return 1
+        updates["run_at"] = resolved_run_at
+    elif clear_run_at:
+        updates["run_at"] = None
     if not updates:
         console.print(
             "[red]Nothing to update: pass --title, --description, --acceptance, "
-            "--depends-on, --files, or a --clear-* flag.[/red]"
+            "--depends-on, --files, --run-at, or a --clear-* flag.[/red]"
         )
         return 1
     backlog = open_backlog(config)

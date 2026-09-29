@@ -74,6 +74,8 @@ forgeo task add --title "Add login page" --description "Build it with tests."
 forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
   --acceptance "pytest passes" --acceptance "ruff check is clean" \
   --depends-on TASK-001
+forgeo task add --title "Hotfix" --description "Ship today." --run-at now
+forgeo task add --title "After deploy" --description "Migrate." --run-at 2026-10-01T09:00:00Z
 ```
 
 | Flag | Description |
@@ -83,6 +85,7 @@ forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
 | `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
 | `--acceptance <c>` | Acceptance criterion (repeatable). |
 | `--depends-on <id>` | Id of a task this task waits for (repeatable). |
+| `--run-at <time>` | Earliest pick time: ISO-8601, or `now` to run next (due tasks jump ahead of oldest-first order). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses duplicates and blank titles/descriptions. Prints the created id plus the `forgeo run --task <id>` shortcut to try it immediately.
@@ -130,6 +133,8 @@ task is `BLOCKED`) and `task reopen` (retry it). Never starts an agent.
 forgeo task edit --task TASK-003 --description "Pick blue; see brand guide."
 forgeo task edit --task TASK-003 --title "New title" --acceptance "pytest passes"
 forgeo task edit --task TASK-003 --clear-depends-on
+forgeo task edit --task TASK-003 --run-at now   # run it next
+forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
 ```
 
 | Flag | Description |
@@ -140,9 +145,11 @@ forgeo task edit --task TASK-003 --clear-depends-on
 | `--acceptance <c>` | Acceptance criterion (repeatable; replaces the whole list). |
 | `--depends-on <id>` | Dependency task id (repeatable; replaces the whole list). |
 | `--files <path>` | File the agent may touch (repeatable; replaces the whole list). |
+| `--run-at <time>` | Earliest pick time: ISO-8601, or `now` to run next (not with `--clear-run-at`). |
 | `--clear-acceptance` | Clear all acceptance criteria (not with `--acceptance`). |
 | `--clear-depends-on` | Clear all dependencies (not with `--depends-on`). |
 | `--clear-files` | Clear the files-to-modify list (not with `--files`). |
+| `--clear-run-at` | Clear the scheduled run time (not with `--run-at`). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 At least one edit flag is required. Prints `Updated task <id>` on

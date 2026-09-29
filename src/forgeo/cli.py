@@ -38,8 +38,10 @@ Commands:
    description, acceptance criteria, dependencies or files in place
    (the terminal equivalent of editing it in the dashboard — fix a
    ``BLOCKED`` task before reopening it); ``forgeo task reopen --task ID``
-   moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``. Never starts
-   an agent.
+   moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
+   ``forgeo task rm --task ID`` deletes a task (typos, duplicates, or
+   tasks that will never be done — no JSON editing or dashboard
+   needed). Never starts an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -78,10 +80,10 @@ Commands:
    the flag. With no flag and no token file the dashboard stays open.
 
 ``start``, ``once``, ``run``, ``task add``, ``task list``, ``task show``,
-``task edit``, ``task reopen``, ``status``, ``logs``, ``validate``, ``stop`` and
-``restart`` each accept either ``--config PATH`` (a config file) or
-``--name NAME`` (an instance resolved from the registry); the two options
-are mutually exclusive.
+``task edit``, ``task reopen``, ``task rm``, ``status``, ``logs``,
+``validate``, ``stop`` and ``restart`` each accept either ``--config PATH``
+(a config file) or ``--name NAME`` (an instance resolved from the
+registry); the two options are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -339,6 +341,18 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="TASK_ID",
         help="Id of the BLOCKED or FAILED task to reopen.",
+    )
+
+    task_rm_parser = task_sub.add_parser(
+        "rm", help="Delete a task from the backlog (never starts an agent)."
+    )
+    _add_config_or_name(task_rm_parser)
+    task_rm_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the task to delete (typos, duplicates, or tasks that "
+        "will never be done).",
     )
 
     status_parser = sub.add_parser(
@@ -1287,6 +1301,51 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_task_rm(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task rm``: delete a task from the backlog.
+
+    Never starts an agent. The terminal equivalent of deleting the task
+    in the dashboard — removes typos, duplicates, or tasks that will
+    never be done without hand-editing JSON. Any status can be removed;
+    on issue backlogs the provider closes the issue when a hard delete
+    is not permitted. Warns when remaining tasks still list the removed
+    id in their dependencies.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    backlog = open_backlog(config)
+    try:
+        tasks = asyncio.run(backlog.list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    existing = next((task for task in tasks if task.id == args.task), None)
+    if existing is None:
+        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        return 1
+    try:
+        deleted = asyncio.run(backlog.delete_task(args.task))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if deleted is None:
+        console.print(f"[red]Could not remove task {args.task}.[/red]")
+        return 1
+    console.print(f"[green]Removed task {deleted.id} — {deleted.title}[/green]")
+    dependents = sorted(
+        task.id for task in tasks if deleted.id in (task.dependencies or [])
+    )
+    if dependents:
+        console.print(
+            f"[yellow]Warning: {', '.join(dependents)} still "
+            f"depend{'s' if len(dependents) == 1 else ''} on removed "
+            f"{deleted.id}; update them with `forgeo task edit`.[/yellow]"
+        )
+    return 0
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     """Handle ``forgeo task``: the task-management subcommand group."""
     action = args.task_action
@@ -1300,6 +1359,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         return cmd_task_edit(args)
     if action == "reopen":
         return cmd_task_reopen(args)
+    if action == "rm":
+        return cmd_task_rm(args)
     build_parser().print_help()
     return 0
 

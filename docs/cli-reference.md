@@ -63,7 +63,7 @@ Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
 ## `forgeo task`
 
-Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back.
+Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted).
 
 ### `forgeo task add --title <t> --description <d>`
 
@@ -162,6 +162,27 @@ forgeo task reopen --task TASK-003
 
 Refuses unknown ids, tasks that are already `OPEN`, and `REVIEW`/`COMPLETED` tasks (triaged in the review flow instead).
 
+### `forgeo task rm --task <id>`
+
+Delete a task from the backlog — typos, duplicates, or tasks that
+will never be done, without hand-editing JSON or opening the
+dashboard. Never starts an agent.
+
+```bash
+forgeo task rm --task TASK-003
+```
+
+| Flag | Description |
+| --- | --- |
+| `--task <id>` | **Required.** Task id to delete. |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+Any status can be removed. On issue backlogs the provider closes the
+issue when a hard delete is not permitted. Prints `Removed task <id>`
+on success, `Unknown task: <id>` for missing ids, plus a warning naming
+any remaining tasks that still list the removed id in their
+dependencies.
+
 ## `forgeo status`
 
 Read-only summary (never starts agent).
@@ -236,7 +257,7 @@ Graceful shutdown via SIGTERM (cycle in progress finishes first).
 
 `stop` exits `1` if not running or timeout elapses; auto-registers with `--config` if missing. `restart` stops then starts detached, re-reading `forgeo.yaml`. Config edits apply on next cycle without restart, except `repo`/`backlog`/`blocker_file`/`log_file` which need `restart`.
 
-`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
+`--config` vs `--name` applies to `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `task rm`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
 
 ## `forgeo instance`
 

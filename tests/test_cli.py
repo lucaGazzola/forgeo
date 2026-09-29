@@ -35,6 +35,7 @@ from forgeo.cli import (
     cmd_task_edit,
     cmd_task_list,
     cmd_task_reopen,
+    cmd_task_rm,
     cmd_task_show,
     cmd_validate,
     last_outcome_from_runs,
@@ -2156,3 +2157,57 @@ def test_task_show_blocked_hint_mentions_edit(git_repo, tmp_path, capsys):
 
     assert cmd_task_show(task_show_args(config_path, "TASK-003")) == 0
     assert "forgeo task edit --task TASK-003" in capsys.readouterr().out
+
+
+def task_rm_args(config_path: Path, task_id: str) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, task=task_id)
+
+
+def test_task_rm_removes_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path, [make_task(id="TASK-001"), make_task(id="TASK-002", title="Keep me")]
+    )
+
+    assert cmd_task_rm(task_rm_args(config_path, "TASK-001")) == 0
+    assert [task["id"] for task in read_backlog_tasks(tmp_path)] == ["TASK-002"]
+    out = capsys.readouterr().out
+    assert "Removed task TASK-001" in out
+
+
+def test_task_rm_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_rm(task_rm_args(config_path, "TASK-999")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_rm_warns_about_dependents(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001"),
+            make_task(id="TASK-002", dependencies=["TASK-001"]),
+        ],
+    )
+
+    assert cmd_task_rm(task_rm_args(config_path, "TASK-001")) == 0
+    out = capsys.readouterr().out
+    assert "Removed task TASK-001" in out
+    assert "TASK-002" in out
+    assert "depend" in out
+
+
+def test_task_rm_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    assert main(["task", "rm", "--task", "TASK-001", "--config", str(config_path)]) == 0
+    assert read_backlog_tasks(tmp_path) == []
+    assert "Removed task TASK-001" in capsys.readouterr().out
+
+
+def test_task_rm_missing_config(tmp_path, capsys):
+    assert cmd_task_rm(task_rm_args(tmp_path / "missing.yaml", "TASK-001")) == 1
+    assert "not found" in capsys.readouterr().out

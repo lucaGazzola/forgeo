@@ -63,6 +63,7 @@ forgeo task add --title "Implement fibonacci module" \
   --description "Write a fibonacci module with memoization and tests."
 forgeo task list
 forgeo task show --task TASK-001
+forgeo task rm --task TASK-001   # delete typos/duplicates, no file editing
 ```
 
 You can also add tasks from the dashboard once Forgeo is running — no file editing needed.
@@ -127,7 +128,7 @@ forgeo web             # aggregate dashboard on :8790
 forgeo web -d && forgeo web stop   # background dashboard
 ```
 
-`--name` works with `start`, `once`, `run`, `status`, `validate`, `stop`, `restart` (mutually exclusive with `--config`).
+`--name` works with `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `task rm`, `status`, `logs`, `validate`, `stop`, `restart` (mutually exclusive with `--config`).
 
 ## Next steps
 

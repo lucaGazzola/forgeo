@@ -2244,11 +2244,86 @@ def test_task_show_refuses_doubled_id(git_repo, tmp_path, capsys):
     assert "not both" in capsys.readouterr().out
 
 
-def test_task_show_refuses_missing_id(git_repo, tmp_path, capsys):
+def test_task_show_no_id_shows_oldest_open(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-002",
+                title="Second",
+                created_at=datetime(2026, 1, 2, tzinfo=UTC),
+            ),
+            make_task(
+                id="TASK-001",
+                title="First",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ],
+    )
     args = argparse.Namespace(config=config_path, task=None, task_id=None)
-    assert cmd_task_show(args) == 2
-    assert "Missing task id" in capsys.readouterr().out
+
+    assert cmd_task_show(args) == 0
+    out = capsys.readouterr().out
+    assert "id: TASK-001" in out
+    assert "Showing TASK-001 (no id given" in out
+
+
+def test_task_show_no_id_prefers_blocked(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", title="Open work"),
+            make_task(
+                id="TASK-002",
+                title="Blocked work",
+                status="BLOCKED",
+                blocker_reason=["Needs human: pick the color."],
+            ),
+        ],
+    )
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_show(args) == 0
+    out = capsys.readouterr().out
+    assert "id: TASK-002" in out
+    assert "Needs human: pick the color." in out
+
+
+def test_task_show_no_id_falls_back_to_waiting_open(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-001",
+                title="Waits on missing dep",
+                dependencies=["TASK-999"],
+            ),
+        ],
+    )
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_show(args) == 0
+    assert "id: TASK-001" in capsys.readouterr().out
+
+
+def test_task_show_no_id_empty_backlog(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [])
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_show(args) == 1
+    assert "No OPEN or BLOCKED tasks" in capsys.readouterr().out
+
+
+def test_task_show_no_id_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", description="Default via main.")])
+
+    assert main(["task", "show", "--config", str(config_path)]) == 0
+    assert "Default via main." in capsys.readouterr().out
 
 
 def test_task_add_positional_title(git_repo, tmp_path, capsys):

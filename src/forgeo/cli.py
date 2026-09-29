@@ -53,9 +53,11 @@ Commands:
    (``forgeo task show TASK-003``) or with ``--task`` — never both;
    short ids work everywhere (``3``, ``TASK-3`` or ``#3`` for
    ``TASK-003``):
-   ``forgeo task show [TASK_ID]`` prints one task's full
-   detail (description, acceptance, dependencies, blocker/failure
-   reasons); ``forgeo task edit [TASK_ID]`` updates a task's title,
+    ``forgeo task show [TASK_ID]`` prints one task's full
+    detail (description, acceptance, dependencies, blocker/failure
+    reasons) — with no id it shows the next task the scheduler would
+    pick (oldest ``BLOCKED`` first, else the oldest runnable ``OPEN``),
+    so the ``next -> show`` triage loop needs no copy-paste; ``forgeo task edit [TASK_ID]`` updates a task's title,
    description, acceptance criteria, dependencies, files or ``--run-at``
    schedule in place
     (the terminal equivalent of editing it in the dashboard — fix a
@@ -363,7 +365,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_next_parser)
 
     task_show_parser = task_sub.add_parser(
-        "show", help="Show one task's full detail (never starts an agent)."
+        "show",
+        help="Show one task's full detail (defaults to the next task "
+        "when no id is given; never starts an agent).",
     )
     _add_config_or_name(task_show_parser)
     task_show_parser.add_argument(
@@ -371,14 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work).",
+        help="Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work; "
+        "omit both to show the next task the scheduler would pick).",
     )
     task_show_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "omit both to show the next task the scheduler would pick).",
     )
 
     task_edit_parser = task_sub.add_parser(
@@ -1652,12 +1658,55 @@ def _task_show_hint(task: Task) -> str | None:
     return None
 
 
+def _default_show_task(tasks: list[Task]) -> Task | None:
+    """The task ``show`` displays when no id is given: the scheduler's next pick.
+
+    Oldest ``BLOCKED`` first (that is what pauses the cycle and needs eyes),
+    else the oldest runnable ``OPEN`` task (overdue ``run_at`` first, matching
+    :func:`forgeo.backlog.oldest_open_task`), else the oldest waiting ``OPEN``
+    task so its detail still explains why it waits. ``None`` when there is no
+    ``OPEN`` or ``BLOCKED`` task to show.
+    """
+    blocked = sorted(
+        (task for task in tasks if task.status is TaskStatus.BLOCKED),
+        key=lambda task: task.created_at,
+    )
+    if blocked:
+        return blocked[0]
+    picked = oldest_open_task(tasks)
+    if picked is not None:
+        return picked
+    waiting = sorted(
+        (task for task in tasks if task.status is TaskStatus.OPEN),
+        key=lambda task: task.created_at,
+    )
+    if waiting:
+        return waiting[0]
+    return None
+
+
+def _print_task_detail(task: Task) -> None:
+    """Print one task's detail plus its most useful next step, if any."""
+    console.print(
+        render_task_detail(task), markup=False, highlight=False, soft_wrap=True
+    )
+    hint = _task_show_hint(task)
+    if hint is not None:
+        console.print(f"[dim]{hint}[/dim]")
+
+
 def cmd_task_show(args: argparse.Namespace) -> int:
     """Handle ``forgeo task show``: print one task's full detail.
 
     Read-only; never starts an agent. Works with every provider via
-    ``get_task``. The id may be passed positionally or with ``--task``.
+    ``get_task``. The id may be passed positionally or with ``--task``;
+    with neither, the next task the scheduler would pick is shown
+    (oldest ``BLOCKED`` first, else the oldest runnable ``OPEN``), so
+    ``forgeo task next`` followed by ``forgeo task show`` needs no id
+    copy-paste.
     """
+    if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
+        return _cmd_task_show_next(args)
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
@@ -1677,12 +1726,38 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     if task is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
+    _print_task_detail(task)
+    return 0
+
+
+def _cmd_task_show_next(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task show`` with no id: show the scheduler's next pick.
+
+    Read-only; never starts an agent. Reports the defaulted id up front so
+    the magic is visible, then prints the same detail (plus hint) as an
+    explicit ``show``.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    task = _default_show_task(tasks)
+    if task is None:
+        console.print(
+            "[yellow]No OPEN or BLOCKED tasks to show — "
+            "add one with `forgeo task add --title ...`.[/yellow]"
+        )
+        return 1
     console.print(
-        render_task_detail(task), markup=False, highlight=False, soft_wrap=True
+        f"[dim]Showing {task.id} (no id given — the next task the scheduler "
+        f"would pick).[/dim]"
     )
-    hint = _task_show_hint(task)
-    if hint is not None:
-        console.print(f"[dim]{hint}[/dim]")
+    _print_task_detail(task)
     return 0
 
 

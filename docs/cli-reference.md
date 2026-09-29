@@ -156,18 +156,22 @@ Show one task's full detail — description, acceptance criteria,
 dependencies, blocker/failure reasons, and agent response. Read-only; never
 starts an agent. The id may be passed positionally
 (`forgeo task show TASK-003`) or with `--task` — never both. Short ids
-work everywhere (`3`, `TASK-3`, or `#3` for `TASK-003`). `task list`
+work everywhere (`3`, `TASK-3`, or `#3` for `TASK-003`). With no id it
+shows the next task the scheduler would pick (oldest `BLOCKED` first,
+else the oldest runnable `OPEN`), so `forgeo task next` followed by
+`forgeo task show` needs no id copy-paste. `task list`
 only shows `Id`/`Status`/`Title`, so this is the
 terminal equivalent of opening the task in the dashboard.
 
 ```bash
 forgeo task show TASK-003
 forgeo task show --task TASK-003
+forgeo task show   # next task the scheduler would pick
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` / `TASK_ID` | Task id, flag or positional (one required). |
+| `--task <id>` / `TASK_ID` | Task id, flag or positional (omit both to show the next task). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint

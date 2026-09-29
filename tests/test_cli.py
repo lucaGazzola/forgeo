@@ -13,8 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from forgeo.backlog import open_backlog
 from forgeo.cli import (
     DEFAULT_CONFIG,
+    _expand_task_id_shorthand,
+    _resolve_backlog_task_id,
     backlog_status_counts,
     build_parser,
     cmd_auth_login,
@@ -46,6 +49,7 @@ from forgeo.cli import (
     render_status,
     render_task_next,
 )
+from forgeo.config import load_config
 from forgeo.daemon import acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.instances import list_instances, load_registry
 from forgeo.models import RunKind, RunOutcome, RunRecord, TaskStatus
@@ -2757,3 +2761,90 @@ def test_task_show_review_hint_mentions_review_commands(git_repo, tmp_path, caps
     out = " ".join(capsys.readouterr().out.split())
     assert "forgeo task complete-review --task TASK-003" in out
     assert "forgeo task request-changes --task TASK-003" in out
+
+
+def test_expand_task_id_shorthand_forms():
+    assert _expand_task_id_shorthand("3") == "TASK-003"
+    assert _expand_task_id_shorthand("003") == "TASK-003"
+    assert _expand_task_id_shorthand("#3") == "TASK-003"
+    assert _expand_task_id_shorthand("TASK-3") == "TASK-003"
+    assert _expand_task_id_shorthand("task-3") == "TASK-003"
+    assert _expand_task_id_shorthand("TASK-003") == "TASK-003"
+    assert _expand_task_id_shorthand("PROJ-42") == "PROJ-42"
+    assert _expand_task_id_shorthand("my-task") == "my-task"
+
+
+def test_task_show_accepts_short_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", description="Shown via short id.")])
+
+    assert cmd_task_show(task_show_args(config_path, "3")) == 0
+    assert "Shown via short id." in capsys.readouterr().out
+
+
+def test_task_show_accepts_hash_and_prefix_shorthand(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", description="Shown via prefix.")])
+
+    assert cmd_task_show(task_show_args(config_path, "#3")) == 0
+    assert "Shown via prefix." in capsys.readouterr().out
+    assert cmd_task_show(task_show_args(config_path, "TASK-3")) == 0
+    assert "Shown via prefix." in capsys.readouterr().out
+
+
+def test_task_reopen_accepts_short_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="BLOCKED")])
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "3")) == 0
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+    assert "Reopened task TASK-003" in capsys.readouterr().out
+
+
+def test_task_rm_accepts_short_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003"), make_task(id="TASK-004")])
+
+    assert cmd_task_rm(task_rm_args(config_path, "3")) == 0
+    assert [task["id"] for task in read_backlog_tasks(tmp_path)] == ["TASK-004"]
+    assert "Removed task TASK-003" in capsys.readouterr().out
+
+
+def test_task_edit_accepts_short_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="BLOCKED")])
+
+    assert cmd_task_edit(task_edit_args(config_path, "3", title="New title")) == 0
+    assert read_backlog_tasks(tmp_path)[0]["title"] == "New title"
+    assert "Updated task TASK-003" in capsys.readouterr().out
+
+
+def test_task_complete_review_accepts_short_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="REVIEW")])
+
+    assert cmd_task_complete_review(task_review_args(config_path, "3")) == 0
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "COMPLETED"
+
+
+def test_exact_id_wins_over_shorthand(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="3", title="Native three"), make_task(id="TASK-003")],
+    )
+
+    assert cmd_task_show(task_show_args(config_path, "3")) == 0
+    assert "Native three" in capsys.readouterr().out
+
+
+async def test_run_accepts_short_id(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+    config = load_config(config_path)
+    backlog = open_backlog(config)
+    created = await backlog.create_task(make_task(id="TASK-003", title="Short run"))
+    assert created.id == "TASK-003"
+
+    actual_id, task = await _resolve_backlog_task_id(backlog, "3")
+    assert actual_id == "TASK-003"
+    assert task is not None and task.id == "TASK-003"

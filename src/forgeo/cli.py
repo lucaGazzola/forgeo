@@ -25,7 +25,8 @@ Commands:
 * ``forgeo run [--task TASK-001 | TASK-001] --config forgeo.yaml`` — run exactly one
    specific ``OPEN`` task by id and exit, without waiting for the backlog
    order or a scheduled run. The id may be passed positionally
-   (``forgeo run TASK-001``) or with ``--task`` — never both. For triage: rerun a ``FAILED`` task (after
+   (``forgeo run TASK-001``) or with ``--task`` — never both; short ids
+   work too (``3``, ``TASK-3`` or ``#3`` for ``TASK-003``). For triage: rerun a ``FAILED`` task (after
    reopening it) or try a risky task right now. With ``--reopen`` a
    ``BLOCKED`` task is reopened (and a ``FAILED`` task retried) first, so
    the ``show -> edit -> reopen -> run`` recovery loop collapses to one
@@ -47,9 +48,11 @@ Commands:
    the terminal; ``forgeo task next`` shows which task the scheduler would
    pick next and why the rest wait (dependencies, future ``run-at``, queue
    order — the answer to "why isn't my task running?");
-   every task-id command (``task show``/``edit``/``reopen``/``rm``/
+    every task-id command (``task show``/``edit``/``reopen``/``rm``/
    ``complete-review``/``request-changes``) takes the id positionally
-   (``forgeo task show TASK-003``) or with ``--task`` — never both:
+   (``forgeo task show TASK-003``) or with ``--task`` — never both;
+   short ids work everywhere (``3``, ``TASK-3`` or ``#3`` for
+   ``TASK-003``):
    ``forgeo task show [TASK_ID]`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
    reasons); ``forgeo task edit [TASK_ID]`` updates a task's title,
@@ -244,14 +247,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TASK_ID",
         help="Id of the OPEN task to run now (triage: rerun a FAILED task "
         "after reopening it, or try a risky task immediately). "
-        "May be passed positionally instead.",
+        "May be passed positionally instead. Short ids work: 3, TASK-3 "
+        "or #3 for TASK-003.",
     )
     run_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3 or #3 work).",
     )
     run_parser.add_argument(
         "--reopen",
@@ -367,14 +371,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the task to show in full (or pass it positionally).",
+        help="Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work).",
     )
     task_show_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_edit_parser = task_sub.add_parser(
@@ -386,14 +390,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the task to update (or pass it positionally).",
+        help="Id of the task to update (or pass it positionally; 3, TASK-3, #3 work).",
     )
     task_edit_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
     task_edit_parser.add_argument("--title", default=None, help="New task title.")
     task_edit_parser.add_argument(
@@ -471,14 +475,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally).",
+        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work).",
     )
     task_reopen_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_rm_parser = task_sub.add_parser(
@@ -491,14 +495,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TASK_ID",
         help="Id of the task to delete (typos, duplicates, or tasks that "
-        "will never be done). Or pass it positionally.",
+        "will never be done). Or pass it positionally (3, TASK-3, #3 work).",
     )
     task_rm_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_complete_review_parser = task_sub.add_parser(
@@ -513,14 +517,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TASK_ID",
         help="Id of the REVIEW task to mark COMPLETED (merge its "
-        "review branch first). Or pass it positionally.",
+        "review branch first). Or pass it positionally (3, TASK-3, #3 work).",
     )
     task_complete_review_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_request_changes_parser = task_sub.add_parser(
@@ -534,14 +538,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the REVIEW task to send back to OPEN. Or pass it positionally.",
+        help="Id of the REVIEW task to send back to OPEN. Or pass it positionally (3, TASK-3, #3 work).",
     )
     task_request_changes_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task.",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     status_parser = sub.add_parser(
@@ -1183,8 +1187,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     reopen = bool(getattr(args, "reopen", False))
 
     async def _one(forgeo: Forgeo) -> int:
+        effective_id = task_id
+        backlog = getattr(forgeo, "backlog", None)
+        if backlog is not None:
+            try:
+                resolved_id, found = await _resolve_backlog_task_id(backlog, task_id)
+            except BacklogUnavailableError as exc:
+                console.print(f"[red]Backlog unavailable: {exc}[/red]")
+                return 1
+            effective_id = resolved_id if found is not None else task_id
         try:
-            outcome = await forgeo.run_task_id(task_id, reopen=reopen)
+            outcome = await forgeo.run_task_id(effective_id, reopen=reopen)
         except TaskNotRunnableError as exc:
             console.print(f"[red]{exc}[/red]")
             return 1
@@ -1195,6 +1208,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 _TASK_ID_RE = re.compile(r"^TASK-(\d+)$")
+_TASK_SHORTHAND_PREFIX_RE = re.compile(r"^task-(\d+)$", re.IGNORECASE)
+_TASK_SHORTHAND_NUM_RE = re.compile(r"^\d+$")
 
 
 def _resolve_task_id(args: argparse.Namespace) -> tuple[str | None, str | None]:
@@ -1213,6 +1228,62 @@ def _resolve_task_id(args: argparse.Namespace) -> tuple[str | None, str | None]:
     if value is None or not str(value).strip():
         return None, "Missing task id: pass --task TASK_ID or TASK_ID positionally."
     return str(value).strip(), None
+
+
+def _expand_task_id_shorthand(raw_id: str) -> str:
+    """Expand a short task id to its ``TASK-###`` form.
+
+    Accepts ``3``, ``003``, ``#3``, ``TASK-3`` and ``task-3`` for
+    ``TASK-003`` — the triage loop (``show``/``edit``/``reopen``/``rm``/
+    ``run``) otherwise forces the full id on every keystroke. Anything
+    else (issue-tracker ids, full ``TASK-###`` ids) passes through
+    unchanged, so issue backlogs (GitHub/GitLab/Jira) are unaffected.
+    """
+    text = raw_id.strip()
+    body = text[1:] if text.startswith("#") else text
+    body = body.strip()
+    match = _TASK_SHORTHAND_PREFIX_RE.match(body)
+    if match:
+        return f"TASK-{int(match.group(1)):03d}"
+    if _TASK_SHORTHAND_NUM_RE.match(body):
+        return f"TASK-{int(body):03d}"
+    return text
+
+
+async def _resolve_backlog_task_id(backlog: Any, raw_id: str) -> tuple[str, Any | None]:
+    """Resolve ``raw_id`` to the backlog's real id, honoring shorthand.
+
+    Tries the exact id first (so native issue ids like ``42`` keep
+    working), then the :func:`_expand_task_id_shorthand` form. Returns
+    ``(actual_id, task)`` — ``task`` is ``None`` when neither form exists,
+    in which case ``actual_id`` is ``raw_id`` for error messages.
+    """
+    task = await backlog.get_task(raw_id)
+    if task is not None:
+        return task.id, task
+    expanded = _expand_task_id_shorthand(raw_id)
+    if expanded != raw_id:
+        task = await backlog.get_task(expanded)
+        if task is not None:
+            return task.id, task
+    return raw_id, None
+
+
+def _match_listed_task_id(tasks: list[Any], raw_id: str) -> Any | None:
+    """Find ``raw_id`` in an already-fetched task list, honoring shorthand.
+
+    Exact match wins (native issue ids keep working); falls back to the
+    expanded ``TASK-###`` form.
+    """
+    for task in tasks:
+        if task.id == raw_id:
+            return task
+    expanded = _expand_task_id_shorthand(raw_id)
+    if expanded != raw_id:
+        for task in tasks:
+            if task.id == expanded:
+                return task
+    return None
 
 
 def _resolve_task_title(args: argparse.Namespace) -> tuple[str | None, str | None]:
@@ -1534,7 +1605,9 @@ def cmd_task_show(args: argparse.Namespace) -> int:
         return 2
     assert task_id is not None
     try:
-        task = asyncio.run(open_backlog(config).get_task(task_id))
+        _actual_id, task = asyncio.run(
+            _resolve_backlog_task_id(open_backlog(config), task_id)
+        )
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
@@ -1633,7 +1706,9 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         return 1
     backlog = open_backlog(config)
     try:
-        updated = asyncio.run(backlog.update_task(task_id, updates))
+        resolved_id, _found = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
+        effective_id = resolved_id if _found is not None else task_id
+        updated = asyncio.run(backlog.update_task(effective_id, updates))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
@@ -1666,7 +1741,7 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     assert task_id is not None
     backlog = open_backlog(config)
     try:
-        task = asyncio.run(backlog.get_task(task_id))
+        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
@@ -1725,12 +1800,12 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
-    existing = next((task for task in tasks if task.id == task_id), None)
+    existing = _match_listed_task_id(tasks, task_id)
     if existing is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     try:
-        deleted = asyncio.run(backlog.delete_task(task_id))
+        deleted = asyncio.run(backlog.delete_task(existing.id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
@@ -1772,7 +1847,7 @@ def _cmd_task_review_transition(
     assert task_id is not None
     backlog = open_backlog(config)
     try:
-        task = asyncio.run(backlog.get_task(task_id))
+        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1

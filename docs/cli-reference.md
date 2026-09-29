@@ -50,10 +50,13 @@ Prints `Cycle finished: <outcome>`. Outcomes: `task`, `refactor`, `blocked`, `pa
 
 Run **one specific `OPEN` task** by ID (triage). The id may be passed
 positionally (`forgeo run TASK-012`) or with `--task` — never both.
+Short ids work too: `3`, `TASK-3`, or `#3` for `TASK-003` (exact ids
+always win, so issue-tracker ids are unaffected).
 
 ```bash
 forgeo run TASK-012
 forgeo run --task TASK-012
+forgeo run 12
 ```
 
 | Flag | Description |
@@ -152,7 +155,8 @@ the cycle).
 Show one task's full detail — description, acceptance criteria,
 dependencies, blocker/failure reasons, and agent response. Read-only; never
 starts an agent. The id may be passed positionally
-(`forgeo task show TASK-003`) or with `--task` — never both. `task list`
+(`forgeo task show TASK-003`) or with `--task` — never both. Short ids
+work everywhere (`3`, `TASK-3`, or `#3` for `TASK-003`). `task list`
 only shows `Id`/`Status`/`Title`, so this is the
 terminal equivalent of opening the task in the dashboard.
 
@@ -177,7 +181,7 @@ Update a task's fields in place — the terminal equivalent of editing it
 in the dashboard, and the missing step between `task show` (see why a
 task is `BLOCKED`) and `task reopen` (retry it). The id may be passed
 positionally (`forgeo task edit TASK-003 ...`) or with `--task` — never
-both. Never starts an agent.
+both (short ids like `3` work). Never starts an agent.
 
 ```bash
 forgeo task edit TASK-003 --description "Pick blue; see brand guide."
@@ -210,7 +214,7 @@ success, `Unknown task: <id>` for missing ids.
 
 ### `forgeo task reopen [TASK_ID]`
 
-Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task`. `FAILED` tasks re-queue through the retry path.
+Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task` (short ids like `3` work). `FAILED` tasks re-queue through the retry path.
 
 ```bash
 forgeo task reopen TASK-003
@@ -228,7 +232,8 @@ Refuses unknown ids, tasks that are already `OPEN`, and `REVIEW`/`COMPLETED` tas
 
 Delete a task from the backlog — typos, duplicates, or tasks that
 will never be done, without hand-editing JSON or opening the
-dashboard. The id may be passed positionally or with `--task`.
+dashboard. The id may be passed positionally or with `--task`
+(short ids like `3` work).
 Never starts an agent.
 
 ```bash
@@ -252,7 +257,8 @@ dependencies.
 Mark a `REVIEW` task `COMPLETED` — the terminal equivalent of the
 dashboard's Complete button. Merge the review branch manually first
 (PR or `git merge`), then complete it without opening the dashboard.
-The id may be passed positionally or with `--task`.
+The id may be passed positionally or with `--task`
+(short ids like `3` work).
 Never starts an agent.
 
 ```bash
@@ -271,7 +277,7 @@ Refuses unknown ids and tasks that are not `REVIEW`.
 
 Send a `REVIEW` task back to `OPEN` for rework — the terminal equivalent
 of the dashboard's Request-changes button. The id may be passed
-positionally or with `--task`. Never starts an agent.
+positionally or with `--task` (short ids like `3` work). Never starts an agent.
 
 ```bash
 forgeo task request-changes TASK-003

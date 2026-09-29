@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `forgeo task add`/`edit` accept `--description-file FILE` (`-` for stdin), and `--description -` reads stdin — multiline specs pipe straight in without shell quoting.
+
 ### Changed
 
 - Deduplicated the marker-issue backlogs: `GithubBacklog`/`GitlabBacklog` are now thin adapters over a shared `MarkerIssueBacklog` (claim/transition/review lifecycle lives once), with a shared `build_task()` constructor.

@@ -76,12 +76,17 @@ forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
   --depends-on TASK-001
 forgeo task add --title "Hotfix" --description "Ship today." --run-at now
 forgeo task add --title "After deploy" --description "Migrate." --run-at 2026-10-01T09:00:00Z
+# Multiline specs without shell quoting — file or stdin:
+forgeo task add --title "Big spec" --description-file spec.md
+cat spec.md | forgeo task add --title "Big spec" --description-file -
+echo "Do it." | forgeo task add --title "Quick" --description -
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--title <t>` | **Required.** Short task title. |
-| `--description <d>` | **Required.** What the agent should do. |
+| `--description <d>` | What the agent should do (**required** unless `--description-file` is given; use `-` to read from stdin; not with `--description-file`). |
+| `--description-file <file>` | Read the description from `FILE` (`-` for stdin; not with `--description`). |
 | `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
 | `--acceptance <c>` | Acceptance criterion (repeatable). |
 | `--depends-on <id>` | Id of a task this task waits for (repeatable). |
@@ -131,6 +136,8 @@ task is `BLOCKED`) and `task reopen` (retry it). Never starts an agent.
 
 ```bash
 forgeo task edit --task TASK-003 --description "Pick blue; see brand guide."
+forgeo task edit --task TASK-003 --description-file spec.md
+echo "New spec." | forgeo task edit --task TASK-003 --description-file -
 forgeo task edit --task TASK-003 --title "New title" --acceptance "pytest passes"
 forgeo task edit --task TASK-003 --clear-depends-on
 forgeo task edit --task TASK-003 --run-at now   # run it next
@@ -141,7 +148,8 @@ forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
 | --- | --- |
 | `--task <id>` | **Required.** Task id to update. |
 | `--title <t>` | New title (must not be blank). |
-| `--description <d>` | New description (must not be blank). |
+| `--description <d>` | New description (must not be blank; `-` reads stdin; not with `--description-file`). |
+| `--description-file <file>` | Read the new description from `FILE` (`-` for stdin; not with `--description`). |
 | `--acceptance <c>` | Acceptance criterion (repeatable; replaces the whole list). |
 | `--depends-on <id>` | Dependency task id (repeatable; replaces the whole list). |
 | `--files <path>` | File the agent may touch (repeatable; replaces the whole list). |

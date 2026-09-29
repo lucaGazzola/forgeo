@@ -28,10 +28,12 @@ Commands:
    reopening it) or try a risky task right now. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add --title T --description D [--run-at ...]`` — create a
+* ``forgeo task add --title T --description D [--description-file F]`` — create a
    new ``OPEN`` task in the configured backlog without hand-editing JSON
    or opening the dashboard (ids auto-assign as ``TASK-###`` unless
-   ``--id`` is given; ``--run-at now`` jumps the queue, an ISO-8601
+   ``--id`` is given; ``--description -`` / ``--description-file -`` reads
+   stdin and ``--description-file PATH`` reads a file, so multiline specs
+   never need shell quoting; ``--run-at now`` jumps the queue, an ISO-8601
    time schedules it). ``forgeo task list [--status S]`` shows tasks from
    the terminal; ``forgeo task show --task ID`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
@@ -39,8 +41,9 @@ Commands:
    description, acceptance criteria, dependencies, files or ``--run-at``
    schedule in place
    (the terminal equivalent of editing it in the dashboard — fix a
-   ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
-   next); ``forgeo task reopen --task ID``
+    ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
+    next; ``--description-file`` / ``-`` stdin works here too);
+    ``forgeo task reopen --task ID``
    moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
    ``forgeo task rm --task ID`` deletes a task (typos, duplicates, or
    tasks that will never be done — no JSON editing or dashboard
@@ -235,7 +238,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_add_parser)
     task_add_parser.add_argument("--title", required=True, help="Short task title.")
     task_add_parser.add_argument(
-        "--description", required=True, help="What the agent should do."
+        "--description",
+        required=False,
+        default=None,
+        help="What the agent should do (use '-' to read from stdin; "
+        "not with --description-file).",
+    )
+    task_add_parser.add_argument(
+        "--description-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        dest="description_file",
+        help="Read the description from FILE ('-' for stdin; "
+        "not with --description).",
     )
     task_add_parser.add_argument(
         "--id",
@@ -308,7 +324,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_edit_parser.add_argument("--title", default=None, help="New task title.")
     task_edit_parser.add_argument(
-        "--description", default=None, help="New task description."
+        "--description",
+        default=None,
+        help="New task description (use '-' to read from stdin; "
+        "not with --description-file).",
+    )
+    task_edit_parser.add_argument(
+        "--description-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        dest="description_file",
+        help="Read the new description from FILE ('-' for stdin; "
+        "not with --description).",
     )
     task_edit_parser.add_argument(
         "--acceptance",
@@ -1065,6 +1093,29 @@ def _resolve_run_at(value: str | None) -> str | None:
     return value.strip()
 
 
+def _read_description_input(
+    description: str | None, description_file: Path | None
+) -> tuple[str | None, str | None]:
+    """Resolve ``--description``/``--description-file`` to text.
+
+    ``'-'`` (as the description or the file) reads stdin, so multiline
+    specs pipe straight in (``echo ... | forgeo task add ...``) without
+    shell-quoting pain. Returns ``(text, error)`` — exactly one is set.
+    """
+    if description is not None and description_file is not None:
+        return None, "Pass either --description or --description-file, not both."
+    if description is not None and description.strip() == "-":
+        return sys.stdin.read(), None
+    if description_file is not None and str(description_file) == "-":
+        return sys.stdin.read(), None
+    if description_file is not None:
+        try:
+            return Path(description_file).read_text(encoding="utf-8"), None
+        except OSError as exc:
+            return None, f"Could not read --description-file {description_file}: {exc}"
+    return description, None
+
+
 def _next_cli_task_id(tasks: list[Task]) -> str:
     """Next ``TASK-###`` id after the highest existing ``TASK-###`` id."""
     highest = 0
@@ -1091,10 +1142,20 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     if not title:
         console.print("[red]--title must not be blank.[/red]")
         return 1
-    description = args.description.strip()
-    if not description:
-        console.print("[red]--description must not be blank.[/red]")
+    raw_description = getattr(args, "description", None)
+    description_text, desc_error = _read_description_input(
+        raw_description, getattr(args, "description_file", None)
+    )
+    if desc_error is not None:
+        console.print(f"[red]{desc_error}[/red]")
         return 1
+    if description_text is None or not description_text.strip():
+        console.print(
+            "[red]--description must not be blank "
+            "(or pass --description-file FILE / '-' for stdin).[/red]"
+        )
+        return 1
+    description = description_text.strip()
     backlog = open_backlog(config)
     try:
         existing = asyncio.run(backlog.list_tasks())
@@ -1289,11 +1350,19 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
             console.print("[red]--title must not be blank.[/red]")
             return 1
         updates["title"] = args.title.strip()
-    if args.description is not None:
-        if not args.description.strip():
+    raw_description = getattr(args, "description", None)
+    raw_description_file = getattr(args, "description_file", None)
+    if raw_description is not None or raw_description_file is not None:
+        description_text, desc_error = _read_description_input(
+            raw_description, raw_description_file
+        )
+        if desc_error is not None:
+            console.print(f"[red]{desc_error}[/red]")
+            return 1
+        if description_text is None or not description_text.strip():
             console.print("[red]--description must not be blank.[/red]")
             return 1
-        updates["description"] = args.description.strip()
+        updates["description"] = description_text.strip()
     if args.acceptance is not None and args.clear_acceptance:
         console.print("[red]Pass either --acceptance or --clear-acceptance, not both.[/red]")
         return 1
@@ -1330,7 +1399,8 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         updates["run_at"] = None
     if not updates:
         console.print(
-            "[red]Nothing to update: pass --title, --description, --acceptance, "
+            "[red]Nothing to update: pass --title, --description, "
+            "--description-file, --acceptance, "
             "--depends-on, --files, --run-at, or a --clear-* flag.[/red]"
         )
         return 1

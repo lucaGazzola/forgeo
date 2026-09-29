@@ -200,10 +200,42 @@ def test_parser_help_lists_once(capsys):
         assert cmd in out
 
 
-def test_parser_requires_task_for_run():
-    with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["run", "--config", "forgeo.yaml"])
-    assert excinfo.value.code == 2
+def test_parser_allows_missing_task_for_run():
+    args = build_parser().parse_args(["run", "--config", "forgeo.yaml"])
+    assert args.action == "run"
+    assert args.task is None
+    assert args.task_id is None
+
+
+def test_parser_parses_positional_task_for_run():
+    args = build_parser().parse_args(["run", "--config", "forgeo.yaml", "SELF-012"])
+    assert args.action == "run"
+    assert args.task_id == "SELF-012"
+
+
+def test_run_refuses_missing_task_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(config=config_path, task=None, task_id=None, reopen=False)
+    assert cmd_run(args) == 2
+    assert "Missing task id" in capsys.readouterr().out
+
+
+def test_run_refuses_doubled_task_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(
+        config=config_path, task="TASK-001", task_id="TASK-002", reopen=False
+    )
+    assert cmd_run(args) == 2
+    assert "not both" in capsys.readouterr().out
+
+
+def test_run_accepts_positional_task_id(git_repo, tmp_path, monkeypatch, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    fake = FakeForgeo()
+    monkeypatch.setattr("forgeo.cli._make_forgeo", lambda config: fake)
+    args = argparse.Namespace(config=config_path, task=None, task_id="SELF-012", reopen=False)
+    assert cmd_run(args) == 0
+    assert fake.run_task_ids == ["SELF-012"]
 
 
 def test_parser_parses_task_for_run():
@@ -2191,6 +2223,70 @@ def test_task_show_main_entrypoint(git_repo, tmp_path, capsys):
 
     assert main(["task", "show", "--task", "TASK-001", "--config", str(config_path)]) == 0
     assert "Shown via main." in capsys.readouterr().out
+
+
+def test_task_show_positional_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", description="Shown positionally.")])
+
+    assert main(["task", "show", "TASK-001", "--config", str(config_path)]) == 0
+    assert "Shown positionally." in capsys.readouterr().out
+
+
+def test_task_show_refuses_doubled_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(config=config_path, task="TASK-001", task_id="TASK-001")
+    assert cmd_task_show(args) == 2
+    assert "not both" in capsys.readouterr().out
+
+
+def test_task_show_refuses_missing_id(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+    assert cmd_task_show(args) == 2
+    assert "Missing task id" in capsys.readouterr().out
+
+
+def test_task_add_positional_title(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(
+        config=config_path,
+        title=None,
+        title_pos="Positional title",
+        description=None,
+        description_file=None,
+        id=None,
+        acceptance=None,
+        depends_on=None,
+        run_at=None,
+    )
+    assert cmd_task_add(args) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert tasks[0]["title"] == "Positional title"
+    assert tasks[0]["description"] == "Positional title"
+
+
+def test_task_add_refuses_doubled_title(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    args = argparse.Namespace(
+        config=config_path,
+        title="Flag title",
+        title_pos="Positional title",
+        description=None,
+        description_file=None,
+        id=None,
+        acceptance=None,
+        depends_on=None,
+        run_at=None,
+    )
+    assert cmd_task_add(args) == 2
+    assert "not both" in capsys.readouterr().out
+
+
+def test_task_add_parser_positional_title():
+    args = build_parser().parse_args(["task", "add", "Hello"])
+    assert args.title is None
+    assert args.title_pos == "Hello"
 
 
 def task_edit_args(config_path: Path, task_id: str, **overrides) -> argparse.Namespace:

@@ -22,44 +22,49 @@ Commands:
 * ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
    Shares the per-forgeo lock with the daemon, so it never overlaps a
    running ``start``.
-* ``forgeo run --task TASK-001 --config forgeo.yaml`` — run exactly one
+* ``forgeo run [--task TASK-001 | TASK-001] --config forgeo.yaml`` — run exactly one
    specific ``OPEN`` task by id and exit, without waiting for the backlog
-   order or a scheduled run. For triage: rerun a ``FAILED`` task (after
+   order or a scheduled run. The id may be passed positionally
+   (``forgeo run TASK-001``) or with ``--task`` — never both. For triage: rerun a ``FAILED`` task (after
    reopening it) or try a risky task right now. With ``--reopen`` a
    ``BLOCKED`` task is reopened (and a ``FAILED`` task retried) first, so
    the ``show -> edit -> reopen -> run`` recovery loop collapses to one
    command. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add --title T [--description D] [--description-file F]`` — create a
+* ``forgeo task add [--title T | "T"] [--description D] [--description-file F]`` — create a
    new ``OPEN`` task in the configured backlog without hand-editing JSON
-   or opening the dashboard (ids auto-assign as ``TASK-###`` unless
+   or opening the dashboard (the title may be passed positionally as
+   ``forgeo task add "Fix typo"`` or with ``--title`` — never both; ids auto-assign as ``TASK-###`` unless
    ``--id`` is given; ``--description`` defaults to the title so
    one-liners need only ``--title``; ``--description -`` /
    ``--description-file -`` reads
    stdin and ``--description-file PATH`` reads a file, so multiline specs
    never need shell quoting; ``--run-at now`` jumps the queue, an ISO-8601
-   time schedules it). ``forgeo task list [--status S]`` shows tasks from
+   time schedules it).    ``forgeo task list [--status S]`` shows tasks from
    the terminal; ``forgeo task next`` shows which task the scheduler would
    pick next and why the rest wait (dependencies, future ``run-at``, queue
    order — the answer to "why isn't my task running?");
-   ``forgeo task show --task ID`` prints one task's full
+   every task-id command (``task show``/``edit``/``reopen``/``rm``/
+   ``complete-review``/``request-changes``) takes the id positionally
+   (``forgeo task show TASK-003``) or with ``--task`` — never both:
+   ``forgeo task show [TASK_ID]`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
-   reasons); ``forgeo task edit --task ID`` updates a task's title,
+   reasons); ``forgeo task edit [TASK_ID]`` updates a task's title,
    description, acceptance criteria, dependencies, files or ``--run-at``
    schedule in place
-   (the terminal equivalent of editing it in the dashboard — fix a
-    ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
-    next; ``--description-file`` / ``-`` stdin works here too);
-    ``forgeo task reopen --task ID``
-   moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
-   ``forgeo task rm --task ID`` deletes a task (typos, duplicates, or
-   tasks that will never be done — no JSON editing or dashboard
-   needed); ``forgeo task complete-review --task ID`` marks a ``REVIEW``
-   task ``COMPLETED`` after merging its branch, and
-   ``forgeo task request-changes --task ID`` sends a ``REVIEW`` task back
-   to ``OPEN`` for rework (the terminal equivalent of the dashboard's
-   Complete / Request-changes buttons). Never starts an agent.
+    (the terminal equivalent of editing it in the dashboard — fix a
+     ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
+     next; ``--description-file`` / ``-`` stdin works here too);
+     ``forgeo task reopen [TASK_ID]``
+    moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
+    ``forgeo task rm [TASK_ID]`` deletes a task (typos, duplicates, or
+    tasks that will never be done — no JSON editing or dashboard
+    needed); ``forgeo task complete-review [TASK_ID]`` marks a ``REVIEW``
+    task ``COMPLETED`` after merging its branch, and
+    ``forgeo task request-changes [TASK_ID]`` sends a ``REVIEW`` task back
+    to ``OPEN`` for rework (the terminal equivalent of the dashboard's
+    Complete / Request-changes buttons). Never starts an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -227,10 +232,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(run_parser)
     run_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
         help="Id of the OPEN task to run now (triage: rerun a FAILED task "
-        "after reopening it, or try a risky task immediately).",
+        "after reopening it, or try a risky task immediately). "
+        "May be passed positionally instead.",
+    )
+    run_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
     run_parser.add_argument(
         "--reopen",
@@ -250,7 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
         "add", help="Create a new OPEN task in the backlog."
     )
     _add_config_or_name(task_add_parser)
-    task_add_parser.add_argument("--title", required=True, help="Short task title.")
+    task_add_parser.add_argument(
+        "--title", required=False, default=None, help="Short task title."
+    )
+    task_add_parser.add_argument(
+        "title_pos",
+        nargs="?",
+        default=None,
+        metavar="TITLE",
+        help="Task title, positional shorthand for --title.",
+    )
     task_add_parser.add_argument(
         "--description",
         required=False,
@@ -327,9 +350,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_show_parser)
     task_show_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
-        help="Id of the task to show in full.",
+        help="Id of the task to show in full (or pass it positionally).",
+    )
+    task_show_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
 
     task_edit_parser = task_sub.add_parser(
@@ -338,9 +369,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_edit_parser)
     task_edit_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
-        help="Id of the task to update.",
+        help="Id of the task to update (or pass it positionally).",
+    )
+    task_edit_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
     task_edit_parser.add_argument("--title", default=None, help="New task title.")
     task_edit_parser.add_argument(
@@ -415,9 +454,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_reopen_parser)
     task_reopen_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
-        help="Id of the BLOCKED or FAILED task to reopen.",
+        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally).",
+    )
+    task_reopen_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
 
     task_rm_parser = task_sub.add_parser(
@@ -426,10 +473,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_rm_parser)
     task_rm_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
         help="Id of the task to delete (typos, duplicates, or tasks that "
-        "will never be done).",
+        "will never be done). Or pass it positionally.",
+    )
+    task_rm_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
 
     task_complete_review_parser = task_sub.add_parser(
@@ -440,10 +495,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_complete_review_parser)
     task_complete_review_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
         help="Id of the REVIEW task to mark COMPLETED (merge its "
-        "review branch first).",
+        "review branch first). Or pass it positionally.",
+    )
+    task_complete_review_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
 
     task_request_changes_parser = task_sub.add_parser(
@@ -454,9 +517,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_or_name(task_request_changes_parser)
     task_request_changes_parser.add_argument(
         "--task",
-        required=True,
+        required=False,
+        default=None,
         metavar="TASK_ID",
-        help="Id of the REVIEW task to send back to OPEN.",
+        help="Id of the REVIEW task to send back to OPEN. Or pass it positionally.",
+    )
+    task_request_changes_parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help="Task id, positional shorthand for --task.",
     )
 
     status_parser = sub.add_parser(
@@ -1079,9 +1150,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     run`` collapses to ``edit -> run --reopen``. It
     reuses the same per-forgeo lock as the daemon and ``once``, so it never
     overlaps them; it refuses (exit 1) when the task does not exist or is
-    not ``OPEN``.
+    not ``OPEN``. The id may be passed positionally or with ``--task``;
+    a missing or doubled id is a usage error (exit 2).
     """
-    task_id = args.task
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    if task_id is None:  # Unreachable: resolver sets exactly one of the pair.
+        console.print("[red]Missing task id: pass --task TASK_ID or TASK_ID positionally.[/red]")
+        return 2
     reopen = bool(getattr(args, "reopen", False))
 
     async def _one(forgeo: Forgeo) -> int:
@@ -1097,6 +1175,41 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 _TASK_ID_RE = re.compile(r"^TASK-(\d+)$")
+
+
+def _resolve_task_id(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Resolve a task id from ``--task`` or its positional shorthand.
+
+    Returns ``(task_id, error)`` — exactly one is set. ``--task`` and the
+    positional form are mutually exclusive; one of them is required.
+    ``getattr`` defaults keep hand-built ``argparse.Namespace`` objects in
+    tests (which predate the positional) working.
+    """
+    flag = getattr(args, "task", None)
+    pos = getattr(args, "task_id", None)
+    if flag is not None and pos is not None:
+        return None, "Pass either --task TASK_ID or TASK_ID positionally, not both."
+    value = flag if flag is not None else pos
+    if value is None or not str(value).strip():
+        return None, "Missing task id: pass --task TASK_ID or TASK_ID positionally."
+    return str(value).strip(), None
+
+
+def _resolve_task_title(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    """Resolve a task title from ``--title`` or its positional shorthand.
+
+    Returns ``(title, error)`` — exactly one is set.
+    """
+    flag = getattr(args, "title", None)
+    pos = getattr(args, "title_pos", None)
+    if flag is not None and pos is not None:
+        return None, "Pass either --title TITLE or TITLE positionally, not both."
+    value = flag if flag is not None else pos
+    if value is None:
+        return None, "Missing title: pass --title TITLE or TITLE positionally."
+    if not str(value).strip():
+        return None, "--title must not be blank (pass --title TITLE or TITLE positionally)."
+    return str(value).strip(), None
 
 
 def _resolve_run_at(value: str | None) -> str | None:
@@ -1155,8 +1268,9 @@ def cmd_task_add(args: argparse.Namespace) -> int:
 
     Never starts an agent. The id auto-assigns as the next ``TASK-###``
     unless ``--id`` names one explicitly; duplicates are refused.
+    The title may be passed positionally or with ``--title``;
     ``--description`` defaults to the title, so quick one-liners need only
-    ``--title``; pass ``--description``/``--description-file`` for a real spec.
+    the title; pass ``--description``/``--description-file`` for a real spec.
     On issue backlogs (GitHub/GitLab/Jira) the provider assigns the real
     id and the created task's id is reported.
     """
@@ -1164,10 +1278,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
-    title = args.title.strip()
-    if not title:
-        console.print("[red]--title must not be blank.[/red]")
-        return 1
+    title_text, title_error = _resolve_task_title(args)
+    if title_error is not None:
+        console.print(f"[red]{title_error}[/red]")
+        # A blank --title is a value error (exit 1, as before); a missing
+        # or doubled title is a usage error (exit 2, like argparse).
+        return 1 if "must not be blank" in title_error else 2
+    assert title_text is not None
+    title = title_text
     raw_description = getattr(args, "description", None)
     raw_description_file = getattr(args, "description_file", None)
     if raw_description is None and raw_description_file is None:
@@ -1339,19 +1457,24 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     """Handle ``forgeo task show``: print one task's full detail.
 
     Read-only; never starts an agent. Works with every provider via
-    ``get_task``.
+    ``get_task``. The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
     try:
-        task = asyncio.run(open_backlog(config).get_task(args.task))
+        task = asyncio.run(open_backlog(config).get_task(task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
     if task is None:
-        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     console.print(
         render_task_detail(task), markup=False, highlight=False, soft_wrap=True
@@ -1372,11 +1495,17 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     ``--clear-*`` flags empty one instead. ``--run-at now`` (or an
     ISO-8601 time) schedules the task — due tasks jump ahead of
     oldest-first order; ``--clear-run-at`` returns it to oldest-first.
+    The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
     updates: dict[str, Any] = {}
     if args.title is not None:
         if not args.title.strip():
@@ -1439,7 +1568,7 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         return 1
     backlog = open_backlog(config)
     try:
-        updated = asyncio.run(backlog.update_task(args.task, updates))
+        updated = asyncio.run(backlog.update_task(task_id, updates))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
@@ -1447,7 +1576,7 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         console.print(f"[red]Invalid update: {exc}[/red]")
         return 1
     if updated is None:
-        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     console.print(f"[green]Updated task {updated.id}.[/green]")
     return 0
@@ -1459,19 +1588,25 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     Never starts an agent. ``BLOCKED`` tasks reopen directly; ``FAILED``
     tasks re-queue through the retry path. Tasks that are ``OPEN``,
     ``REVIEW`` or ``COMPLETED`` are refused with an explanation.
+    The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
     backlog = open_backlog(config)
     try:
-        task = asyncio.run(backlog.get_task(args.task))
+        task = asyncio.run(backlog.get_task(task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
     if task is None:
-        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     previous = task.status
     if previous is TaskStatus.OPEN:
@@ -1508,29 +1643,34 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     never be done without hand-editing JSON. Any status can be removed;
     on issue backlogs the provider closes the issue when a hard delete
     is not permitted. Warns when remaining tasks still list the removed
-    id in their dependencies.
+    id in their dependencies. The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
     backlog = open_backlog(config)
     try:
         tasks = asyncio.run(backlog.list_tasks())
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
-    existing = next((task for task in tasks if task.id == args.task), None)
+    existing = next((task for task in tasks if task.id == task_id), None)
     if existing is None:
-        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     try:
-        deleted = asyncio.run(backlog.delete_task(args.task))
+        deleted = asyncio.run(backlog.delete_task(task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
     if deleted is None:
-        console.print(f"[red]Could not remove task {args.task}.[/red]")
+        console.print(f"[red]Could not remove task {task_id}.[/red]")
         return 1
     console.print(f"[green]Removed task {deleted.id} — {deleted.title}[/green]")
     dependents = sorted(
@@ -1554,20 +1694,25 @@ def _cmd_task_review_transition(
     explanation (mirroring the dashboard's ``400 only REVIEW ...`` guard)
     instead of silently transitioning. ``action`` names the command for
     messages, ``method`` the backlog method to call, ``past`` the success
-    verb phrase.
+    verb phrase. The id may be passed positionally or with ``--task``.
     """
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
     backlog = open_backlog(config)
     try:
-        task = asyncio.run(backlog.get_task(args.task))
+        task = asyncio.run(backlog.get_task(task_id))
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return 1
     if task is None:
-        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     if task.status is not TaskStatus.REVIEW:
         console.print(

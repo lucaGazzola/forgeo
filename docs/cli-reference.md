@@ -48,15 +48,17 @@ Prints `Cycle finished: <outcome>`. Outcomes: `task`, `refactor`, `blocked`, `pa
 
 ## `forgeo run`
 
-Run **one specific `OPEN` task** by ID (triage).
+Run **one specific `OPEN` task** by ID (triage). The id may be passed
+positionally (`forgeo run TASK-012`) or with `--task` — never both.
 
 ```bash
+forgeo run TASK-012
 forgeo run --task TASK-012
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** `OPEN` task ID. |
+| `--task <id>` / `TASK_ID` | Task ID, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
@@ -65,13 +67,16 @@ Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
 Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task next` explains the scheduler's next pick (dependencies, `run-at`, queue order). `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted). `task complete-review` / `task request-changes` triage `REVIEW` tasks from the terminal (merge the branch first, then complete it).
 
-### `forgeo task add --title <t> [--description <d>]`
+### `forgeo task add [--title <t> | <t>] [--description <d>]`
 
-Create a new `OPEN` task. `--description` defaults to the title, so
-one-liners need only `--title`; pass `--description`/`--description-file`
+Create a new `OPEN` task. The title may be passed positionally
+(`forgeo task add "Fix typo"`) or with `--title` — never both.
+`--description` defaults to the title, so
+one-liners need only a title; pass `--description`/`--description-file`
 for anything needing a real spec.
 
 ```bash
+forgeo task add "Fix typo in README"
 forgeo task add --title "Fix typo in README"
 forgeo task add --title "Add login page" --description "Build it with tests."
 forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
@@ -87,7 +92,7 @@ echo "Do it." | forgeo task add --title "Quick" --description -
 
 | Flag | Description |
 | --- | --- |
-| `--title <t>` | **Required.** Short task title. |
+| `--title <t>` / `TITLE` | Task title, flag or positional (one required). |
 | `--description <d>` | What the agent should do (default: the title; use `-` to read from stdin; not with `--description-file`). |
 | `--description-file <file>` | Read the description from `FILE` (`-` for stdin; not with `--description`). |
 | `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
@@ -137,20 +142,23 @@ it says so (`next: (none)` with per-task `waiting:` reasons and the
 earliest scheduled time, or `next: (paused)` while `BLOCKED` tasks hold
 the cycle).
 
-### `forgeo task show --task <id>`
+### `forgeo task show [TASK_ID]`
 
 Show one task's full detail — description, acceptance criteria,
 dependencies, blocker/failure reasons, and agent response. Read-only; never
-starts an agent. `task list` only shows `Id`/`Status`/`Title`, so this is the
+starts an agent. The id may be passed positionally
+(`forgeo task show TASK-003`) or with `--task` — never both. `task list`
+only shows `Id`/`Status`/`Title`, so this is the
 terminal equivalent of opening the task in the dashboard.
 
 ```bash
+forgeo task show TASK-003
 forgeo task show --task TASK-003
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** Task id to show. |
+| `--task <id>` / `TASK_ID` | Task id, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint
@@ -158,14 +166,16 @@ Prints `Unknown task: <id>` for missing ids, plus a directly runnable hint
 `forgeo task reopen --task <id>` for `BLOCKED`/`FAILED` tasks,
 `forgeo task complete-review` / `forgeo task request-changes` for `REVIEW` tasks).
 
-### `forgeo task edit --task <id> [--title <t>] [--description <d>] ...`
+### `forgeo task edit [TASK_ID] [--title <t>] [--description <d>] ...`
 
 Update a task's fields in place — the terminal equivalent of editing it
 in the dashboard, and the missing step between `task show` (see why a
-task is `BLOCKED`) and `task reopen` (retry it). Never starts an agent.
+task is `BLOCKED`) and `task reopen` (retry it). The id may be passed
+positionally (`forgeo task edit TASK-003 ...`) or with `--task` — never
+both. Never starts an agent.
 
 ```bash
-forgeo task edit --task TASK-003 --description "Pick blue; see brand guide."
+forgeo task edit TASK-003 --description "Pick blue; see brand guide."
 forgeo task edit --task TASK-003 --description-file spec.md
 echo "New spec." | forgeo task edit --task TASK-003 --description-file -
 forgeo task edit --task TASK-003 --title "New title" --acceptance "pytest passes"
@@ -176,7 +186,7 @@ forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** Task id to update. |
+| `--task <id>` / `TASK_ID` | Task id, flag or positional (one required). |
 | `--title <t>` | New title (must not be blank). |
 | `--description <d>` | New description (must not be blank; `-` reads stdin; not with `--description-file`). |
 | `--description-file <file>` | Read the new description from `FILE` (`-` for stdin; not with `--description`). |
@@ -193,34 +203,37 @@ forgeo task edit --task TASK-003 --clear-run-at # back to oldest-first order
 At least one edit flag is required. Prints `Updated task <id>` on
 success, `Unknown task: <id>` for missing ids.
 
-### `forgeo task reopen --task <id>`
+### `forgeo task reopen [TASK_ID]`
 
-Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). `FAILED` tasks re-queue through the retry path.
+Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task`. `FAILED` tasks re-queue through the retry path.
 
 ```bash
+forgeo task reopen TASK-003
 forgeo task reopen --task TASK-003
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** `BLOCKED` or `FAILED` task id. |
+| `--task <id>` / `TASK_ID` | `BLOCKED` or `FAILED` task id, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses unknown ids, tasks that are already `OPEN`, and `REVIEW`/`COMPLETED` tasks (triaged in the review flow instead).
 
-### `forgeo task rm --task <id>`
+### `forgeo task rm [TASK_ID]`
 
 Delete a task from the backlog — typos, duplicates, or tasks that
 will never be done, without hand-editing JSON or opening the
-dashboard. Never starts an agent.
+dashboard. The id may be passed positionally or with `--task`.
+Never starts an agent.
 
 ```bash
+forgeo task rm TASK-003
 forgeo task rm --task TASK-003
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** Task id to delete. |
+| `--task <id>` / `TASK_ID` | Task id to delete, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Any status can be removed. On issue backlogs the provider closes the
@@ -229,36 +242,40 @@ on success, `Unknown task: <id>` for missing ids, plus a warning naming
 any remaining tasks that still list the removed id in their
 dependencies.
 
-### `forgeo task complete-review --task <id>`
+### `forgeo task complete-review [TASK_ID]`
 
 Mark a `REVIEW` task `COMPLETED` — the terminal equivalent of the
 dashboard's Complete button. Merge the review branch manually first
 (PR or `git merge`), then complete it without opening the dashboard.
+The id may be passed positionally or with `--task`.
 Never starts an agent.
 
 ```bash
+forgeo task complete-review TASK-003
 forgeo task complete-review --task TASK-003
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** `REVIEW` task id. |
+| `--task <id>` / `TASK_ID` | `REVIEW` task id, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses unknown ids and tasks that are not `REVIEW`.
 
-### `forgeo task request-changes --task <id>`
+### `forgeo task request-changes [TASK_ID]`
 
 Send a `REVIEW` task back to `OPEN` for rework — the terminal equivalent
-of the dashboard's Request-changes button. Never starts an agent.
+of the dashboard's Request-changes button. The id may be passed
+positionally or with `--task`. Never starts an agent.
 
 ```bash
+forgeo task request-changes TASK-003
 forgeo task request-changes --task TASK-003
 ```
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` | **Required.** `REVIEW` task id. |
+| `--task <id>` / `TASK_ID` | `REVIEW` task id, flag or positional (one required). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 Refuses unknown ids and tasks that are not `REVIEW`.

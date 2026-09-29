@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `forgeo task add`/`edit` accept `--description-file FILE` (`-` for stdin), and `--description -` reads stdin — multiline specs pipe straight in without shell quoting.
+- `forgeo run` and every `forgeo task` id command (`show`/`edit`/`reopen`/`rm`/`complete-review`/`request-changes`) accept the task id positionally (`forgeo task show TASK-003`), and `forgeo task add` accepts the title positionally (`forgeo task add "Fix typo"`) — `--task`/`--title` still work, passing both is refused.
 
 ### Changed
 

@@ -1745,7 +1745,7 @@ def list_instances_names() -> list[str]:
 def task_add_args(
     config_path: Path,
     title: str = "Build the thing",
-    description: str = "Do the work.",
+    description: str | None = "Do the work.",
     task_id: str | None = None,
     acceptance: list[str] | None = None,
     depends_on: list[str] | None = None,
@@ -1837,6 +1837,22 @@ def test_task_add_refuses_blank_title(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
 
     assert cmd_task_add(task_add_args(config_path, title="   ")) == 1
+    assert "must not be blank" in capsys.readouterr().out
+
+
+def test_task_add_defaults_description_to_title(git_repo, tmp_path):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_add(task_add_args(config_path, description=None)) == 0
+    tasks = read_backlog_tasks(tmp_path)
+    assert tasks[0]["title"] == "Build the thing"
+    assert tasks[0]["description"] == "Build the thing"
+
+
+def test_task_add_refuses_explicit_blank_description(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_add(task_add_args(config_path, description="   ")) == 1
     assert "must not be blank" in capsys.readouterr().out
 
 

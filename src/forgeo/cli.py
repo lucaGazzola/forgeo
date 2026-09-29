@@ -31,10 +31,12 @@ Commands:
    command. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add --title T --description D [--description-file F]`` — create a
+* ``forgeo task add --title T [--description D] [--description-file F]`` — create a
    new ``OPEN`` task in the configured backlog without hand-editing JSON
    or opening the dashboard (ids auto-assign as ``TASK-###`` unless
-   ``--id`` is given; ``--description -`` / ``--description-file -`` reads
+   ``--id`` is given; ``--description`` defaults to the title so
+   one-liners need only ``--title``; ``--description -`` /
+   ``--description-file -`` reads
    stdin and ``--description-file PATH`` reads a file, so multiline specs
    never need shell quoting; ``--run-at now`` jumps the queue, an ISO-8601
    time schedules it). ``forgeo task list [--status S]`` shows tasks from
@@ -253,7 +255,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--description",
         required=False,
         default=None,
-        help="What the agent should do (use '-' to read from stdin; "
+        help="What the agent should do (default: the title, so one-liners "
+        "need only --title; use '-' to read from stdin; "
         "not with --description-file).",
     )
     task_add_parser.add_argument(
@@ -1152,6 +1155,8 @@ def cmd_task_add(args: argparse.Namespace) -> int:
 
     Never starts an agent. The id auto-assigns as the next ``TASK-###``
     unless ``--id`` names one explicitly; duplicates are refused.
+    ``--description`` defaults to the title, so quick one-liners need only
+    ``--title``; pass ``--description``/``--description-file`` for a real spec.
     On issue backlogs (GitHub/GitLab/Jira) the provider assigns the real
     id and the created task's id is reported.
     """
@@ -1164,19 +1169,26 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         console.print("[red]--title must not be blank.[/red]")
         return 1
     raw_description = getattr(args, "description", None)
-    description_text, desc_error = _read_description_input(
-        raw_description, getattr(args, "description_file", None)
-    )
-    if desc_error is not None:
-        console.print(f"[red]{desc_error}[/red]")
-        return 1
-    if description_text is None or not description_text.strip():
-        console.print(
-            "[red]--description must not be blank "
-            "(or pass --description-file FILE / '-' for stdin).[/red]"
+    raw_description_file = getattr(args, "description_file", None)
+    if raw_description is None and raw_description_file is None:
+        # Quick capture: `forgeo task add --title "..."` files the title
+        # as the description, so one-liners need only one flag. Pass
+        # --description / --description-file for anything needing a real spec.
+        description = title
+    else:
+        description_text, desc_error = _read_description_input(
+            raw_description, raw_description_file
         )
-        return 1
-    description = description_text.strip()
+        if desc_error is not None:
+            console.print(f"[red]{desc_error}[/red]")
+            return 1
+        if description_text is None or not description_text.strip():
+            console.print(
+                "[red]--description must not be blank "
+                "(or pass --description-file FILE / '-' for stdin).[/red]"
+            )
+            return 1
+        description = description_text.strip()
     backlog = open_backlog(config)
     try:
         existing = asyncio.run(backlog.list_tasks())

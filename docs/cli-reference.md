@@ -65,11 +65,14 @@ Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
 Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task next` explains the scheduler's next pick (dependencies, `run-at`, queue order). `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted). `task complete-review` / `task request-changes` triage `REVIEW` tasks from the terminal (merge the branch first, then complete it).
 
-### `forgeo task add --title <t> --description <d>`
+### `forgeo task add --title <t> [--description <d>]`
 
-Create a new `OPEN` task.
+Create a new `OPEN` task. `--description` defaults to the title, so
+one-liners need only `--title`; pass `--description`/`--description-file`
+for anything needing a real spec.
 
 ```bash
+forgeo task add --title "Fix typo in README"
 forgeo task add --title "Add login page" --description "Build it with tests."
 forgeo task add --title "Ship it" --description "Do it." --id TASK-042 \
   --acceptance "pytest passes" --acceptance "ruff check is clean" \
@@ -85,7 +88,7 @@ echo "Do it." | forgeo task add --title "Quick" --description -
 | Flag | Description |
 | --- | --- |
 | `--title <t>` | **Required.** Short task title. |
-| `--description <d>` | What the agent should do (**required** unless `--description-file` is given; use `-` to read from stdin; not with `--description-file`). |
+| `--description <d>` | What the agent should do (default: the title; use `-` to read from stdin; not with `--description-file`). |
 | `--description-file <file>` | Read the description from `FILE` (`-` for stdin; not with `--description`). |
 | `--id <id>` | Task id (default: next `TASK-###`; must be unique). |
 | `--acceptance <c>` | Acceptance criterion (repeatable). |
@@ -93,7 +96,7 @@ echo "Do it." | forgeo task add --title "Quick" --description -
 | `--run-at <time>` | Earliest pick time: ISO-8601, or `now` to run next (due tasks jump ahead of oldest-first order). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
-Refuses duplicates and blank titles/descriptions. Prints the created id plus the `forgeo run --task <id>` shortcut to try it immediately.
+Refuses duplicates and blank titles/descriptions (an explicitly passed blank `--description` is still refused; omitting it files the title as the description). Prints the created id plus the `forgeo run --task <id>` shortcut to try it immediately.
 
 ### `forgeo task list [--status <s>] [--limit <n>]`
 

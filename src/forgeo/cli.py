@@ -35,7 +35,10 @@ Commands:
    stdin and ``--description-file PATH`` reads a file, so multiline specs
    never need shell quoting; ``--run-at now`` jumps the queue, an ISO-8601
    time schedules it). ``forgeo task list [--status S]`` shows tasks from
-   the terminal; ``forgeo task show --task ID`` prints one task's full
+   the terminal; ``forgeo task next`` shows which task the scheduler would
+   pick next and why the rest wait (dependencies, future ``run-at``, queue
+   order — the answer to "why isn't my task running?");
+   ``forgeo task show --task ID`` prints one task's full
    detail (description, acceptance, dependencies, blocker/failure
    reasons); ``forgeo task edit --task ID`` updates a task's title,
    description, acceptance criteria, dependencies, files or ``--run-at``
@@ -89,9 +92,9 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``run``, ``task add``, ``task list``, ``task show``,
-``task edit``, ``task reopen``, ``task rm``, ``task complete-review``,
-``task request-changes``, ``status``, ``logs``,
+``start``, ``once``, ``run``, ``task add``, ``task list``, ``task next``,
+``task show``, ``task edit``, ``task reopen``, ``task rm``,
+``task complete-review``, ``task request-changes``, ``status``, ``logs``,
 ``validate``, ``stop`` and ``restart`` each accept either ``--config PATH``
 (a config file) or ``--name NAME`` (an instance resolved from the
 registry); the two options are mutually exclusive.
@@ -300,6 +303,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Show at most N tasks (default: all).",
     )
+
+    task_next_parser = task_sub.add_parser(
+        "next", help="Show which task would run next and why (never starts an agent)."
+    )
+    _add_config_or_name(task_next_parser)
 
     task_show_parser = task_sub.add_parser(
         "show", help="Show one task's full detail (never starts an agent)."
@@ -1579,6 +1587,128 @@ def cmd_task_request_changes(args: argparse.Namespace) -> int:
     )
 
 
+_TASK_NEXT_SKIPPED_SHOWN = 10
+
+
+def _next_skip_reason(
+    tasks: list[Task], task: Task, *, now: Any, picked_id: str | None
+) -> str:
+    """One-line reason why ``task`` is not the next pick.
+
+    Assumes ``task`` is ``OPEN`` and not the picked task. Names unmet
+    dependencies first (they block the task regardless of schedule), then
+    a future ``run_at``, and falls back to queue order (runnable but not
+    oldest / not due first).
+    """
+    unmet = unsatisfied_dependencies(tasks, task)
+    if unmet:
+        detail = ", ".join(f"{dep['id']} ({dep['status']})" for dep in unmet)
+        return f"waiting on {detail}"
+    if task.run_at is not None and task.run_at > now:
+        return f"scheduled for {task.run_at.isoformat()}"
+    if picked_id is not None:
+        return f"queued behind {picked_id}"
+    return "not runnable"
+
+
+def render_task_next(tasks: list[Task], *, now: Any = None) -> str:
+    """Explain which task the scheduler would pick next, and why not the rest.
+
+    Read-only counterpart of :func:`forgeo.backlog.oldest_open_task` plus the
+    cycle's BLOCKED-first rule from :meth:`forgeo.forgeo.Forgeo._run_cycle`:
+    while any task is ``BLOCKED`` the next cycle renders the blocker file
+    instead of running anything, so ``next`` reports that pause first. Plain
+    text (no Rich markup) so ids and reasons print literally.
+    """
+    from datetime import UTC, datetime
+
+    if now is None:
+        now = datetime.now(UTC)
+    blocked = sorted(
+        (task for task in tasks if task.status is TaskStatus.BLOCKED),
+        key=lambda task: task.created_at,
+    )
+    if blocked:
+        ids = ", ".join(task.id for task in blocked)
+        lines = [
+            f"next: (paused) — {len(blocked)} BLOCKED task(s): {ids}",
+            "why: forgeo renders BLOCKER.md while any task is BLOCKED",
+            "hint: resolve them, then `forgeo task reopen --task <id>` to retry",
+        ]
+        return "\n".join(lines)
+    picked = oldest_open_task(tasks, now=now)
+    open_tasks = [task for task in tasks if task.status is TaskStatus.OPEN]
+    if picked is not None:
+        if picked.run_at is not None:
+            why = (
+                f"due since {picked.run_at.isoformat()} "
+                "(overdue run_at tasks run before oldest-first order)"
+            )
+        else:
+            why = "oldest runnable OPEN task"
+        lines = [f"next: {picked.id} — {picked.title}", f"why: {why}"]
+        skipped = [task for task in open_tasks if task.id != picked.id]
+        for task in skipped[:_TASK_NEXT_SKIPPED_SHOWN]:
+            reason = _next_skip_reason(tasks, task, now=now, picked_id=picked.id)
+            lines.append(f"skipped: {task.id} — {task.title} ({reason})")
+        hidden = len(skipped) - min(len(skipped), _TASK_NEXT_SKIPPED_SHOWN)
+        if hidden > 0:
+            lines.append(f"... +{hidden} more (see `forgeo task list`)")
+        lines.append(
+            f"hint: run it now with `forgeo run --task {picked.id}` "
+            f"or see `forgeo task show --task {picked.id}`"
+        )
+        return "\n".join(lines)
+    if not open_tasks:
+        return "\n".join(
+            [
+                "next: (none) — no OPEN tasks",
+                "why: nothing runnable, so the next cycle runs a refactoring pass",
+                "hint: add one with `forgeo task add --title ... --description ...`",
+            ]
+        )
+    lines = [f"next: (none) — {len(open_tasks)} OPEN task(s), none runnable"]
+    for task in sorted(open_tasks, key=lambda task: task.created_at)[
+        :_TASK_NEXT_SKIPPED_SHOWN
+    ]:
+        reason = _next_skip_reason(tasks, task, now=now, picked_id=None)
+        lines.append(f"waiting: {task.id} — {task.title} ({reason})")
+    hidden = len(open_tasks) - min(len(open_tasks), _TASK_NEXT_SKIPPED_SHOWN)
+    if hidden > 0:
+        lines.append(f"... +{hidden} more (see `forgeo task list`)")
+    future = sorted(
+        task.run_at
+        for task in open_tasks
+        if task.run_at is not None
+        and task.run_at > now
+        and not unsatisfied_dependencies(tasks, task)
+    )
+    if future:
+        lines.append(f"earliest scheduled: {future[0].isoformat()}")
+    lines.append("hint: see `forgeo task show --task <id>` for full detail")
+    return "\n".join(lines)
+
+
+def cmd_task_next(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task next``: explain the scheduler's next pick.
+
+    Read-only; never starts an agent. Works with every provider via
+    ``list_tasks`` and mirrors the cycle's pick (BLOCKED-first, then the
+    oldest runnable ``OPEN`` task with overdue ``run_at`` first).
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    console.print(render_task_next(tasks), markup=False, highlight=False, soft_wrap=True)
+    return 0
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     """Handle ``forgeo task``: the task-management subcommand group."""
     action = args.task_action
@@ -1586,6 +1716,8 @@ def cmd_task(args: argparse.Namespace) -> int:
         return cmd_task_add(args)
     if action == "list":
         return cmd_task_list(args)
+    if action == "next":
+        return cmd_task_next(args)
     if action == "show":
         return cmd_task_show(args)
     if action == "edit":

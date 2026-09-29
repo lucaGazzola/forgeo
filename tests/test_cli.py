@@ -35,6 +35,7 @@ from forgeo.cli import (
     cmd_task_complete_review,
     cmd_task_edit,
     cmd_task_list,
+    cmd_task_next,
     cmd_task_reopen,
     cmd_task_request_changes,
     cmd_task_rm,
@@ -43,6 +44,7 @@ from forgeo.cli import (
     last_outcome_from_runs,
     main,
     render_status,
+    render_task_next,
 )
 from forgeo.daemon import acquire_run_lock, is_lock_held, read_lock_pid
 from forgeo.instances import list_instances, load_registry
@@ -1890,6 +1892,148 @@ def test_task_list_rejects_bad_limit(git_repo, tmp_path, capsys):
 
     assert cmd_task_list(task_list_args(config_path, limit=0)) == 1
     assert "--limit" in capsys.readouterr().out
+
+
+def task_next_args(config_path: Path) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path)
+
+
+def test_task_next_picks_oldest_runnable_and_explains_queue(
+    git_repo, tmp_path, capsys
+):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", title="First"),
+            make_task(id="TASK-002", title="Second"),
+        ],
+    )
+
+    assert cmd_task_next(task_next_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "next: TASK-001 — First" in out
+    assert "oldest runnable" in out
+    assert "skipped: TASK-002" in out
+    assert "queued behind TASK-001" in out
+    assert "forgeo run --task TASK-001" in out
+
+
+def test_task_next_prefers_due_run_at(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", title="First"),
+            make_task(
+                id="TASK-002",
+                title="Due",
+                run_at="2000-01-01T00:00:00Z",
+            ),
+        ],
+    )
+
+    assert cmd_task_next(task_next_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "next: TASK-002 — Due" in out
+    assert "due since" in out
+    assert "skipped: TASK-001" in out
+
+
+def test_task_next_none_runnable_explains_waiting(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-001", title="Waits", dependencies=["TASK-009"]
+            ),
+            make_task(
+                id="TASK-002",
+                title="Later",
+                run_at="2999-01-01T00:00:00Z",
+            ),
+        ],
+    )
+
+    assert cmd_task_next(task_next_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "next: (none)" in out
+    assert "waiting: TASK-001" in out
+    assert "waiting on TASK-009 (missing)" in out
+    assert "waiting: TASK-002" in out
+    assert "scheduled for" in out
+    assert "earliest scheduled" in out
+
+
+def test_task_next_paused_while_blocked(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(id="TASK-001", title="Ready"),
+            make_task(id="TASK-002", title="Stuck", status="BLOCKED"),
+        ],
+    )
+
+    assert cmd_task_next(task_next_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "next: (paused)" in out
+    assert "TASK-002" in out
+    assert "forgeo task reopen" in out
+
+
+def test_task_next_empty_backlog_hints_at_add(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_next(task_next_args(config_path)) == 0
+    out = capsys.readouterr().out
+    assert "next: (none)" in out
+    assert "no OPEN tasks" in out
+    assert "forgeo task add" in out
+
+
+def test_task_next_matches_scheduler_pick(git_repo, tmp_path):
+    now = datetime(2026, 9, 29, 12, 0, 0, tzinfo=UTC)
+    tasks = [
+        make_task(
+            id="TASK-001",
+            title="Old",
+            created_at=now - timedelta(days=2),
+        ),
+        make_task(
+            id="TASK-002",
+            title="Due",
+            created_at=now - timedelta(days=1),
+            run_at=(now - timedelta(hours=1)).isoformat(),
+        ),
+        make_task(
+            id="TASK-003",
+            title="Future",
+            created_at=now - timedelta(days=3),
+            run_at=(now + timedelta(days=1)).isoformat(),
+        ),
+    ]
+    out = render_task_next(tasks, now=now)
+    assert "next: TASK-002 — Due" in out
+    assert "skipped: TASK-001" in out
+    assert "skipped: TASK-003" in out
+    assert "scheduled for" in out
+
+
+def test_task_next_parser_and_dispatch(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001")])
+
+    args = build_parser().parse_args(
+        ["task", "next", "--config", str(config_path)]
+    )
+    assert args.task_action == "next"
+    assert cmd_task(args) == 0
+    assert "next: TASK-001" in capsys.readouterr().out
+
+    assert main(["task", "next", "--config", str(config_path)]) == 0
+    assert "next: TASK-001" in capsys.readouterr().out
 
 
 def test_task_reopen_blocked_task(git_repo, tmp_path, capsys):

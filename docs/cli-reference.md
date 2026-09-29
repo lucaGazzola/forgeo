@@ -63,7 +63,7 @@ Refuses if task missing, not `OPEN`, or a daemon/once/run holds the lock.
 
 ## `forgeo task`
 
-Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted). `task complete-review` / `task request-changes` triage `REVIEW` tasks from the terminal (merge the branch first, then complete it).
+Manage backlog tasks from the terminal — no JSON editing or dashboard needed. Never starts an agent. Works with every provider (`file`, `http`, `github`, `gitlab`, `jira`); on issue backlogs the provider assigns the real id and it is reported back. `task next` explains the scheduler's next pick (dependencies, `run-at`, queue order). `task rm` deletes a task outright (on issue backlogs the provider closes the issue when a hard delete is not permitted). `task complete-review` / `task request-changes` triage `REVIEW` tasks from the terminal (merge the branch first, then complete it).
 
 ### `forgeo task add --title <t> --description <d>`
 
@@ -106,6 +106,33 @@ List backlog tasks and their statuses as a table (`Id`, `Status`, `Title`).
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
 An empty backlog hints at `forgeo task add`.
+
+### `forgeo task next`
+
+Show which task the scheduler would pick next and why the rest wait —
+the terminal answer to "why isn't my task running?". Read-only; never
+starts an agent. Mirrors the cycle's pick: while any task is `BLOCKED`
+the next cycle renders `BLOCKER.md` instead of running anything,
+otherwise the oldest runnable `OPEN` task wins (overdue `run_at` tasks
+first, future `run_at` tasks skipped, tasks waiting on uncompleted
+dependencies skipped).
+
+```bash
+forgeo task next
+```
+
+| Flag | Description |
+| --- | --- |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+
+Prints `next: <id> — <title>` plus a `why:` line (oldest runnable, or
+due-since for an overdue `run_at`), one `skipped:` line per waiting
+`OPEN` task (`waiting on <id> (<status>)`, `scheduled for <time>`, or
+`queued behind <id>`), and a directly runnable hint (`forgeo run
+--task <id>` / `forgeo task show --task <id>`). When nothing is runnable
+it says so (`next: (none)` with per-task `waiting:` reasons and the
+earliest scheduled time, or `next: (paused)` while `BLOCKED` tasks hold
+the cycle).
 
 ### `forgeo task show --task <id>`
 

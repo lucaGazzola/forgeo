@@ -33,3 +33,6 @@ CLAUDE.md
 
 # Local deploy script (server-specific paths)
 scripts/deploy-docs.sh
+
+# Local autonomous-loop helper (never push: personal automation, not project code)
+tools/

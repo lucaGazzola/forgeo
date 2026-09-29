@@ -82,7 +82,7 @@ def once_args(config_path: Path) -> argparse.Namespace:
 
 
 def run_args(config_path: Path, task_id: str = "TASK-001") -> argparse.Namespace:
-    return argparse.Namespace(config=config_path, task=task_id)
+    return argparse.Namespace(config=config_path, task=task_id, reopen=False)
 
 
 def status_args(config_path: Path) -> argparse.Namespace:
@@ -248,7 +248,7 @@ def test_run_refuses_unknown_task(git_repo, tmp_path, monkeypatch, capsys):
     class RefusingForgeo:
         cycles = 0
 
-        async def run_task_id(self, task_id: str) -> str:
+        async def run_task_id(self, task_id: str, *, reopen: bool = False) -> str:
             from forgeo.forgeo import TaskNotRunnableError
 
             self.cycles += 1

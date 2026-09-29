@@ -147,24 +147,29 @@ class Forgeo:
         await self._refactor()
         return "refactor"
 
-    async def run_task_id(self, task_id: str) -> str:
+    async def run_task_id(self, task_id: str, *, reopen: bool = False) -> str:
         """Execute exactly the task ``task_id``; returns a short outcome label.
 
         Like :meth:`run_cycle` but runs ``task_id`` instead of the oldest
         OPEN task, so a human can triage immediately: rerun a FAILED task
         (after reopening it) or try a risky task now. Every finished run
-        appends exactly one run record.
+        appends exactly one run record. With ``reopen=True`` a ``BLOCKED``
+        task is reopened (and a ``FAILED`` task retried) first, so the
+        ``show -> edit -> reopen -> run`` recovery loop collapses to one
+        command.
 
         Raises:
             TaskNotRunnableError: When the task does not exist in the backlog
                 or is not ``OPEN`` — nothing runs and no record is written.
+                With ``reopen=True`` only ``COMPLETED``/``REVIEW`` tasks
+                still raise (they cannot be reopened from the terminal).
         """
         started_at = datetime.now(UTC)
-        outcome = await self._run_task_id(task_id)
+        outcome = await self._run_task_id(task_id, reopen=reopen)
         self._record_run(outcome, started_at)
         return outcome
 
-    async def _run_task_id(self, task_id: str) -> str:
+    async def _run_task_id(self, task_id: str, *, reopen: bool = False) -> str:
         """Run ``task_id`` without recording; returns its outcome label.
 
         Outcome is ``task`` on a completed agent run or ``dirty`` when the
@@ -178,10 +183,29 @@ class Forgeo:
                 f"Task {task_id!r} does not exist in the backlog at "
                 f"{self.config.backlog}."
             )
+        if task.status is TaskStatus.BLOCKED and reopen:
+            reopened = await self.backlog.reopen_task(task_id)
+            if reopened is None:
+                raise TaskNotRunnableError(
+                    f"Task {task_id!r} could not be reopened."
+                )
+            task = reopened
+        elif task.status is TaskStatus.FAILED and reopen:
+            retried = await self.backlog.retry_task(task_id)
+            if retried is None:
+                raise TaskNotRunnableError(
+                    f"Task {task_id!r} could not be retried."
+                )
+            task = retried
         if task.status is not TaskStatus.OPEN:
+            hint = (
+                " Pass `--reopen` to reopen it and run it in one step."
+                if task.status in (TaskStatus.BLOCKED, TaskStatus.FAILED)
+                else ""
+            )
             raise TaskNotRunnableError(
                 f"Task {task_id!r} is {task.status.value}; only OPEN tasks can "
-                f"be run with `forgeo run`."
+                f"be run with `forgeo run`.{hint}"
             )
         return await self._run_task_clean(task)
 

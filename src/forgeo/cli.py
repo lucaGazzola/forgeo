@@ -25,7 +25,10 @@ Commands:
 * ``forgeo run --task TASK-001 --config forgeo.yaml`` — run exactly one
    specific ``OPEN`` task by id and exit, without waiting for the backlog
    order or a scheduled run. For triage: rerun a ``FAILED`` task (after
-   reopening it) or try a risky task right now. Reuses the same per-forgeo
+   reopening it) or try a risky task right now. With ``--reopen`` a
+   ``BLOCKED`` task is reopened (and a ``FAILED`` task retried) first, so
+   the ``show -> edit -> reopen -> run`` recovery loop collapses to one
+   command. Reuses the same per-forgeo
    lock as ``once`` and the daemon, so it never overlaps them; it refuses
    with a clear error when the task does not exist or is not ``OPEN``.
 * ``forgeo task add --title T --description D [--description-file F]`` — create a
@@ -226,6 +229,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TASK_ID",
         help="Id of the OPEN task to run now (triage: rerun a FAILED task "
         "after reopening it, or try a risky task immediately).",
+    )
+    run_parser.add_argument(
+        "--reopen",
+        action="store_true",
+        help="Reopen a BLOCKED task (or retry a FAILED one) before running, "
+        "so `forgeo run --task <id> --reopen` retries in one step.",
     )
 
     task_parser = sub.add_parser(
@@ -1061,16 +1070,20 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     Unlike ``forgeo once`` — which picks the oldest ``OPEN`` task — this
     executes the task named by ``--task`` immediately, for triage: rerun a
-    ``FAILED`` task (after reopening it) or try a risky task right now. It
+    ``FAILED`` task (after reopening it) or try a risky task right now. With
+    ``--reopen`` a ``BLOCKED`` task is reopened (and a ``FAILED`` task
+    retried through the retry path) first, so ``show -> edit -> reopen ->
+    run`` collapses to ``edit -> run --reopen``. It
     reuses the same per-forgeo lock as the daemon and ``once``, so it never
     overlaps them; it refuses (exit 1) when the task does not exist or is
     not ``OPEN``.
     """
     task_id = args.task
+    reopen = bool(getattr(args, "reopen", False))
 
     async def _one(forgeo: Forgeo) -> int:
         try:
-            outcome = await forgeo.run_task_id(task_id)
+            outcome = await forgeo.run_task_id(task_id, reopen=reopen)
         except TaskNotRunnableError as exc:
             console.print(f"[red]{exc}[/red]")
             return 1

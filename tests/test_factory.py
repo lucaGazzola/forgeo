@@ -739,6 +739,44 @@ async def test_run_task_id_refuses_non_open_task(git_repo, tmp_path):
         await forgeo.run_task_id("SELF-012")
 
 
+async def test_run_task_id_reopen_runs_blocked_task(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(id="SELF-012", status=TaskStatus.BLOCKED))
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    assert await forgeo.run_task_id("SELF-012", reopen=True) == "task"
+    assert (await backlog.get_task("SELF-012")).status is TaskStatus.COMPLETED
+
+
+async def test_run_task_id_reopen_retries_failed_task(git_repo, tmp_path):
+    forgeo, agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(id="SELF-012", status=TaskStatus.FAILED))
+    agent.result = ExecutionResult(status=ExecutionStatus.SUCCESS)
+    agent.effect = lambda: (git_repo / "app.py").write_text(
+        "def answer():\n    return 7\n", encoding="utf-8"
+    )
+
+    assert await forgeo.run_task_id("SELF-012", reopen=True) == "task"
+    assert (await backlog.get_task("SELF-012")).status is TaskStatus.COMPLETED
+
+
+async def test_run_task_id_reopen_refuses_completed_task(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(id="SELF-012", status=TaskStatus.COMPLETED))
+    with pytest.raises(TaskNotRunnableError, match="COMPLETED"):
+        await forgeo.run_task_id("SELF-012", reopen=True)
+
+
+async def test_run_task_id_refusal_hints_reopen_for_blocked(git_repo, tmp_path):
+    forgeo, _agent, backlog = make_forgeo(git_repo, tmp_path)
+    await backlog.create_task(make_task(id="SELF-012", status=TaskStatus.BLOCKED))
+    with pytest.raises(TaskNotRunnableError, match="--reopen"):
+        await forgeo.run_task_id("SELF-012")
+
+
 async def test_run_task_id_refusal_writes_no_run_record(git_repo, tmp_path):
     forgeo, _agent, _backlog = make_forgeo(git_repo, tmp_path)
     with pytest.raises(TaskNotRunnableError):

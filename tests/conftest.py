@@ -302,7 +302,7 @@ class FakeForgeo:
     async def run_cycle(self) -> str:
         return await self._step()
 
-    async def run_task_id(self, task_id: str) -> str:
+    async def run_task_id(self, task_id: str, *, reopen: bool = False) -> str:
         result = await self._step()
         self.run_task_ids.append(task_id)
         return result

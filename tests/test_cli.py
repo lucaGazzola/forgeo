@@ -23,6 +23,7 @@ from forgeo.cli import (
     cmd_instance_add,
     cmd_instance_list,
     cmd_instance_rm,
+    cmd_logs,
     cmd_once,
     cmd_restart,
     cmd_run,
@@ -607,6 +608,103 @@ def test_status_does_not_invoke_agent(git_repo, tmp_path, monkeypatch):
 def test_status_missing_config(tmp_path, capsys):
     assert cmd_status(status_args(tmp_path / "missing.yaml")) == 1
     assert "not found" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# forgeo logs: tail (and follow) the log file                                 #
+# --------------------------------------------------------------------------- #
+
+
+def logs_args(
+    config_path: Path, lines: int = 100, follow: bool = False
+) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, lines=lines, follow=follow)
+
+
+def test_logs_prints_last_n_lines(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    log_path = tmp_path / "forgeo.log"
+    log_path.write_text(
+        "".join(f"line{i}\n" for i in range(1, 6)), encoding="utf-8"
+    )
+
+    assert cmd_logs(logs_args(config_path, lines=3)) == 0
+    out = capsys.readouterr().out
+    assert "line1" not in out
+    assert "line2" not in out
+    assert "line3" in out
+    assert "line4" in out
+    assert "line5" in out
+
+
+def test_logs_prints_markup_literally(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    log_path = tmp_path / "forgeo.log"
+    log_path.write_text("[red]not markup[/red]\n", encoding="utf-8")
+
+    assert cmd_logs(logs_args(config_path)) == 0
+    assert "[red]not markup[/red]" in capsys.readouterr().out
+
+
+def test_logs_missing_file_hints_at_start(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    assert not (tmp_path / "forgeo.log").exists()
+
+    assert cmd_logs(logs_args(config_path)) == 0
+    assert "No log file yet" in capsys.readouterr().out
+
+
+def test_logs_missing_config(tmp_path, capsys):
+    assert cmd_logs(logs_args(tmp_path / "missing.yaml")) == 1
+    assert "not found" in capsys.readouterr().out
+
+
+def test_logs_does_not_invoke_agent(git_repo, tmp_path, monkeypatch):
+    config_path = write_config(git_repo, tmp_path)
+    called: list[str] = []
+
+    def boom(*_a, **_k):
+        called.append("agent")
+        raise AssertionError("agent must not be started")
+
+    monkeypatch.setattr("forgeo.cli._make_forgeo", boom)
+    monkeypatch.setattr("forgeo.cli.ShellAgent", boom)
+
+    assert cmd_logs(logs_args(config_path)) == 0
+    assert called == []
+
+
+def test_logs_follow_prints_appended_lines(git_repo, tmp_path, capsys, monkeypatch):
+    config_path = write_config(git_repo, tmp_path)
+    log_path = tmp_path / "forgeo.log"
+    log_path.write_text("line1\nline2\n", encoding="utf-8")
+    polls = {"n": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 1:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write("line3\n")
+        else:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("forgeo.cli.time.sleep", fake_sleep)
+
+    assert cmd_logs(logs_args(config_path, follow=True)) == 0
+    out = capsys.readouterr().out
+    assert "line1" in out
+    assert "line2" in out
+    assert "line3" in out
+
+
+def test_logs_parser_rejects_non_positive_lines(capsys):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["logs", "--lines", "0"])
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["logs", "--lines", "not-a-number"])
+    args = build_parser().parse_args(["logs"])
+    assert args.lines == 100
+    assert args.follow is False
 
 
 # --------------------------------------------------------------------------- #

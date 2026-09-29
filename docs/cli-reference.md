@@ -90,6 +90,27 @@ first line) appear when tasks need attention, plus a single `action:` line
 with the most useful next step (resolve + reopen, `forgeo start`, or add
 tasks via `forgeo web`).
 
+## `forgeo logs`
+
+Print the tail of the forgeo log file (`log_file` from `forgeo.yaml`) — the
+fastest way to see why the last cycle did what it did. Read-only; never
+starts an agent.
+
+| Flag | Description |
+| --- | --- |
+| `--config <file>` / `--name <name>` | Config file or registry name. |
+| `-n`, `--lines <N>` | How many trailing lines to print (default `100`, same as the web console). |
+| `-f`, `--follow` | Keep printing appended lines like `tail -f` (Ctrl-C to stop). |
+
+```bash
+forgeo logs -n 50
+forgeo logs --follow
+```
+
+When the log file does not exist yet (nothing has run), prints a hint to run
+`forgeo start` or `forgeo once` first and exits `0`. `[...]` in agent output
+is printed literally, never interpreted as formatting.
+
 ## `forgeo validate`
 
 Read-only dry run — never invokes agent or writes.
@@ -114,7 +135,7 @@ Graceful shutdown via SIGTERM (cycle in progress finishes first).
 
 `stop` exits `1` if not running or timeout elapses; auto-registers with `--config` if missing. `restart` stops then starts detached, re-reading `forgeo.yaml`. Config edits apply on next cycle without restart, except `repo`/`backlog`/`blocker_file`/`log_file` which need `restart`.
 
-`--config` vs `--name` applies to `start`, `once`, `run`, `status`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
+`--config` vs `--name` applies to `start`, `once`, `run`, `status`, `logs`, `validate`, `stop`, `restart` — passing both is an error; unknown name exits non-zero.
 
 ## `forgeo instance`
 

@@ -35,6 +35,9 @@ Commands:
 * ``forgeo status --config forgeo.yaml`` — print a read-only summary of the
    forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
    starts an agent.
+* ``forgeo logs --config forgeo.yaml`` — print the tail of the forgeo log
+   file (``log_file``) and exit; ``-n`` sets how many lines, ``-f`` follows
+   new lines like ``tail -f``. Read-only; never starts an agent.
 * ``forgeo stop --config forgeo.yaml`` — stop a running daemon gracefully
   (SIGTERM; a cycle in progress finishes first).
 * ``forgeo restart --config forgeo.yaml`` — stop the daemon when running,
@@ -62,7 +65,7 @@ Commands:
    no value), and a token already present there enables auth even without
    the flag. With no flag and no token file the dashboard stays open.
 
-``start``, ``once``, ``run``, ``status``, ``validate``, ``stop`` and
+``start``, ``once``, ``run``, ``status``, ``logs``, ``validate``, ``stop`` and
 ``restart`` each accept either ``--config PATH`` (a config file) or
 ``--name NAME`` (an instance resolved from the registry); the two options
 are mutually exclusive.
@@ -74,8 +77,10 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
+import time
 from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -129,6 +134,7 @@ from forgeo.runs import RunRecorder
 from forgeo.setup import run_setup
 from forgeo.update import check_for_update
 from forgeo.validate import render_report, validate_config
+from forgeo.web_common import DEFAULT_LOG_LINES, tail_lines
 
 DEFAULT_CONFIG = Path("forgeo.yaml")
 
@@ -197,6 +203,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a read-only summary of Forgeo (never starts an agent).",
     )
     _add_config_or_name(status_parser)
+
+    logs_parser = sub.add_parser(
+        "logs",
+        help="Print the tail of the forgeo log file (never starts an agent).",
+    )
+    _add_config_or_name(logs_parser)
+    logs_parser.add_argument(
+        "-n",
+        "--lines",
+        type=_positive_log_lines,
+        default=DEFAULT_LOG_LINES,
+        metavar="N",
+        help=f"How many trailing lines to print (default: {DEFAULT_LOG_LINES}).",
+    )
+    logs_parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Keep printing new lines as they are appended (Ctrl-C to stop).",
+    )
 
     validate_parser = sub.add_parser(
         "validate",
@@ -1005,6 +1031,82 @@ def cmd_status(args: argparse.Namespace) -> int:
             last_outcome=last_outcome,
         )
     )
+    return 0
+
+
+def _positive_log_lines(value: str) -> int:
+    """Parse a positive ``--lines`` count for ``forgeo logs``."""
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("lines must be an integer >= 1") from exc
+    if count < 1:
+        raise argparse.ArgumentTypeError("lines must be an integer >= 1")
+    return count
+
+
+def _follow_log(path: Path, *, poll_interval: float = 0.25) -> int:
+    """Print lines appended to ``path`` until interrupted (``tail -f``).
+
+    Seeks to the end first (the caller already printed the tail), then
+    polls for new content. A truncated file (log rotation) restarts from
+    the beginning. ``KeyboardInterrupt`` (Ctrl-C) stops cleanly with exit 0.
+    """
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            while True:
+                line = handle.readline()
+                if line:
+                    console.print(
+                        line.rstrip("\r\n"),
+                        markup=False,
+                        highlight=False,
+                        soft_wrap=True,
+                    )
+                    position = handle.tell()
+                    continue
+                try:
+                    if path.stat().st_size < position:
+                        handle.seek(0)
+                        position = 0
+                        continue
+                except OSError:
+                    pass
+                time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        return 0
+    except OSError as exc:
+        console.print(f"[red]Could not read log file {path}: {exc}[/red]")
+        return 1
+    return 0
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Handle ``forgeo logs``: print the tail of the log file and exit.
+
+    Read-only; never starts an agent. Prints the last ``--lines`` lines of
+    ``log_file`` (``markup=False`` so ``[...]`` in agent output is never
+    treated as Rich markup); with ``--follow`` it keeps printing appended
+    lines like ``tail -f`` until Ctrl-C.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    log_path = Path(config.log_file)
+    if not log_path.exists():
+        console.print(
+            f"[yellow]No log file yet at {log_path} — "
+            f"run `forgeo start` or `forgeo once` first.[/yellow]"
+        )
+        return 0
+    count = getattr(args, "lines", DEFAULT_LOG_LINES)
+    for line in tail_lines(log_path, count):
+        console.print(line, markup=False, highlight=False, soft_wrap=True)
+    if getattr(args, "follow", False):
+        return _follow_log(log_path)
     return 0
 
 
@@ -1845,6 +1947,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "run": cmd_run,
     "init": cmd_init,
     "status": cmd_status,
+    "logs": cmd_logs,
     "validate": cmd_validate,
     "stop": cmd_stop,
     "restart": cmd_restart,

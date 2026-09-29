@@ -41,7 +41,11 @@ Commands:
    moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN``;
    ``forgeo task rm --task ID`` deletes a task (typos, duplicates, or
    tasks that will never be done — no JSON editing or dashboard
-   needed). Never starts an agent.
+   needed); ``forgeo task complete-review --task ID`` marks a ``REVIEW``
+   task ``COMPLETED`` after merging its branch, and
+   ``forgeo task request-changes --task ID`` sends a ``REVIEW`` task back
+   to ``OPEN`` for rework (the terminal equivalent of the dashboard's
+   Complete / Request-changes buttons). Never starts an agent.
 * ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
    config, repository, branch and remote resolution, backlog, agent command,
    and lock state. Reports all problems at once, never invokes the agent, and
@@ -80,7 +84,8 @@ Commands:
    the flag. With no flag and no token file the dashboard stays open.
 
 ``start``, ``once``, ``run``, ``task add``, ``task list``, ``task show``,
-``task edit``, ``task reopen``, ``task rm``, ``status``, ``logs``,
+``task edit``, ``task reopen``, ``task rm``, ``task complete-review``,
+``task request-changes``, ``status``, ``logs``,
 ``validate``, ``stop`` and ``restart`` each accept either ``--config PATH``
 (a config file) or ``--name NAME`` (an instance resolved from the
 registry); the two options are mutually exclusive.
@@ -353,6 +358,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TASK_ID",
         help="Id of the task to delete (typos, duplicates, or tasks that "
         "will never be done).",
+    )
+
+    task_complete_review_parser = task_sub.add_parser(
+        "complete-review",
+        help="Mark a REVIEW task COMPLETED after merging its branch "
+        "(never starts an agent).",
+    )
+    _add_config_or_name(task_complete_review_parser)
+    task_complete_review_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the REVIEW task to mark COMPLETED (merge its "
+        "review branch first).",
+    )
+
+    task_request_changes_parser = task_sub.add_parser(
+        "request-changes",
+        help="Send a REVIEW task back to OPEN for rework "
+        "(never starts an agent).",
+    )
+    _add_config_or_name(task_request_changes_parser)
+    task_request_changes_parser.add_argument(
+        "--task",
+        required=True,
+        metavar="TASK_ID",
+        help="Id of the REVIEW task to send back to OPEN.",
     )
 
     status_parser = sub.add_parser(
@@ -1155,6 +1187,11 @@ def _task_show_hint(task: Task) -> str | None:
             f"hint: fix it with `forgeo task edit --task {task.id} "
             f"--description ...`, then `forgeo task reopen --task {task.id}` to retry"
         )
+    if task.status is TaskStatus.REVIEW:
+        return (
+            f"hint: after merging, `forgeo task complete-review --task {task.id}`; "
+            f"for rework, `forgeo task request-changes --task {task.id}`"
+        )
     if task.status is TaskStatus.OPEN:
         return f"hint: run it now with `forgeo run --task {task.id}`"
     return None
@@ -1346,6 +1383,73 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_task_review_transition(
+    args: argparse.Namespace, *, action: str, method: str, past: str
+) -> int:
+    """Shared plumbing for the ``REVIEW`` exit commands.
+
+    Fetches the task first so non-``REVIEW`` tasks are refused with an
+    explanation (mirroring the dashboard's ``400 only REVIEW ...`` guard)
+    instead of silently transitioning. ``action`` names the command for
+    messages, ``method`` the backlog method to call, ``past`` the success
+    verb phrase.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    backlog = open_backlog(config)
+    try:
+        task = asyncio.run(backlog.get_task(args.task))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if task is None:
+        console.print(f"[red]Unknown task: {args.task}.[/red]")
+        return 1
+    if task.status is not TaskStatus.REVIEW:
+        console.print(
+            f"[red]Task {task.id} is {task.status.value}, not REVIEW: "
+            f"`forgeo task {action} --task {task.id}` only applies to REVIEW tasks "
+            f"(merge the branch first, then complete it).[/red]"
+        )
+        return 1
+    try:
+        updated = asyncio.run(getattr(backlog, method)(task.id))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if updated is None:
+        console.print(f"[red]Could not update task {task.id}.[/red]")
+        return 1
+    console.print(f"[green]{past} task {updated.id} — now {updated.status.value}.[/green]")
+    return 0
+
+
+def cmd_task_complete_review(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task complete-review``: ``REVIEW`` → ``COMPLETED``.
+
+    Never starts an agent. The terminal equivalent of the dashboard's
+    Complete button — merge the review branch manually first, then mark
+    the task done without opening the dashboard.
+    """
+    return _cmd_task_review_transition(
+        args, action="complete-review", method="complete_review", past="Completed"
+    )
+
+
+def cmd_task_request_changes(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task request-changes``: ``REVIEW`` → ``OPEN``.
+
+    Never starts an agent. The terminal equivalent of the dashboard's
+    Request-changes button — sends the task back for rework without
+    opening the dashboard.
+    """
+    return _cmd_task_review_transition(
+        args, action="request-changes", method="request_changes", past="Sent back"
+    )
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     """Handle ``forgeo task``: the task-management subcommand group."""
     action = args.task_action
@@ -1361,6 +1465,10 @@ def cmd_task(args: argparse.Namespace) -> int:
         return cmd_task_reopen(args)
     if action == "rm":
         return cmd_task_rm(args)
+    if action == "complete-review":
+        return cmd_task_complete_review(args)
+    if action == "request-changes":
+        return cmd_task_request_changes(args)
     build_parser().print_help()
     return 0
 

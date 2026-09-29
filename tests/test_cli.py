@@ -32,9 +32,11 @@ from forgeo.cli import (
     cmd_stop,
     cmd_task,
     cmd_task_add,
+    cmd_task_complete_review,
     cmd_task_edit,
     cmd_task_list,
     cmd_task_reopen,
+    cmd_task_request_changes,
     cmd_task_rm,
     cmd_task_show,
     cmd_validate,
@@ -2211,3 +2213,131 @@ def test_task_rm_main_entrypoint(git_repo, tmp_path, capsys):
 def test_task_rm_missing_config(tmp_path, capsys):
     assert cmd_task_rm(task_rm_args(tmp_path / "missing.yaml", "TASK-001")) == 1
     assert "not found" in capsys.readouterr().out
+
+
+def task_review_args(config_path: Path, task_id: str) -> argparse.Namespace:
+    return argparse.Namespace(config=config_path, task=task_id)
+
+
+def test_task_complete_review_marks_completed(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-003",
+                status="REVIEW",
+                review_branch="forgeo/review/TASK-003",
+                review_commit_sha="abc123",
+            )
+        ],
+    )
+
+    assert cmd_task_complete_review(task_review_args(config_path, "TASK-003")) == 0
+    task = read_backlog_tasks(tmp_path)[0]
+    assert task["status"] == "COMPLETED"
+    assert task["review_branch"] is None
+    assert "Completed task TASK-003" in capsys.readouterr().out
+
+
+def test_task_request_changes_reopens(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-003",
+                status="REVIEW",
+                review_branch="forgeo/review/TASK-003",
+                review_commit_sha="abc123",
+            )
+        ],
+    )
+
+    assert cmd_task_request_changes(task_review_args(config_path, "TASK-003")) == 0
+    task = read_backlog_tasks(tmp_path)[0]
+    assert task["status"] == "OPEN"
+    assert task["review_branch"] is None
+    assert "Sent back task TASK-003" in capsys.readouterr().out
+
+
+def test_task_complete_review_refuses_non_review(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="OPEN")])
+
+    assert cmd_task_complete_review(task_review_args(config_path, "TASK-001")) == 1
+    assert "not REVIEW" in capsys.readouterr().out
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+
+
+def test_task_request_changes_refuses_non_review(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="BLOCKED")])
+
+    assert cmd_task_request_changes(task_review_args(config_path, "TASK-001")) == 1
+    assert "not REVIEW" in capsys.readouterr().out
+
+
+def test_task_complete_review_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_complete_review(task_review_args(config_path, "TASK-999")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_request_changes_unknown_task(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+
+    assert cmd_task_request_changes(task_review_args(config_path, "TASK-999")) == 1
+    assert "Unknown task" in capsys.readouterr().out
+
+
+def test_task_complete_review_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="REVIEW")])
+
+    assert (
+        main(
+            [
+                "task",
+                "complete-review",
+                "--task",
+                "TASK-003",
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "COMPLETED"
+    assert "Completed task TASK-003" in capsys.readouterr().out
+
+
+def test_task_request_changes_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="REVIEW")])
+
+    assert (
+        main(
+            [
+                "task",
+                "request-changes",
+                "--task",
+                "TASK-003",
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert read_backlog_tasks(tmp_path)[0]["status"] == "OPEN"
+
+
+def test_task_show_review_hint_mentions_review_commands(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-003", status="REVIEW")])
+
+    assert cmd_task_show(task_show_args(config_path, "TASK-003")) == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "forgeo task complete-review --task TASK-003" in out
+    assert "forgeo task request-changes --task TASK-003" in out

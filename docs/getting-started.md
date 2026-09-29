@@ -128,7 +128,7 @@ forgeo web             # aggregate dashboard on :8790
 forgeo web -d && forgeo web stop   # background dashboard
 ```
 
-`--name` works with `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `task rm`, `status`, `logs`, `validate`, `stop`, `restart` (mutually exclusive with `--config`).
+`--name` works with `start`, `once`, `run`, `task add`, `task list`, `task show`, `task edit`, `task reopen`, `task rm`, `task complete-review`, `task request-changes`, `status`, `logs`, `validate`, `stop`, `restart` (mutually exclusive with `--config`).
 
 ## Next steps
 

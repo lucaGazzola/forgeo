@@ -1426,10 +1426,9 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     # --description / --description-file for anything needing a real spec.
     description = title if description_text is None else description_text
     backlog = open_backlog(config)
-    try:
-        existing = asyncio.run(backlog.list_tasks())
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    existing = _run_backlog(backlog.list_tasks())
+    if isinstance(existing, int):
+        return existing
     if args.id is not None:
         task_id = args.id.strip()
         if not task_id:
@@ -1451,12 +1450,12 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         console.print(f"[red]Invalid task: {exc}[/red]")
         return 1
     try:
-        created = asyncio.run(backlog.create_task(task))
+        created = _run_backlog(backlog.create_task(task))
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         return 1
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    if isinstance(created, int):
+        return created
     console.print(f"[green]Created task {created.id} — {created.title}[/green]")
     if not run_now:
         console.print(
@@ -1722,14 +1721,17 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         return 1
     backlog = open_backlog(config)
     try:
-        resolved_id, _found = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
+        resolved = _run_backlog(_resolve_backlog_task_id(backlog, task_id))
+        if isinstance(resolved, int):
+            return resolved
+        resolved_id, _found = resolved
         effective_id = resolved_id if _found is not None else task_id
-        updated = asyncio.run(backlog.update_task(effective_id, updates))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+        updated = _run_backlog(backlog.update_task(effective_id, updates))
     except (ValueError, TypeError) as exc:
         console.print(f"[red]Invalid update: {exc}[/red]")
         return 1
+    if isinstance(updated, int):
+        return updated
     if updated is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
@@ -1787,13 +1789,12 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
             "from the terminal.[/red]"
         )
         return 1
-    try:
-        if previous is TaskStatus.BLOCKED:
-            updated = asyncio.run(backlog.reopen_task(task.id))
-        else:
-            updated = asyncio.run(backlog.retry_task(task.id))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    if previous is TaskStatus.BLOCKED:
+        updated = _run_backlog(backlog.reopen_task(task.id))
+    else:
+        updated = _run_backlog(backlog.retry_task(task.id))
+    if isinstance(updated, int):
+        return updated
     if updated is None:
         console.print(f"[red]Could not reopen task {task.id}.[/red]")
         return 1
@@ -1827,10 +1828,9 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
     backlog = open_backlog(config)
-    try:
-        deleted = asyncio.run(backlog.delete_task(existing.id))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    deleted = _run_backlog(backlog.delete_task(existing.id))
+    if isinstance(deleted, int):
+        return deleted
     if deleted is None:
         console.print(f"[red]Could not remove task {task_id}.[/red]")
         return 1
@@ -1869,10 +1869,9 @@ def _cmd_task_review_transition(
             f"(merge the branch first, then complete it).[/red]"
         )
         return 1
-    try:
-        updated = asyncio.run(getattr(backlog, method)(task.id))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    updated = _run_backlog(getattr(backlog, method)(task.id))
+    if isinstance(updated, int):
+        return updated
     if updated is None:
         console.print(f"[red]Could not update task {task.id}.[/red]")
         return 1
@@ -2234,26 +2233,23 @@ def _oldest_with_status(tasks: list[Task], status: TaskStatus) -> Task | None:
 
 
 def _report_backlog_unavailable(exc: Exception) -> int:
-    """Print the unavailable-backlog error; returns exit code ``1``.
-
-    One helper for the ``except BacklogUnavailableError`` epilogue repeated
-    across the ``task``/``run`` commands, so the message stays identical.
-    """
+    """Print the unavailable-backlog error; returns exit code ``1``."""
     console.print(f"[red]Backlog unavailable: {exc}[/red]")
     return 1
 
 
-def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
-    """List backlog tasks, printing the unavailable-backlog error on failure.
-
-    Returns ``None`` when the backlog cannot be reached so callers can
-    ``return 1`` without repeating the ``try/except``.
-    """
+def _run_backlog(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Run a backlog coroutine; on unavailability print the error and return ``1``."""
     try:
-        return asyncio.run(open_backlog(config).list_tasks())
+        return asyncio.run(coro)
     except BacklogUnavailableError as exc:
-        _report_backlog_unavailable(exc)
-        return None
+        return _report_backlog_unavailable(exc)
+
+
+def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
+    """List backlog tasks, or ``None`` (after printing) when unreachable."""
+    tasks = _run_backlog(open_backlog(config).list_tasks())
+    return None if isinstance(tasks, int) else tasks
 
 
 def _resolve_config_and_tasks(
@@ -2334,10 +2330,10 @@ def _resolve_config_backlog_task(
         return loaded
     config, task_id = loaded
     backlog = open_backlog(config)
-    try:
-        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
+    fetched = _run_backlog(_resolve_backlog_task_id(backlog, task_id))
+    if isinstance(fetched, int):
+        return fetched
+    _actual_id, task = fetched
     if task is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1

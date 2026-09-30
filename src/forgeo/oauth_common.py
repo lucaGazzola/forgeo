@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -721,3 +722,65 @@ def make_device_flow(
         )
 
     return run
+
+
+@dataclass(frozen=True)
+class SimpleOAuthBindings:
+    """Wired OAuth objects for a GitHub/GitLab-style provider."""
+
+    default_token_path: Callable[[str | None], Path]
+    oauth_base: Callable[[str], str]
+    TokenStore: Any
+    TokenProvider: Any
+    request_device_code: Callable[..., dict[str, Any]]
+    poll_device_token: Callable[..., dict[str, Any]]
+    run_device_flow: Callable[..., dict[str, Any]]
+    run_browser_flow: Callable[..., dict[str, Any]]
+
+
+def build_simple_oauth(
+    error_cls: type[Exception],
+    key: str,
+    label: str,
+    *,
+    default_base: str,
+    plain_host: str,
+    strip_suffixes: tuple[str, ...],
+    oauth_base_fn: Callable[[str], str],
+    device_paths: tuple[str, ...],
+    token_path: str,
+    authorize_path: str,
+    default_scope: str,
+    extra_authorize_params: dict[str, str] | None = None,
+    extra_url_keys: tuple[str, ...] = (),
+) -> SimpleOAuthBindings:
+    """Wire every OAuth object for a GitHub/GitLab-style provider at once."""
+    post_fn = make_post_form(error_cls, f"{label} OAuth")
+    request_fn = make_device_code_request(error_cls, label, *device_paths)
+    poll_fn = make_poll_device_token(error_cls, token_path)
+
+    def _default_token_path(api_base: str | None = None) -> Path:
+        return host_token_path(
+            key, api_base, default_base=default_base,
+            plain_host=plain_host, strip_suffixes=strip_suffixes,
+        )
+
+    return SimpleOAuthBindings(
+        default_token_path=_default_token_path, oauth_base=oauth_base_fn,
+        TokenStore=make_token_store(_default_token_path),
+        TokenProvider=make_file_token_provider(
+            error_cls,
+            f"{label} OAuth token not found at {{path}}; "
+            f"run `forgeo auth login --provider {key}` or set a PAT.",
+        ),
+        request_device_code=request_fn, poll_device_token=poll_fn,
+        run_device_flow=make_device_flow(
+            request_fn, poll_fn, error_cls, label, extra_url_keys=extra_url_keys
+        ),
+        run_browser_flow=make_browser_flow(
+            make_callback_handler(label), error_cls, label, post_fn,
+            authorize_path=authorize_path, token_path=token_path,
+            default_scope=default_scope,
+            extra_authorize_params=extra_authorize_params,
+        ),
+    )

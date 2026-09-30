@@ -48,12 +48,6 @@ def default_gates() -> list[Gate]:
     ]
 
 
-def _is_missing_module(output: str) -> bool:
-    """Detect ``python -m <tool>`` failing because the tool is not installed."""
-    lowered = output.lower()
-    return "no module named" in lowered
-
-
 def run_gate(gate: Gate) -> GateOutcome:
     """Run one gate, capturing its combined stdout/stderr.
 
@@ -66,7 +60,7 @@ def run_gate(gate: Gate) -> GateOutcome:
     except OSError as exc:
         return GateOutcome(gate.name, 127, f"{gate.name} could not start: {exc}", missing=True)
     output = (proc.stdout + proc.stderr).strip()
-    if proc.returncode != 0 and _is_missing_module(output):
+    if proc.returncode != 0 and "no module named" in output.lower():
         hint = (
             f"{gate.name} is not installed in this environment "
             f"({output.splitlines()[0] if output else 'unknown error'}). "

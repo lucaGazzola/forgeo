@@ -120,37 +120,27 @@ def validate_task_updates(updates: dict[str, Any]) -> None:
         raise ValueError("review_required must be a boolean or null")
 
 
-def _join_output_logs(result: ExecutionResult, cap: int | None = None) -> str | None:
-    """The agent's output as one newline-joined string, ``None`` when empty.
+def _set_agent_response(
+    entry: dict[str, Any], result: ExecutionResult, cap: int | None
+) -> None:
+    """Store capped agent output on ``entry`` when non-empty.
 
-    ``BacklogStore`` persists agent output as a single string field, so the
-    agent's ``list[str]`` (its ``[stdout]``/``[stderr]``-prefixed lines) is
-    flattened here, prefixes stripped. Lines without a known prefix (e.g.
-    ``[shell]`` headers) are ignored. An empty result means "nothing to
-    record" and must stay ``None`` — the caller then leaves any previously
-    stored response untouched rather than wiping it. ``cap`` bounds the number
-    of kept lines, mirroring ``agent_response_lines`` (``None`` = unbounded;
-    ``0``/negative = persist nothing).
+    The agent's ``list[str]`` (its ``[stdout]``/``[stderr]``-prefixed lines)
+    is flattened with prefixes stripped; lines without a known prefix (e.g.
+    ``[shell]`` headers) are ignored. Empty output (or ``cap <= 0``) stores
+    nothing, leaving any previously stored response untouched. ``cap`` bounds
+    the number of kept lines (``None`` = unbounded).
     """
-
     out: list[str] = []
     for line in result.output_logs:
         if line.startswith(("[stdout] ", "[stderr] ")):
             out.append(line[9:])
     if cap is not None:
         if cap <= 0:
-            return None
+            return
         out = out[-cap:]
-    return "\n".join(out) if out else None
-
-
-def _set_agent_response(
-    entry: dict[str, Any], result: ExecutionResult, cap: int | None
-) -> None:
-    """Store capped agent output on ``entry`` when non-empty."""
-    joined = _join_output_logs(result, cap)
-    if joined is not None:
-        entry["agent_response"] = joined
+    if out:
+        entry["agent_response"] = "\n".join(out)
 
 
 def _status_by_id(tasks: list[Task]) -> dict[str, TaskStatus]:

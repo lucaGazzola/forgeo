@@ -1481,15 +1481,21 @@ def _has_run_schedule_conflict(args: argparse.Namespace) -> bool:
     return False
 
 
-def _resolve_description_text(
-    raw_description: str | None, raw_description_file: Path | None
+def _resolve_optional_description(
+    args: argparse.Namespace,
 ) -> tuple[str | None, str | None]:
     """Resolve ``--description``/``--description-file`` to stripped text.
 
-    Wraps :func:`_read_description_input` with the blank check repeated in
-    ``task add``/``task edit``. Returns ``(text, error)`` — exactly one is
-    set; ``text`` is stripped and non-blank on success.
+    Shared by ``task add``/``task edit`` (like :func:`_has_run_schedule_conflict`):
+    returns ``(None, None)`` when neither flag is passed, else the
+    :func:`_read_description_input` outcome with a blank check. Returns
+    ``(text, error)`` — on success ``text`` is stripped and non-blank.
+    Callers print the error and return 1, so the message stays identical.
     """
+    raw_description = getattr(args, "description", None)
+    raw_description_file = getattr(args, "description_file", None)
+    if raw_description is None and raw_description_file is None:
+        return None, None
     description_text, desc_error = _read_description_input(
         raw_description, raw_description_file
     )
@@ -1542,22 +1548,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         return 1 if "must not be blank" in title_error else 2
     assert title_text is not None
     title = title_text
-    raw_description = getattr(args, "description", None)
-    raw_description_file = getattr(args, "description_file", None)
-    if raw_description is None and raw_description_file is None:
-        # Quick capture: `forgeo task add --title "..."` files the title
-        # as the description, so one-liners need only one flag. Pass
-        # --description / --description-file for anything needing a real spec.
-        description = title
-    else:
-        description_text, desc_error = _resolve_description_text(
-            raw_description, raw_description_file
-        )
-        if desc_error is not None:
-            console.print(f"[red]{desc_error}[/red]")
-            return 1
-        assert description_text is not None
-        description = description_text
+    description_text, desc_error = _resolve_optional_description(args)
+    if desc_error is not None:
+        console.print(f"[red]{desc_error}[/red]")
+        return 1
+    # Quick capture: `forgeo task add --title "..."` files the title
+    # as the description, so one-liners need only one flag. Pass
+    # --description / --description-file for anything needing a real spec.
+    description = title if description_text is None else description_text
     backlog = open_backlog(config)
     try:
         existing = asyncio.run(backlog.list_tasks())
@@ -1840,16 +1838,11 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
             console.print("[red]--title must not be blank.[/red]")
             return 1
         updates["title"] = args.title.strip()
-    raw_description = getattr(args, "description", None)
-    raw_description_file = getattr(args, "description_file", None)
-    if raw_description is not None or raw_description_file is not None:
-        description_text, desc_error = _resolve_description_text(
-            raw_description, raw_description_file
-        )
-        if desc_error is not None:
-            console.print(f"[red]{desc_error}[/red]")
-            return 1
-        assert description_text is not None
+    description_text, desc_error = _resolve_optional_description(args)
+    if desc_error is not None:
+        console.print(f"[red]{desc_error}[/red]")
+        return 1
+    if description_text is not None:
         updates["description"] = description_text
     for value_attr, clear_attr, value_flag, clear_flag in (
         ("acceptance", "clear_acceptance", "--acceptance", "--clear-acceptance"),

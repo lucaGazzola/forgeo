@@ -129,21 +129,11 @@ _ISSUE_PROVIDER_LABELS: dict[str, str] = {
 }
 
 
-def _github_web_base(api_base: str) -> str:
-    """Derive the web base from a GitHub API base URL.
-
-    ``https://api.github.com`` → ``https://github.com``,
-    ``https://github.example.com/api/v3`` → ``https://github.example.com``,
-    otherwise the base itself when already a web URL.
-    """
-    return github_web_base(api_base)
-
-
 def _github_repo_root(config: ForgeoConfig, base: str) -> str | None:
     """The ``<web_base>/<repo>`` root for a GitHub config, or ``None``."""
     if config.github is None:
         return None
-    return f"{_github_web_base(base)}/{config.github.repo.strip('/')}"
+    return f"{github_web_base(base)}/{config.github.repo.strip('/')}"
 
 
 def _gitlab_issues_root(base: str, repo: str) -> str:

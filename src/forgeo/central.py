@@ -688,6 +688,32 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """Send the shared 404 response for an unknown route."""
             self._send_json(404, {"error": "not found"})
 
+        def _reject(self, status: int, message: str) -> None:
+            """Send a JSON ``{"error": message}`` response with ``status``.
+
+            One helper for the ``_send_json(...); return`` error epilogue
+            repeated across the instance/task/config handlers; callers
+            ``return`` its result to exit the handler, so error payloads
+            stay identical.
+            """
+            self._send_json(status, {"error": message})
+
+        def _daemon_error(self, lock: Path, status: str, exc: Exception) -> None:
+            """Send the shared 500 for a failed daemon start/stop/restart.
+
+            One helper for the identical ``except DaemonError`` epilogue in
+            ``_daemon_start``/``_daemon_stop``/``_daemon_restart``; callers
+            ``return`` its result to exit the handler.
+            """
+            self._send_json(
+                500,
+                {
+                    "status": status,
+                    "error": str(exc),
+                    "daemon_running": is_lock_held(lock),
+                },
+            )
+
         def _maybe_authorize(self, path: str) -> bool:
             """True when the request may proceed; a 401 is sent otherwise.
 
@@ -813,14 +839,14 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """The registered instance, or ``None`` after sending a 404."""
             info = get_instance(name)
             if info is None:
-                self._send_json(404, {"error": "unknown instance"})
+                self._reject(404, "unknown instance")
                 return None
             return info
 
         def _instance_config(self, info: InstanceInfo) -> ForgeoConfig | None:
             """The instance's config, or ``None`` after sending a 500."""
             if info.config is None:
-                self._send_json(500, {"error": "instance config not available"})
+                self._reject(500, "instance config not available")
                 return None
             return info.config
 
@@ -835,7 +861,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return read_tasks(info.config)
             except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
                 logger.warning("Backlog of instance %r is unavailable: %s", info.name, exc)
-                self._send_json(502, {"error": str(exc)})
+                self._reject(502, str(exc))
                 return None
 
         def _read_json_body(self) -> dict[str, Any] | None:
@@ -846,21 +872,21 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """
             raw_length = self.headers.get("Content-Length")
             if raw_length is None:
-                self._send_json(400, {"error": "request body is required"})
+                self._reject(400, "request body is required")
                 return None
             try:
                 length = int(raw_length)
             except ValueError:
-                self._send_json(400, {"error": "invalid Content-Length"})
+                self._reject(400, "invalid Content-Length")
                 return None
             body = self.rfile.read(max(length, 0))
             try:
                 payload = json.loads(body.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                self._send_json(400, {"error": "request body must be JSON"})
+                self._reject(400, "request body must be JSON")
                 return None
             if not isinstance(payload, dict):
-                self._send_json(400, {"error": "request body must be a JSON object"})
+                self._reject(400, "request body must be a JSON object")
                 return None
             return payload
 
@@ -959,15 +985,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             try:
                 pid = daemon_control.start_daemon(info.config_path, config)
             except daemon_control.DaemonError as exc:
-                self._send_json(
-                    500,
-                    {
-                        "status": "start_failed",
-                        "error": str(exc),
-                        "daemon_running": is_lock_held(lock),
-                    },
-                )
-                return
+                return self._daemon_error(lock, "start_failed", exc)
             self._send_json(
                 200,
                 {
@@ -995,15 +1013,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             try:
                 daemon_control.stop_daemon(config)
             except daemon_control.DaemonError as exc:
-                self._send_json(
-                    500,
-                    {
-                        "status": "stop_failed",
-                        "error": str(exc),
-                        "daemon_running": is_lock_held(lock),
-                    },
-                )
-                return
+                return self._daemon_error(lock, "stop_failed", exc)
             self._send_json(
                 200,
                 {
@@ -1017,15 +1027,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             try:
                 pid = daemon_control.restart_daemon(info.config_path, config)
             except daemon_control.DaemonError as exc:
-                self._send_json(
-                    500,
-                    {
-                        "status": "restart_failed",
-                        "error": str(exc),
-                        "daemon_running": is_lock_held(lock),
-                    },
-                )
-                return
+                return self._daemon_error(lock, "restart_failed", exc)
             self._send_json(
                 200,
                 {
@@ -1051,50 +1053,33 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return
             title = payload.get("title")
             if not isinstance(title, str) or not title.strip():
-                self._send_json(400, {"error": "title is required"})
-                return
+                return self._reject(400, "title is required")
             description = payload.get("description", "")
             if not isinstance(description, str) or not description.strip():
-                self._send_json(400, {"error": "description is required"})
-                return
+                return self._reject(400, "description is required")
             acceptance_criteria = payload.get("acceptance_criteria", [])
             if not isinstance(acceptance_criteria, list) or not all(
                 isinstance(criterion, str) for criterion in acceptance_criteria
             ):
-                self._send_json(
-                    400, {"error": "acceptance_criteria must be a list of strings"}
-                )
-                return
+                return self._reject(400, "acceptance_criteria must be a list of strings")
             agent_command = payload.get("agent_command")
             if agent_command is not None and (
                 not isinstance(agent_command, str) or not agent_command.strip()
             ):
-                self._send_json(
-                    400, {"error": "agent_command must be a non-blank string or null"}
-                )
-                return
+                return self._reject(400, "agent_command must be a non-blank string or null")
             run_at = payload.get("run_at")
             run_at_dt: datetime | None = None
             if run_at is not None:
                 if not isinstance(run_at, str):
-                    self._send_json(
-                        400,
-                        {"error": "run_at must be an ISO-8601 datetime string or null"},
-                    )
-                    return
+                    return self._reject(400, "run_at must be an ISO-8601 datetime string or null")
                 try:
                     run_at_dt = datetime.fromisoformat(run_at)
                 except ValueError:
-                    self._send_json(
-                        400,
-                        {"error": "run_at must be an ISO-8601 datetime string or null"},
-                    )
-                    return
+                    return self._reject(400, "run_at must be an ISO-8601 datetime string or null")
 
             review_required = payload.get("review_required")
             if review_required is not None and not isinstance(review_required, bool):
-                self._send_json(400, {"error": "review_required must be a boolean or null"})
-                return
+                return self._reject(400, "review_required must be a boolean or null")
 
             backlog = open_backlog(config)
             existing = asyncio.run(backlog.list_tasks())
@@ -1109,8 +1094,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     review_required=review_required if isinstance(review_required, bool) else None,
                 )
             except ValidationError as exc:
-                self._send_json(400, {"error": f"invalid task field(s): {exc}"})
-                return
+                return self._reject(400, f"invalid task field(s): {exc}")
             try:
                 created = asyncio.run(backlog.create_task(task))
             except ValueError:
@@ -1131,15 +1115,13 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if payload is None:
                 return
             if not payload:
-                self._send_json(400, {"error": "request body must not be empty"})
-                return
+                return self._reject(400, "request body must not be empty")
 
             backlog = open_backlog(config)
             try:
                 updated = asyncio.run(backlog.update_task(task_id, payload))
             except ValueError as exc:
-                self._send_json(400, {"error": str(exc)})
-                return
+                return self._reject(400, str(exc))
             if updated is None:
                 self._send_not_found()
                 return
@@ -1173,8 +1155,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_not_found()
                 return
             if task.status not in from_statuses:
-                self._send_json(400, {"error": error_message})
-                return
+                return self._reject(400, error_message)
             updated = asyncio.run(getattr(backlog, method)(task_id))
             assert updated is not None  # task was just found in the backlog
             self._send_json(200, updated.model_dump(mode="json"))
@@ -1207,11 +1188,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_not_found()
                 return
             if task.status not in (TaskStatus.OPEN, TaskStatus.BLOCKED, TaskStatus.REVIEW):
-                self._send_json(
-                    400,
-                    {"error": "only OPEN, BLOCKED or REVIEW tasks can be deleted"},
-                )
-                return
+                return self._reject(400, "only OPEN, BLOCKED or REVIEW tasks can be deleted")
             deleted = asyncio.run(backlog.delete_task(task_id))
             assert deleted is not None  # task was just found in the backlog
             self._send_json(200, deleted.model_dump(mode="json"))
@@ -1275,24 +1252,17 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if payload is None:
                 return
             if not payload:
-                self._send_json(400, {"error": "request body must not be empty"})
-                return
+                return self._reject(400, "request body must not be empty")
 
             incoming_name = payload.get("name")
             if incoming_name is not None and incoming_name != info.name:
-                self._send_json(
-                    400,
-                    {"error": "name is managed by the registry and cannot be changed"},
-                )
-                return
+                return self._reject(400, "name is managed by the registry and cannot be changed")
             payload["name"] = info.name
             if "telegram_bot_token" in payload:
                 if payload["telegram_bot_token"] != config.telegram_bot_token:
-                    self._send_json(
-                        400,
-                        {"error": "telegram_bot_token is not editable through the web console"},
+                    return self._reject(
+                        400, "telegram_bot_token is not editable through the web console"
                     )
-                    return
             else:
                 payload["telegram_bot_token"] = config.telegram_bot_token
             # The config form is flat, so it carries neither of these nested
@@ -1304,8 +1274,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             try:
                 config = ForgeoConfig.model_validate(payload)
             except ValidationError as exc:
-                self._send_json(400, {"error": _config_validation_message(exc)})
-                return
+                return self._reject(400, _config_validation_message(exc))
 
             saved = save_config(info.config_path, config)
             self._send_json(
@@ -1323,8 +1292,7 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
         def _handle_instance_page(self, path: str) -> None:
             name = unquote(path[len("/instances/") :]).strip("/")
             if not name or "/" in name or get_instance(name) is None:
-                self._send_json(404, {"error": "unknown instance"})
-                return
+                return self._reject(404, "unknown instance")
             self._send_static(safe_static_path(_INSTANCE_PAGE))
 
         def _handle_instance_api(self, path: str, query: dict[str, list[str]]) -> None:

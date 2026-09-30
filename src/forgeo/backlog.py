@@ -38,6 +38,7 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from forgeo.backlog_issue_base import (
+    apply_terminal_transition,
     bump_state_counter,
     extract_issue_labels,
     extract_issue_number,
@@ -45,6 +46,7 @@ from forgeo.backlog_issue_base import (
     format_state_comment,
     next_reopen_state,
     next_retry_state,
+    transition_label_update,
 )
 from forgeo.io import atomic_write_text
 from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
@@ -743,6 +745,25 @@ class IssueBacklogBase(BacklogStore):
         self._pending_comments = []
         return comments
 
+    def _prepare_terminal_state(
+        self,
+        state: dict[str, Any],
+        status: TaskStatus,
+        result: ExecutionResult,
+        reason: list[str] | None = None,
+        *,
+        previous: str | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Persist output, transition state, and compute the label update.
+
+        Shared by the marker (GitHub/GitLab) and Jira
+        ``_transition_metadata`` implementations, which ran this identical
+        preamble before their provider-specific persists.
+        """
+        _set_agent_response(state, result, self._output_cap)
+        apply_terminal_transition(state, status, reason, previous=previous)
+        return transition_label_update(status, self._labels)
+
     async def _apply_status(
         self,
         task_id: str,
@@ -847,9 +868,7 @@ class IssueBacklogBase(BacklogStore):
             if issue is None:
                 return None
             state = await self.get_engine_state(task_id)
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                state["agent_response"] = joined
+            _set_agent_response(state, result, self._output_cap)
             state["state"] = TaskStatus.REVIEW.value
             state["review_branch"] = branch
             if sha is not None:

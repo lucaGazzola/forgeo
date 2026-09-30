@@ -13,10 +13,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from forgeo.backlog import IssueBacklogBase, _join_output_logs, validate_task_updates
+from forgeo.backlog import IssueBacklogBase, validate_task_updates
 from forgeo.backlog_issue_base import (
     ENGINE_STATE_FIELDS,
-    apply_terminal_transition,
     build_task,
     claim_cutoff,
     embed_engine_state,
@@ -28,7 +27,6 @@ from forgeo.backlog_issue_base import (
     parse_numeric_issue_id,
     parse_optional_datetime,
     task_engine_state,
-    transition_label_update,
 )
 from forgeo.models import ExecutionResult, Task, TaskStatus
 
@@ -283,11 +281,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
             return None
         issue_id = str(number)
         state = await self.get_engine_state(issue_id)
-        joined = _join_output_logs(result, self._output_cap)
-        if joined is not None:
-            state["agent_response"] = joined
-        apply_terminal_transition(state, status, reason)
-        add, remove = transition_label_update(status, self._labels)
+        add, remove = self._prepare_terminal_state(state, status, result, reason)
         if status is TaskStatus.COMPLETED:
             await self._transition_state(issue_id, self.close_state)
         elif status is TaskStatus.OPEN:

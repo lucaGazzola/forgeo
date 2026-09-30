@@ -28,13 +28,11 @@ from pydantic import ValidationError
 from forgeo.backlog import (
     BacklogUnavailableError,
     IssueBacklogBase,
-    _join_output_logs,
     validate_task_updates,
 )
 from forgeo.backlog_issue_base import (
     RestTransportBase,
     adf_to_plain_text,
-    apply_terminal_transition,
     as_nonnegative_int,
     as_optional_float,
     as_optional_int,
@@ -45,7 +43,6 @@ from forgeo.backlog_issue_base import (
     parse_optional_datetime,
     plain_text_to_adf,
     require_env_token,
-    transition_label_update,
 )
 from forgeo.models import (
     ExecutionResult,
@@ -673,13 +670,13 @@ class JiraBacklog(IssueBacklogBase):
             return None
         metadata = await self._metadata(key)
         previous = metadata.get("state")
-        joined = _join_output_logs(result, self._output_cap)
-        if joined is not None:
-            metadata["agent_response"] = joined
-        apply_terminal_transition(
-            metadata, status, reason, previous=previous if isinstance(previous, str) else None
+        add, remove = self._prepare_terminal_state(
+            metadata,
+            status,
+            result,
+            reason,
+            previous=previous if isinstance(previous, str) else None,
         )
-        add, remove = transition_label_update(status, self._labels)
         if status in (TaskStatus.COMPLETED, TaskStatus.OPEN):
             destination = (
                 self.config.workflow.completed_status

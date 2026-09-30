@@ -247,22 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run exactly one specific OPEN task by id and exit.",
     )
     _add_config_or_name(run_parser)
-    run_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the OPEN task to run now (triage: rerun a FAILED task "
+    _add_task_id_args(
+        run_parser,
+        "Id of the OPEN task to run now (triage: rerun a FAILED task "
         "after reopening it, or try a risky task immediately). "
         "May be passed positionally instead. Short ids work: 3, TASK-3 "
         "or #3 for TASK-003.",
-    )
-    run_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3 or #3 work).",
+        "Task id, positional shorthand for --task (3, TASK-3 or #3 work).",
     )
     run_parser.add_argument(
         "--reopen",
@@ -375,20 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
         "when no id is given; never starts an agent).",
     )
     _add_config_or_name(task_show_parser)
-    task_show_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work; "
+    _add_task_id_args(
+        task_show_parser,
+        "Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work; "
         "omit both to show the next task the scheduler would pick).",
-    )
-    task_show_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work; "
         "omit both to show the next task the scheduler would pick).",
     )
 
@@ -396,19 +378,10 @@ def build_parser() -> argparse.ArgumentParser:
         "edit", help="Update a task's fields in place (never starts an agent)."
     )
     _add_config_or_name(task_edit_parser)
-    task_edit_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the task to update (or pass it positionally; 3, TASK-3, #3 work).",
-    )
-    task_edit_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+    _add_task_id_args(
+        task_edit_parser,
+        "Id of the task to update (or pass it positionally; 3, TASK-3, #3 work).",
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
     task_edit_parser.add_argument("--title", default=None, help="New task title.")
     task_edit_parser.add_argument(
@@ -489,20 +462,11 @@ def build_parser() -> argparse.ArgumentParser:
         "reopen", help="Move a BLOCKED or FAILED task back to OPEN."
     )
     _add_config_or_name(task_reopen_parser)
-    task_reopen_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work; "
+    _add_task_id_args(
+        task_reopen_parser,
+        "Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work; "
         "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
-    )
-    task_reopen_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work; "
         "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
     )
     task_reopen_parser.add_argument(
@@ -516,20 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
         "rm", help="Delete a task from the backlog (never starts an agent)."
     )
     _add_config_or_name(task_rm_parser)
-    task_rm_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the task to delete (typos, duplicates, or tasks that "
+    _add_task_id_args(
+        task_rm_parser,
+        "Id of the task to delete (typos, duplicates, or tasks that "
         "will never be done). Or pass it positionally (3, TASK-3, #3 work).",
-    )
-    task_rm_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_complete_review_parser = task_sub.add_parser(
@@ -538,20 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
         "(never starts an agent).",
     )
     _add_config_or_name(task_complete_review_parser)
-    task_complete_review_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the REVIEW task to mark COMPLETED (merge its "
+    _add_task_id_args(
+        task_complete_review_parser,
+        "Id of the REVIEW task to mark COMPLETED (merge its "
         "review branch first). Or pass it positionally (3, TASK-3, #3 work).",
-    )
-    task_complete_review_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     task_request_changes_parser = task_sub.add_parser(
@@ -560,19 +506,10 @@ def build_parser() -> argparse.ArgumentParser:
         "(never starts an agent).",
     )
     _add_config_or_name(task_request_changes_parser)
-    task_request_changes_parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help="Id of the REVIEW task to send back to OPEN. Or pass it positionally (3, TASK-3, #3 work).",
-    )
-    task_request_changes_parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+    _add_task_id_args(
+        task_request_changes_parser,
+        "Id of the REVIEW task to send back to OPEN. Or pass it positionally (3, TASK-3, #3 work).",
+        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
     status_parser = sub.add_parser(
@@ -846,6 +783,33 @@ def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Registered instance name resolved from the registry "
         "(see `forgeo instance`).",
+    )
+
+
+def _add_task_id_args(
+    parser: argparse.ArgumentParser, flag_help: str, positional_help: str
+) -> None:
+    """Add the shared ``--task``/``TASK_ID`` positional id pair.
+
+    Seven subcommands (``run``, ``task show/edit/reopen/rm/complete-review/
+    request-changes``) accept the same task id either as ``--task`` or
+    positionally, with short ids (``3``, ``TASK-3``, ``#3``) resolved later.
+    The help texts stay per-command, so this helper only removes the
+    structural duplication.
+    """
+    parser.add_argument(
+        "--task",
+        required=False,
+        default=None,
+        metavar="TASK_ID",
+        help=flag_help,
+    )
+    parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help=positional_help,
     )
 
 
@@ -1302,6 +1266,33 @@ _TASK_SHORTHAND_PREFIX_RE = re.compile(r"^task-(\d+)$", re.IGNORECASE)
 _TASK_SHORTHAND_NUM_RE = re.compile(r"^\d+$")
 
 
+def _resolve_flag_or_positional(
+    args: argparse.Namespace,
+    flag_attr: str,
+    pos_attr: str,
+    missing_error: str,
+    both_error: str,
+    blank_error: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve a value passed either as a flag or positionally.
+
+    Returns ``(value, error)`` — exactly one is set. ``blank_error`` names
+    the error for a whitespace-only value; when ``None`` a blank value
+    reports ``missing_error``. ``getattr`` defaults keep hand-built
+    ``argparse.Namespace`` objects in tests working.
+    """
+    flag = getattr(args, flag_attr, None)
+    pos = getattr(args, pos_attr, None)
+    if flag is not None and pos is not None:
+        return None, both_error
+    value = flag if flag is not None else pos
+    if value is None:
+        return None, missing_error
+    if not str(value).strip():
+        return None, blank_error if blank_error is not None else missing_error
+    return str(value).strip(), None
+
+
 def _resolve_task_id(args: argparse.Namespace) -> tuple[str | None, str | None]:
     """Resolve a task id from ``--task`` or its positional shorthand.
 
@@ -1310,14 +1301,13 @@ def _resolve_task_id(args: argparse.Namespace) -> tuple[str | None, str | None]:
     ``getattr`` defaults keep hand-built ``argparse.Namespace`` objects in
     tests (which predate the positional) working.
     """
-    flag = getattr(args, "task", None)
-    pos = getattr(args, "task_id", None)
-    if flag is not None and pos is not None:
-        return None, "Pass either --task TASK_ID or TASK_ID positionally, not both."
-    value = flag if flag is not None else pos
-    if value is None or not str(value).strip():
-        return None, "Missing task id: pass --task TASK_ID or TASK_ID positionally."
-    return str(value).strip(), None
+    return _resolve_flag_or_positional(
+        args,
+        "task",
+        "task_id",
+        "Missing task id: pass --task TASK_ID or TASK_ID positionally.",
+        "Pass either --task TASK_ID or TASK_ID positionally, not both.",
+    )
 
 
 def _expand_task_id_shorthand(raw_id: str) -> str:
@@ -1340,6 +1330,16 @@ def _expand_task_id_shorthand(raw_id: str) -> str:
     return text
 
 
+def _task_id_candidates(raw_id: str) -> list[str]:
+    """Exact id first, then the shorthand-expanded form (deduped).
+
+    Native issue ids (``42``) keep working because the exact form wins;
+    short ``TASK`` ids (``3``/``#3``/``TASK-3``) fall back to ``TASK-003``.
+    """
+    expanded = _expand_task_id_shorthand(raw_id)
+    return [raw_id] if expanded == raw_id else [raw_id, expanded]
+
+
 async def _resolve_backlog_task_id(backlog: Any, raw_id: str) -> tuple[str, Any | None]:
     """Resolve ``raw_id`` to the backlog's real id, honoring shorthand.
 
@@ -1348,12 +1348,8 @@ async def _resolve_backlog_task_id(backlog: Any, raw_id: str) -> tuple[str, Any 
     ``(actual_id, task)`` — ``task`` is ``None`` when neither form exists,
     in which case ``actual_id`` is ``raw_id`` for error messages.
     """
-    task = await backlog.get_task(raw_id)
-    if task is not None:
-        return task.id, task
-    expanded = _expand_task_id_shorthand(raw_id)
-    if expanded != raw_id:
-        task = await backlog.get_task(expanded)
+    for candidate in _task_id_candidates(raw_id):
+        task = await backlog.get_task(candidate)
         if task is not None:
             return task.id, task
     return raw_id, None
@@ -1365,13 +1361,9 @@ def _match_listed_task_id(tasks: list[Any], raw_id: str) -> Any | None:
     Exact match wins (native issue ids keep working); falls back to the
     expanded ``TASK-###`` form.
     """
-    for task in tasks:
-        if task.id == raw_id:
-            return task
-    expanded = _expand_task_id_shorthand(raw_id)
-    if expanded != raw_id:
+    for candidate in _task_id_candidates(raw_id):
         for task in tasks:
-            if task.id == expanded:
+            if task.id == candidate:
                 return task
     return None
 
@@ -1381,16 +1373,14 @@ def _resolve_task_title(args: argparse.Namespace) -> tuple[str | None, str | Non
 
     Returns ``(title, error)`` — exactly one is set.
     """
-    flag = getattr(args, "title", None)
-    pos = getattr(args, "title_pos", None)
-    if flag is not None and pos is not None:
-        return None, "Pass either --title TITLE or TITLE positionally, not both."
-    value = flag if flag is not None else pos
-    if value is None:
-        return None, "Missing title: pass --title TITLE or TITLE positionally."
-    if not str(value).strip():
-        return None, "--title must not be blank (pass --title TITLE or TITLE positionally)."
-    return str(value).strip(), None
+    return _resolve_flag_or_positional(
+        args,
+        "title",
+        "title_pos",
+        "Missing title: pass --title TITLE or TITLE positionally.",
+        "Pass either --title TITLE or TITLE positionally, not both.",
+        blank_error="--title must not be blank (pass --title TITLE or TITLE positionally).",
+    )
 
 
 def _resolve_run_at(value: str | None) -> str | None:

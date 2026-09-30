@@ -1,40 +1,21 @@
-"""OAuth / browser-assisted authentication for GitHub.
-
-GitHub traditionally uses a PAT stored in an environment variable
-(``token_env``).  Browser login adds an OAuth alternative:
-
-* **Device flow** (preferred for CLI): no client secret, no redirect
-  server.  The CLI asks ``https://github.com/login/device/code`` for a
-  ``user_code``/``verification_uri``, prints them, polls
-  ``https://github.com/login/oauth/access_token`` until the user
-  approves in the browser.
-
-* **Browser (auth-code+PKCE) flow**: opens
-  ``https://github.com/login/oauth/authorize`` in the user's browser,
-  listens on a loopback ``http://127.0.0.1:0/callback`` for the code,
-  exchanges it for a token.
-
-Both flows persist the token to a file outside ``forgeo.yaml`` (``0600``)
-and are read by :class:`GithubClient` at request time, mirroring the
-``oauth.py`` client-credentials provider but file-backed.
-"""
+"""OAuth / browser-assisted authentication for GitHub."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from forgeo.oauth_common import (
     DEFAULT_DEVICE_POLL_INTERVAL,
     DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
     DEFAULT_TOKEN_DIR,
     EXPIRY_MARGIN_SECONDS,
-    CachedFileTokenProvider,
     github_web_base,
     host_token_path,
     make_browser_flow,
     make_callback_handler,
+    make_device_code_request,
     make_device_flow,
+    make_file_token_provider,
     make_poll_device_token,
     make_post_form,
     make_token_store,
@@ -67,27 +48,16 @@ def github_oauth_base(api_base: str) -> str:
 GithubTokenStore = make_token_store(github_default_token_path)
 
 
-class GithubOAuthTokenProvider(CachedFileTokenProvider):
-    """File-backed, cached token for ``GithubClient``."""
-
-    error_cls = GithubOAuthError
-    missing_message = (
-        "GitHub OAuth token not found at {path}; run `forgeo auth login --provider github` or set a PAT."
-    )
+GithubOAuthTokenProvider = make_file_token_provider(
+    GithubOAuthError,
+    "GitHub OAuth token not found at {path}; run `forgeo auth login --provider github` or set a PAT.",
+)
 
 
 _post_form = make_post_form(GithubOAuthError, "GitHub OAuth")
 
 
-def request_device_code(
-    client_id: str, oauth_base: str, scope: str | None = None, *, timeout: float = 30.0
-) -> dict[str, Any]:
-    """Ask GitHub for a device code; returns the JSON payload."""
-    url = f"{oauth_base.rstrip('/')}/login/device/code"
-    fields: dict[str, str] = {"client_id": client_id}
-    if scope:
-        fields["scope"] = scope
-    return _post_form(url, fields, timeout=timeout)
+request_device_code = make_device_code_request(GithubOAuthError, "GitHub", "/login/device/code")
 
 
 poll_device_token = make_poll_device_token(GithubOAuthError, "/login/oauth/access_token")

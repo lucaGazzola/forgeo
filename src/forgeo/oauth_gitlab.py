@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from forgeo.oauth_common import (
     DEFAULT_DEVICE_POLL_INTERVAL,
     DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
     DEFAULT_TOKEN_DIR,
     EXPIRY_MARGIN_SECONDS,
-    CachedFileTokenProvider,
     host_token_path,
     make_browser_flow,
     make_callback_handler,
+    make_device_code_request,
     make_device_flow,
+    make_file_token_provider,
     make_poll_device_token,
     make_post_form,
     make_token_store,
@@ -48,41 +48,18 @@ def gitlab_oauth_base(api_base: str) -> str:
 GitlabTokenStore = make_token_store(gitlab_default_token_path)
 
 
-class GitlabOAuthTokenProvider(CachedFileTokenProvider):
-    """File-backed, cached token for GitlabClient."""
-
-    error_cls = GitlabOAuthError
-    missing_message = (
-        "GitLab OAuth token not found at {path}; run `forgeo auth login --provider gitlab` or set a PAT."
-    )
+GitlabOAuthTokenProvider = make_file_token_provider(
+    GitlabOAuthError,
+    "GitLab OAuth token not found at {path}; run `forgeo auth login --provider gitlab` or set a PAT.",
+)
 
 
 _post_form = make_post_form(GitlabOAuthError, "GitLab OAuth")
 
 
-def request_device_code(
-    client_id: str, oauth_base: str, scope: str | None = None, *, timeout: float = 30.0
-) -> dict[str, Any]:
-    # GitLab device flow endpoint: /oauth/authorize_device (if enabled) or fallback to /oauth/device/code
-    # Try standard RFC8628 endpoint first: /oauth/device/code
-    urls = [
-        f"{oauth_base.rstrip('/')}/oauth/device/code",
-        f"{oauth_base.rstrip('/')}/oauth/authorize_device",
-    ]
-    last: Exception | None = None
-    for url in urls:
-        try:
-            fields: dict[str, str] = {"client_id": client_id}
-            if scope:
-                fields["scope"] = scope
-            return _post_form(url, fields, timeout=timeout)
-        except GitlabOAuthError as exc:
-            last = exc
-            # try next url on 404
-            if "404" in str(exc):
-                continue
-            raise
-    raise GitlabOAuthError(f"GitLab device flow not available at {oauth_base}: {last}") from last
+request_device_code = make_device_code_request(
+    GitlabOAuthError, "GitLab", "/oauth/device/code", "/oauth/authorize_device"
+)
 
 
 poll_device_token = make_poll_device_token(GitlabOAuthError, "/oauth/token")

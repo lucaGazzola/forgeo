@@ -13,8 +13,14 @@ from typing import Any
 import pytest
 
 from forgeo.backlog import open_backlog
-from forgeo.backlog_github import GithubBacklog, GithubClient, GithubRequestError
-from forgeo.backlog_gitlab import GitlabBacklog, GitlabClient, GitlabRequestError
+from forgeo.backlog_issues import (
+    GithubBacklog,
+    GithubClient,
+    GithubRequestError,
+    GitlabBacklog,
+    GitlabClient,
+    GitlabRequestError,
+)
 from forgeo.forgeo import Forgeo
 from forgeo.git import GitManager
 from forgeo.models import (

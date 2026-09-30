@@ -1097,12 +1097,12 @@ def _provider_factory(config: ForgeoConfig) -> BacklogStore:
         assert config.jira is not None
         return JiraBacklog(str(config.backlog), config.jira, output_cap=cap)
     if provider == "github":
-        from forgeo.backlog_github import GithubBacklog
+        from forgeo.backlog_issues import GithubBacklog
 
         assert config.github is not None
         return GithubBacklog(str(config.backlog), config.github, output_cap=cap)
     if provider == "gitlab":
-        from forgeo.backlog_gitlab import GitlabBacklog
+        from forgeo.backlog_issues import GitlabBacklog
 
         assert config.gitlab is not None
         return GitlabBacklog(str(config.backlog), config.gitlab, output_cap=cap)

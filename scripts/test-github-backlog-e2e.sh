@@ -72,7 +72,7 @@ echo "Verifying via forgeo Python client..."
 "$PYTHON" -c "
 import asyncio, time
 from forgeo.models import GithubBacklogConfig
-from forgeo.backlog_github import GithubClient, GithubBacklog
+from forgeo.backlog_issues import GithubClient, GithubBacklog
 async def main():
     cfg=GithubBacklogConfig(auth={'token_env':'GITHUB_TOKEN'}, repo='$REPO')
     client=GithubClient('https://api.github.com', cfg)
@@ -103,7 +103,7 @@ echo "Running lifecycle via forgeo Python client (claim/block/reopen/fail/retry/
 "$PYTHON" <<PY
 import asyncio, subprocess, json, os
 from forgeo.models import GithubBacklogConfig, TaskStatus
-from forgeo.backlog_github import GithubClient, GithubBacklog
+from forgeo.backlog_issues import GithubClient, GithubBacklog
 from forgeo.models import ExecutionResult, ExecutionStatus
 
 REPO=os.environ.get("REPO", "$REPO")
@@ -179,7 +179,7 @@ gh issue edit "$ISSUE_NUM" --repo "$REPO" --add-label forgeo-blocked >/dev/null
 "$PYTHON" -c "
 import asyncio
 from forgeo.models import GithubBacklogConfig, TaskStatus
-from forgeo.backlog_github import GithubClient, GithubBacklog
+from forgeo.backlog_issues import GithubClient, GithubBacklog
 async def main():
     cfg=GithubBacklogConfig(auth={'token_env':'GITHUB_TOKEN'}, repo='$REPO')
     client=GithubClient('https://api.github.com', cfg)
@@ -193,7 +193,7 @@ gh issue edit "$ISSUE_NUM" --repo "$REPO" --remove-label forgeo-blocked --add-la
 "$PYTHON" -c "
 import asyncio
 from forgeo.models import GithubBacklogConfig, TaskStatus
-from forgeo.backlog_github import GithubClient, GithubBacklog
+from forgeo.backlog_issues import GithubClient, GithubBacklog
 async def main():
     cfg=GithubBacklogConfig(auth={'token_env':'GITHUB_TOKEN'}, repo='$REPO')
     client=GithubClient('https://api.github.com', cfg)
@@ -208,7 +208,7 @@ gh issue close "$ISSUE_NUM" --repo "$REPO" --reason completed >/dev/null
 "$PYTHON" -c "
 import asyncio
 from forgeo.models import GithubBacklogConfig, TaskStatus
-from forgeo.backlog_github import GithubClient, GithubBacklog
+from forgeo.backlog_issues import GithubClient, GithubBacklog
 async def main():
     cfg=GithubBacklogConfig(auth={'token_env':'GITHUB_TOKEN'}, repo='$REPO')
     client=GithubClient('https://api.github.com', cfg)

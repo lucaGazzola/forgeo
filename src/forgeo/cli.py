@@ -2986,6 +2986,120 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
     return resolved
 
 
+_AUTH_LABELS: dict[str, str] = {
+    "github": "GitHub",
+    "gitlab": "GitLab",
+    "jira": "Jira",
+}
+
+
+def _normalize_auth_provider(provider: str) -> str:
+    """Map ``provider`` to a known key, falling back to ``github``.
+
+    The login/status/logout commands historically treated any unknown
+    provider as GitHub; preserve that instead of erroring.
+    """
+    if provider in _OAUTH_PARAM_DEFAULTS:
+        return provider
+    return "github"
+
+
+def _resolve_auth_store(provider: str, args: argparse.Namespace) -> Any:
+    """Build the OAuth token store for ``provider``.
+
+    Shared preamble of ``auth status``/``auth logout``: resolves the token
+    file and API base from CLI args, falling back to the provider's config
+    section and built-in defaults.
+    """
+    key = _normalize_auth_provider(provider)
+    store_cls: Any
+    if key == "gitlab":
+        from forgeo.oauth_gitlab import GitlabTokenStore
+
+        store_cls = GitlabTokenStore
+    elif key == "jira":
+        from forgeo.oauth_jira import JiraTokenStore
+
+        store_cls = JiraTokenStore
+    else:
+        from forgeo.oauth_github import GithubTokenStore
+
+        store_cls = GithubTokenStore
+    api_base = getattr(args, "api_base", None)
+    token_file_arg = getattr(args, "token_file", None)
+    config_path = _auth_config_path(args)
+    if token_file_arg is None and config_path is not None:
+        try:
+            cfg = load_config(Path(config_path))
+            provider_cfg = getattr(cfg, key, None)
+            oauth = provider_cfg.auth.oauth if provider_cfg is not None and provider_cfg.auth is not None else None
+            if oauth is not None and oauth.token_file is not None:
+                token_file_arg = Path(oauth.token_file)
+            if api_base is None and isinstance(cfg.backlog, str):
+                api_base = cfg.backlog
+        except Exception:
+            pass
+    if api_base is None:
+        api_base = _OAUTH_PARAM_DEFAULTS[key]["api_base"]
+    if token_file_arg is not None:
+        return store_cls(path=token_file_arg, api_base=api_base)
+    return store_cls(api_base=api_base)
+
+
+def _cmd_auth_login_flow(
+    *,
+    label: str,
+    provider_key: str,
+    args: argparse.Namespace,
+    error_cls: type[BaseException],
+    store_cls: Any,
+    oauth_base_fn: Any,
+    browser_flow: Any,
+    device_flow: Any,
+) -> int:
+    """Run a browser/device OAuth flow for GitHub or GitLab and store the token."""
+    params = _resolve_oauth_params(provider_key, args)
+    if params is None:
+        return 1
+    api_base = params["api_base"]
+    client_id = params["client_id"]
+    flow = params["flow"]
+    scope = params["scope"]
+    token_file = params["token_file"]
+    callback_port = params["callback_port"]
+    client_secret = params["client_secret"]
+    oauth_base = oauth_base_fn(api_base)
+    console.print(f"[bold]{label} auth[/bold]: provider={provider_key} api_base={api_base} oauth_base={oauth_base} flow={flow}")
+    try:
+        if flow == "browser":
+            token_data = browser_flow(
+                client_id,
+                oauth_base,
+                scope,
+                client_secret=client_secret,
+                open_browser=not getattr(args, "no_open_browser", False),
+                callback_port=callback_port,
+            )
+        else:
+            token_data = device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
+    except error_cls as exc:
+        console.print(f"[red]{label} login failed: {exc}[/red]")
+        return 1
+    except KeyboardInterrupt:
+        console.print("[yellow]Login cancelled.[/yellow]")
+        return 130
+    try:
+        store = store_cls(path=token_file, api_base=api_base)
+        store.save(token_data)
+        console.print(f"[green]{label} token saved to {store.path} (0600).[/green]")
+        console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
+        console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
+    except OSError as exc:
+        console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
+        return 1
+    return 0
+
+
 def cmd_auth(args: argparse.Namespace) -> int:
     action = getattr(args, "auth_action", None)
     if action == "login":
@@ -3010,46 +3124,16 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
             run_device_flow,
         )
 
-        gitlab_params = _resolve_oauth_params("gitlab", args)
-        if gitlab_params is None:
-            return 1
-        api_base = gitlab_params["api_base"]
-        client_id = gitlab_params["client_id"]
-        flow = gitlab_params["flow"]
-        scope = gitlab_params["scope"]
-        token_file = gitlab_params["token_file"]
-        callback_port = gitlab_params["callback_port"]
-        client_secret = gitlab_params["client_secret"]
-        oauth_base = gitlab_oauth_base(api_base)
-        console.print(f"[bold]GitLab auth[/bold]: provider=gitlab api_base={api_base} oauth_base={oauth_base} flow={flow}")
-        try:
-            if flow == "browser":
-                token_data = run_browser_flow(
-                    client_id,
-                    oauth_base,
-                    scope,
-                    client_secret=client_secret,
-                    open_browser=not getattr(args, "no_open_browser", False),
-                    callback_port=callback_port,
-                )
-            else:
-                token_data = run_device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
-        except GitlabOAuthError as exc:
-            console.print(f"[red]GitLab login failed: {exc}[/red]")
-            return 1
-        except KeyboardInterrupt:
-            console.print("[yellow]Login cancelled.[/yellow]")
-            return 130
-        try:
-            store = GitlabTokenStore(path=token_file, api_base=api_base)
-            store.save(token_data)
-            console.print(f"[green]GitLab token saved to {store.path} (0600).[/green]")
-            console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
-            console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
-        except OSError as exc:
-            console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
-            return 1
-        return 0
+        return _cmd_auth_login_flow(
+            label="GitLab",
+            provider_key="gitlab",
+            args=args,
+            error_cls=GitlabOAuthError,
+            store_cls=GitlabTokenStore,
+            oauth_base_fn=gitlab_oauth_base,
+            browser_flow=run_browser_flow,
+            device_flow=run_device_flow,
+        )
     if provider == "jira":
         from forgeo.oauth_jira import (
             JiraOAuthError,
@@ -3091,7 +3175,7 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
             console.print("[yellow]Login cancelled.[/yellow]")
             return 130
         try:
-            store = JiraTokenStore(path=token_file, api_base=api_base)  # type: ignore[assignment]
+            store = JiraTokenStore(path=token_file, api_base=api_base)
             store.save(token_data)
             console.print(f"[green]Jira token saved to {store.path} (0600).[/green]")
             if token_data.get("cloud_id"):
@@ -3110,256 +3194,55 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
         run_device_flow,
     )
 
-    github_params = _resolve_oauth_params("github", args)
-    if github_params is None:
-        return 1
-    api_base = github_params["api_base"]
-    client_id = github_params["client_id"]
-    flow = github_params["flow"]
-    scope = github_params["scope"]
-    token_file = github_params["token_file"]
-    callback_port = github_params["callback_port"]
-    client_secret = github_params["client_secret"]
-    oauth_base = github_oauth_base(api_base)
-    console.print(f"[bold]GitHub auth[/bold]: provider=github api_base={api_base} oauth_base={oauth_base} flow={flow}")
-
-    try:
-        if flow == "browser":
-            token_data = run_browser_flow(
-                client_id,
-                oauth_base,
-                scope,
-                client_secret=client_secret,
-                open_browser=not getattr(args, "no_open_browser", False),
-                callback_port=callback_port,
-            )
-        else:
-            token_data = run_device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
-    except GithubOAuthError as exc:
-        console.print(f"[red]GitHub login failed: {exc}[/red]")
-        return 1
-    except KeyboardInterrupt:
-        console.print("[yellow]Login cancelled.[/yellow]")
-        return 130
-
-    # Persist
-    try:
-        store = GithubTokenStore(path=token_file, api_base=api_base)  # type: ignore[assignment]
-        store.save(token_data)
-        console.print(f"[green]GitHub token saved to {store.path} (0600).[/green]")
-        console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
-        console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
-    except OSError as exc:
-        console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
-        return 1
-    return 0
+    return _cmd_auth_login_flow(
+        label="GitHub",
+        provider_key="github",
+        args=args,
+        error_cls=GithubOAuthError,
+        store_cls=GithubTokenStore,
+        oauth_base_fn=github_oauth_base,
+        browser_flow=run_browser_flow,
+        device_flow=run_device_flow,
+    )
 
 
 def cmd_auth_status(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth status``: show token presence/expiry."""
     provider = getattr(args, "provider", "github")
-    if provider == "gitlab":
-        from forgeo.oauth_gitlab import GitlabTokenStore
-
-        api_base = getattr(args, "api_base", None)
-        token_file_arg = getattr(args, "token_file", None)
-        config_path = _auth_config_path(args)
-        if token_file_arg is None and config_path is not None:
-            from pathlib import Path as _P
-
-            from forgeo.config import load_config
-
-            try:
-                cfg = load_config(_P(config_path))
-                if cfg.gitlab is not None and cfg.gitlab.auth.oauth is not None and cfg.gitlab.auth.oauth.token_file is not None:
-                    token_file_arg = _P(cfg.gitlab.auth.oauth.token_file)
-                if api_base is None and isinstance(cfg.backlog, str):
-                    api_base = cfg.backlog
-            except Exception:
-                pass
-        if api_base is None:
-            api_base = "https://gitlab.com"
-        store = GitlabTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GitlabTokenStore(api_base=api_base)
-        data = store.load()
-        if data is None:
-            console.print(f"[yellow]No GitLab token found at {store.path}.[/yellow]", soft_wrap=True)
-            console.print("[dim]Run `forgeo auth login --provider gitlab --client-id <id>` .[/dim]")
-            return 1
-        token = str(data.get("access_token", ""))
-        masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
-        expires = data.get("expires_in")
-        scope = data.get("scope") or ""
-        console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
-        console.print(f"  token: {masked}")
-        if scope:
-            console.print(f"  scope: {scope}")
-        if isinstance(expires, int | float):
-            console.print(f"  expires_in: {expires}s")
-        else:
-            console.print("  expires: never")
-        return 0
-    if provider == "jira":
-        from forgeo.oauth_jira import JiraTokenStore
-
-        api_base = getattr(args, "api_base", None)
-        token_file_arg = getattr(args, "token_file", None)
-        config_path = _auth_config_path(args)
-        if token_file_arg is None and config_path is not None:
-            from pathlib import Path as _P
-
-            from forgeo.config import load_config
-
-            try:
-                cfg = load_config(_P(config_path))
-                if cfg.jira is not None and cfg.jira.auth.oauth is not None and cfg.jira.auth.oauth.token_file is not None:
-                    token_file_arg = _P(cfg.jira.auth.oauth.token_file)
-                if api_base is None and isinstance(cfg.backlog, str):
-                    api_base = cfg.backlog
-            except Exception:
-                pass
-        if api_base is None:
-            api_base = "https://jira.example.com"
-        store = JiraTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else JiraTokenStore(api_base=api_base)  # type: ignore[assignment]
-        data = store.load()
-        if data is None:
-            console.print(f"[yellow]No Jira token found at {store.path}.[/yellow]", soft_wrap=True)
-            console.print("[dim]Run `forgeo auth login --provider jira --client-id <id>` .[/dim]")
-            return 1
-        token = str(data.get("access_token", ""))
-        masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
-        expires = data.get("expires_in")
-        scope = data.get("scope") or ""
-        cloud_id = data.get("cloud_id") or ""
-        console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
-        console.print(f"  token: {masked}")
-        if cloud_id:
-            console.print(f"  cloud_id: {cloud_id}")
-        if scope:
-            console.print(f"  scope: {scope}")
-        if isinstance(expires, int | float):
-            console.print(f"  expires_in: {expires}s")
-        else:
-            console.print("  expires: never")
-        return 0
-    from forgeo.oauth_github import GithubTokenStore
-
-    api_base = getattr(args, "api_base", None)
-    token_file_arg = getattr(args, "token_file", None)
-    config_path = _auth_config_path(args)
-    if token_file_arg is None and config_path is not None:
-        from pathlib import Path as _P
-
-        from forgeo.config import load_config
-
-        try:
-            cfg = load_config(_P(config_path))
-            if cfg.github is not None and cfg.github.auth.oauth is not None and cfg.github.auth.oauth.token_file is not None:
-                token_file_arg = _P(cfg.github.auth.oauth.token_file)
-            if api_base is None and isinstance(cfg.backlog, str):
-                api_base = cfg.backlog
-        except Exception:
-            pass
-    if api_base is None:
-        api_base = "https://api.github.com"
-    store = GithubTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GithubTokenStore(api_base=api_base)  # type: ignore[assignment]
+    key = _normalize_auth_provider(provider)
+    label = _AUTH_LABELS[key]
+    store = _resolve_auth_store(key, args)
     data = store.load()
     if data is None:
-        console.print(f"[yellow]No GitHub token found at {store.path}.[/yellow]", soft_wrap=True)
-        console.print("[dim]Run `forgeo auth login --provider github --client-id <id>` .[/dim]")
+        console.print(f"[yellow]No {label} token found at {store.path}.[/yellow]", soft_wrap=True)
+        console.print(f"[dim]Run `forgeo auth login --provider {key} --client-id <id>` .[/dim]")
         return 1
     token = str(data.get("access_token", ""))
     masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "****"
     expires = data.get("expires_in")
-    scope = data.get("scope") or data.get("scope", "")
+    scope = data.get("scope") or ""
     console.print(f"[green]Token found[/green] at {store.path}", soft_wrap=True)
     console.print(f"  token: {masked}")
+    if key == "jira":
+        cloud_id = data.get("cloud_id") or ""
+        if cloud_id:
+            console.print(f"  cloud_id: {cloud_id}")
     if scope:
         console.print(f"  scope: {scope}")
     if isinstance(expires, int | float):
         console.print(f"  expires_in: {expires}s")
-    else:
+    elif key == "github":
         console.print("  expires: never (GitHub classic token)")
+    else:
+        console.print("  expires: never")
     return 0
 
 
 def cmd_auth_logout(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth logout``: delete stored token."""
     provider = getattr(args, "provider", "github")
-    if provider == "gitlab":
-        from forgeo.oauth_gitlab import GitlabTokenStore
-
-        api_base = getattr(args, "api_base", None)
-        token_file_arg = getattr(args, "token_file", None)
-        config_path = _auth_config_path(args)
-        if token_file_arg is None and config_path is not None:
-            from pathlib import Path as _P
-
-            from forgeo.config import load_config
-
-            try:
-                cfg = load_config(_P(config_path))
-                if cfg.gitlab is not None and cfg.gitlab.auth.oauth is not None and cfg.gitlab.auth.oauth.token_file is not None:
-                    token_file_arg = _P(cfg.gitlab.auth.oauth.token_file)
-                if api_base is None and isinstance(cfg.backlog, str):
-                    api_base = cfg.backlog
-            except Exception:
-                pass
-        if api_base is None:
-            api_base = "https://gitlab.com"
-        store = GitlabTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GitlabTokenStore(api_base=api_base)
-        if store.clear():
-            console.print(f"[green]Removed token at {store.path}.[/green]")
-            return 0
-        console.print(f"[yellow]No token to remove at {store.path}.[/yellow]")
-        return 1
-    if provider == "jira":
-        from forgeo.oauth_jira import JiraTokenStore
-
-        api_base = getattr(args, "api_base", None)
-        token_file_arg = getattr(args, "token_file", None)
-        config_path = _auth_config_path(args)
-        if token_file_arg is None and config_path is not None:
-            from pathlib import Path as _P
-
-            from forgeo.config import load_config
-
-            try:
-                cfg = load_config(_P(config_path))
-                if cfg.jira is not None and cfg.jira.auth.oauth is not None and cfg.jira.auth.oauth.token_file is not None:
-                    token_file_arg = _P(cfg.jira.auth.oauth.token_file)
-                if api_base is None and isinstance(cfg.backlog, str):
-                    api_base = cfg.backlog
-            except Exception:
-                pass
-        if api_base is None:
-            api_base = "https://jira.example.com"
-        store = JiraTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else JiraTokenStore(api_base=api_base)  # type: ignore[assignment]
-        if store.clear():
-            console.print(f"[green]Removed token at {store.path}.[/green]")
-            return 0
-        console.print(f"[yellow]No token to remove at {store.path}.[/yellow]")
-        return 1
-    from forgeo.oauth_github import GithubTokenStore
-
-    api_base = getattr(args, "api_base", None)
-    token_file_arg = getattr(args, "token_file", None)
-    config_path = _auth_config_path(args)
-    if token_file_arg is None and config_path is not None:
-        from pathlib import Path as _P
-
-        from forgeo.config import load_config
-
-        try:
-            cfg = load_config(_P(config_path))
-            if cfg.github is not None and cfg.github.auth.oauth is not None and cfg.github.auth.oauth.token_file is not None:
-                token_file_arg = _P(cfg.github.auth.oauth.token_file)
-            if api_base is None and isinstance(cfg.backlog, str):
-                api_base = cfg.backlog
-        except Exception:
-            pass
-    if api_base is None:
-        api_base = "https://api.github.com"
-    store = GithubTokenStore(path=token_file_arg, api_base=api_base) if token_file_arg is not None else GithubTokenStore(api_base=api_base)  # type: ignore[assignment]
+    key = _normalize_auth_provider(provider)
+    store = _resolve_auth_store(key, args)
     if store.clear():
         console.print(f"[green]Removed token at {store.path}.[/green]")
         return 0

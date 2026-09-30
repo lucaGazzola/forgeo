@@ -42,6 +42,7 @@ from forgeo.backlog_issue_base import (
     extract_issue_labels,
     extract_issue_number,
     forgeo_labels,
+    format_state_comment,
 )
 from forgeo.io import atomic_write_text
 from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
@@ -635,6 +636,8 @@ class IssueBacklogBase(BacklogStore):
         # All issue configs expose ``label_prefix``; duck-type for shared base.
         return forgeo_labels(self.config.label_prefix)  # type: ignore[attr-defined]
 
+    _pending_comments: list[tuple[Any, str]] = []
+
     async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Run a blocking client call without blocking the event loop."""
         return await asyncio.to_thread(function, *args, **kwargs)
@@ -685,14 +688,99 @@ class IssueBacklogBase(BacklogStore):
         """Shared health check: a search must succeed."""
         await self._search_all()
 
+    async def _transition_metadata(
+        self,
+        issue: dict[str, Any],
+        status: TaskStatus,
+        result: ExecutionResult,
+        *,
+        reason: list[str] | None = None,
+    ) -> Task | None:
+        """Persist a status transition for a fetched ``issue``."""
+        raise NotImplementedError
+
+    async def _flush_comments(self) -> None:
+        """Post queued state comments without failing the transition."""
+        raise NotImplementedError
+
+    async def _locked_issue(self, issue_id: str) -> dict[str, Any] | None:
+        """Fetch one issue; call with the lock held, ``None`` when missing."""
+        return await self._get_issue(issue_id)
+
+    async def _locked_issue_task(
+        self,
+        issue_id: str,
+        *,
+        require_status: TaskStatus | tuple[TaskStatus, ...] | None = None,
+    ) -> tuple[dict[str, Any], Task] | None:
+        """Fetch an issue plus its task; call with the lock held.
+
+        Returns ``None`` when the issue is missing, not runnable, or (when
+        ``require_status`` is given) in another status, collapsing the
+        fetch/convert/guard preamble repeated across the issue lifecycles.
+        """
+        issue = await self._get_issue(issue_id)
+        if issue is None:
+            return None
+        task = await self._task_from_issue(issue)
+        if task is None:
+            return None
+        if require_status is not None:
+            wanted = (require_status,) if isinstance(require_status, TaskStatus) else require_status
+            if task.status not in wanted:
+                return None
+        return issue, task
+
+    def _queue_state_comment(self, key: Any, state: str, reason: list[str]) -> None:
+        """Queue a bounded ``[forgeo] STATE`` comment for later flushing."""
+        self._pending_comments.append((key, format_state_comment(state, reason)))
+
+    def _take_pending_comments(self) -> list[tuple[Any, str]]:
+        """Drain queued state comments, collapsing the flush preamble."""
+        comments = self._pending_comments
+        self._pending_comments = []
+        return comments
+
+    async def _apply_status(
+        self,
+        task_id: str,
+        status: TaskStatus,
+        result: ExecutionResult,
+        *,
+        reason: list[str] | None = None,
+    ) -> Task | None:
+        """Lock, transition one issue, flush comments; shared status epilogue."""
+        async with self._lock:
+            issue = await self._locked_issue(task_id)
+            if issue is None:
+                return None
+            updated = await self._transition_metadata(issue, status, result, reason=reason)
+            await self._flush_comments()
+            return updated
+
+    async def update_status(
+        self, task_id: str, status: TaskStatus, result: ExecutionResult
+    ) -> Task | None:
+        """Shared transition: fetch one issue and persist ``status``."""
+        return await self._apply_status(task_id, status, result)
+
+    async def set_blocked(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
+        """Shared transition: fetch one issue and mark it ``BLOCKED``."""
+        return await self._apply_status(task_id, TaskStatus.BLOCKED, result, reason=reason)
+
+    async def set_failed(
+        self, task_id: str, reason: list[str], result: ExecutionResult
+    ) -> Task | None:
+        """Shared transition: fetch one issue and mark it ``FAILED``."""
+        return await self._apply_status(task_id, TaskStatus.FAILED, result, reason=reason)
+
     async def bump_failed_wait(self, task_id: str) -> Task | None:
         """Shared FAILED wait-counter bump via engine state."""
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
                 return None
             state = await self.get_engine_state(task_id)
             bump_state_counter(state, "failed_wait_cycles")

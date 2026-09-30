@@ -44,7 +44,6 @@ from forgeo.backlog_issue_base import (
     bump_state_counter,
     claim_cutoff,
     execute_json_request,
-    format_state_comment,
     is_claim_stale,
     next_reopen_state,
     next_retry_state,
@@ -342,7 +341,7 @@ class JiraBacklog(IssueBacklogBase):
         self.url = url.rstrip("/")
         self.config = config
         self.client = client or JiraClient(self.url, config)
-        self._pending_comments: list[tuple[str, str]] = []
+        self._pending_comments: list[tuple[Any, str]] = []
 
     def __repr__(self) -> str:
         return f"JiraBacklog({self.url!r})"
@@ -602,33 +601,19 @@ class JiraBacklog(IssueBacklogBase):
                 dependencies.append(key)
         return dependencies
 
-    async def list_tasks(self) -> list[Task]:
-        issues = await self._search_all()
-        tasks: list[Task] = []
-        for issue in issues:
-            task = await self._task_from_issue(issue)
-            if task is not None:
-                tasks.append(task)
-        return tasks
-
     async def get_task(self, task_id: str) -> Task | None:
         issue = await self._get_issue(task_id)
         if issue is None:
             return None
         return await self._task_from_issue(issue, include_metadata=True)
 
-    async def validate_connection(self) -> None:
-        await self._search_all()
-
     async def claim_task(self, task: Task) -> Task | None:
         """Move an open issue into the running state before the agent starts."""
         async with self._lock:
-            issue = await self._get_issue(task.id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task.id, require_status=TaskStatus.OPEN)
+            if fetched is None:
                 return None
-            current = await self._task_from_issue(issue)
-            if current is None or current.status is not TaskStatus.OPEN:
-                return None
+            issue, current = fetched
             workflow = self.config.workflow
             if workflow.running_status is not None:
                 await self._transition_to(issue, workflow.running_status)
@@ -790,57 +775,18 @@ class JiraBacklog(IssueBacklogBase):
 
     def _comment(self, issue_key: str, state: str, reason: list[str]) -> None:
         """Add a bounded, clearly marked Jira comment without affecting the run."""
-        self._pending_comments.append((issue_key, format_state_comment(state, reason)))
+        self._queue_state_comment(issue_key, state, reason)
 
     async def _flush_comments(self) -> None:
-        comments = getattr(self, "_pending_comments", [])
-        self._pending_comments = []
-        for issue_key, body in comments:
+        for issue_key, body in self._take_pending_comments():
             try:
                 await self._call(self.client.add_comment, issue_key, body)
             except JiraRequestError as exc:
                 logger.warning("Could not add Jira comment to %s: %s", issue_key, exc)
 
-    async def update_status(
-        self, task_id: str, status: TaskStatus, result: ExecutionResult
-    ) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(issue, status, result)
-            await self._flush_comments()
-            return updated
-
-    async def set_blocked(
-        self, task_id: str, reason: list[str], result: ExecutionResult
-    ) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(
-                issue, TaskStatus.BLOCKED, result, reason=reason
-            )
-            await self._flush_comments()
-            return updated
-
-    async def set_failed(
-        self, task_id: str, reason: list[str], result: ExecutionResult
-    ) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(
-                issue, TaskStatus.FAILED, result, reason=reason
-            )
-            await self._flush_comments()
-            return updated
-
     async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
+            issue = await self._locked_issue(task_id)
             if issue is None:
                 return None
             metadata = await self._metadata(task_id)
@@ -862,12 +808,10 @@ class JiraBacklog(IssueBacklogBase):
 
     async def complete_review(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.REVIEW:
-                return None
+            issue, _task = fetched
             metadata = await self._metadata(task_id)
             metadata["state"] = TaskStatus.COMPLETED.value
             metadata.pop("review_branch", None)
@@ -880,12 +824,10 @@ class JiraBacklog(IssueBacklogBase):
 
     async def request_changes(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.REVIEW:
-                return None
+            issue, _task = fetched
             metadata = await self._metadata(task_id)
             metadata["state"] = TaskStatus.OPEN.value
             metadata.pop("review_branch", None)
@@ -895,27 +837,12 @@ class JiraBacklog(IssueBacklogBase):
             await self._save_metadata(task_id, metadata)
             return await self.get_task(task_id)
 
-    async def bump_failed_wait(self, task_id: str) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None:
-                return None
-            metadata = await self._metadata(task_id)
-            bump_state_counter(metadata, "failed_wait_cycles")
-            await self._save_metadata(task_id, metadata)
-            return await self.get_task(task_id)
-
     async def retry_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.FAILED:
-                return None
+            issue, _task = fetched
             metadata = await self._metadata(task_id)
             metadata["state"] = TaskStatus.OPEN.value
             next_retry_state(metadata)
@@ -926,12 +853,10 @@ class JiraBacklog(IssueBacklogBase):
 
     async def reopen_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.BLOCKED:
-                return None
+            issue, _task = fetched
             metadata = await self._metadata(task_id)
             metadata["state"] = TaskStatus.OPEN.value
             next_reopen_state(metadata)
@@ -942,12 +867,10 @@ class JiraBacklog(IssueBacklogBase):
 
     async def delete_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None:
-                return None
+            _issue, task = fetched
             await self._call(self.client.delete_issue, task_id)
             return task
 
@@ -1003,12 +926,10 @@ class JiraBacklog(IssueBacklogBase):
             raise TypeError("updates must be a dict of task fields")
         validate_task_updates(updates)
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
                 return None
-            current = await self._task_from_issue(issue)
-            if current is None:
-                return None
+            _issue, current = fetched
             candidate = current.model_copy(update=updates)
             try:
                 candidate = Task.model_validate(candidate.model_dump(mode="python"))

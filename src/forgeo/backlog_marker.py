@@ -23,7 +23,6 @@ from forgeo.backlog_issue_base import (
     extract_engine_state,
     extract_issue_labels,
     extract_issue_number,
-    format_state_comment,
     is_claim_stale,
     next_reopen_state,
     next_retry_state,
@@ -54,7 +53,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
         if client is None and self.client_cls is not None:
             client = self.client_cls(url, config)
         self.client = client
-        self._pending_comments: list[tuple[int, str]] = []
+        self._pending_comments: list[tuple[Any, str]] = []
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.url!r})"
@@ -193,12 +192,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def claim_task(self, task: Task) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task.id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task.id, require_status=TaskStatus.OPEN)
+            if fetched is None:
                 return None
-            current = await self._task_from_issue(issue)
-            if current is None or current.status is not TaskStatus.OPEN:
-                return None
+            issue, current = fetched
             number = extract_issue_number(issue)
             assert number is not None
             labels = extract_issue_labels(issue)
@@ -309,11 +306,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
         return await self.get_task(issue_id)
 
     def _comment(self, numeric_id: int, state: str, reason: list[str]) -> None:
-        self._pending_comments.append((numeric_id, format_state_comment(state, reason)))
+        self._queue_state_comment(numeric_id, state, reason)
 
     async def _flush_comments(self) -> None:
-        comments = getattr(self, "_pending_comments", [])
-        self._pending_comments = []
+        comments = self._take_pending_comments()
         error_cls: Any = self.request_error_cls
         for numeric_id, body in comments:
             try:
@@ -321,40 +317,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
             except error_cls as exc:
                 logger.warning("Could not add %s comment to %s: %s", self.provider_label, numeric_id, exc)
 
-    async def update_status(self, task_id: str, status: TaskStatus, result: ExecutionResult) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(issue, status, result)
-            await self._flush_comments()
-            return updated
-
-    async def set_blocked(self, task_id: str, reason: list[str], result: ExecutionResult) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(issue, TaskStatus.BLOCKED, result, reason=reason)
-            await self._flush_comments()
-            return updated
-
-    async def set_failed(self, task_id: str, reason: list[str], result: ExecutionResult) -> Task | None:
-        async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            updated = await self._transition_metadata(issue, TaskStatus.FAILED, result, reason=reason)
-            await self._flush_comments()
-            return updated
-
     async def retry_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.FAILED:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
+            if fetched is None:
                 return None
             state = await self.get_engine_state(task_id)
             state["state"] = TaskStatus.OPEN.value
@@ -366,7 +332,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
+            issue = await self._locked_issue(task_id)
             if issue is None:
                 return None
             state = await self.get_engine_state(task_id)
@@ -394,11 +360,8 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def complete_review(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.REVIEW:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
                 return None
             state = await self.get_engine_state(task_id)
             state["state"] = TaskStatus.COMPLETED.value
@@ -412,11 +375,8 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def request_changes(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.REVIEW:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
                 return None
             state = await self.get_engine_state(task_id)
             state["state"] = TaskStatus.OPEN.value
@@ -429,11 +389,8 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def reopen_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
-                return None
-            task = await self._task_from_issue(issue)
-            if task is None or task.status is not TaskStatus.BLOCKED:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
+            if fetched is None:
                 return None
             state = await self.get_engine_state(task_id)
             state["state"] = TaskStatus.OPEN.value
@@ -445,12 +402,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
 
     async def delete_task(self, task_id: str) -> Task | None:
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
                 return None
-            task = await self._task_from_issue(issue)
-            if task is None:
-                return None
+            issue, task = fetched
             number = extract_issue_number(issue)
             assert number is not None
             try:
@@ -484,12 +439,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
             raise TypeError("updates must be a dict of task fields")
         validate_task_updates(updates)
         async with self._lock:
-            issue = await self._get_issue(task_id)
-            if issue is None:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
                 return None
-            current = await self._task_from_issue(issue)
-            if current is None:
-                return None
+            issue, current = fetched
             candidate = current.model_copy(update=updates)
             try:
                 candidate = Task.model_validate(candidate.model_dump(mode="python"))

@@ -12,15 +12,6 @@ import subprocess
 from pathlib import Path
 
 
-def _git_executable() -> str | None:
-    """Return the ``git`` executable path, or ``None`` when absent.
-
-    Wraps :func:`shutil.which` so tests can monkeypatch ``forgeo.git.shutil.which``
-    and callers avoid repeating the literal ``\"git\"``.
-    """
-    return shutil.which("git")
-
-
 class GitError(RuntimeError):
     """Raised when a git command cannot be executed or fails."""
 
@@ -36,7 +27,7 @@ class GitManager:
 
     def _run(self, *args: str, check: bool = True) -> str:
         """Execute ``git -C <repo> <args>`` and return stdout."""
-        if not _git_executable():
+        if not shutil.which("git"):
             raise GitError("the 'git' executable was not found on PATH")
         cmd = " ".join(["git", *args])
         try:

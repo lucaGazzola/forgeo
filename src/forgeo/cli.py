@@ -140,7 +140,7 @@ import time
 from collections.abc import Callable, Coroutine
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 from pydantic import ValidationError
@@ -3028,12 +3028,7 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
         flow = defaults["flow"]
     if scope is None:
         scope = defaults["scope"]
-    if provider == "github":
-        from forgeo.oauth_github import github_default_token_path as _default_token_path
-    elif provider == "gitlab":
-        from forgeo.oauth_gitlab import gitlab_default_token_path as _default_token_path
-    else:
-        from forgeo.oauth_jira import jira_default_token_path as _default_token_path
+    _default_token_path = _auth_provider_spec(provider).default_token_path
     token_file = Path(token_file_arg).expanduser() if token_file_arg is not None else _default_token_path(api_base)
     client_secret = None
     if oauth is not None and oauth.client_secret_env:
@@ -3052,13 +3047,6 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
     return resolved
 
 
-_AUTH_LABELS: dict[str, str] = {
-    "github": "GitHub",
-    "gitlab": "GitLab",
-    "jira": "Jira",
-}
-
-
 def _normalize_auth_provider(provider: str) -> str:
     """Map ``provider`` to a known key, falling back to ``github``.
 
@@ -3070,6 +3058,98 @@ def _normalize_auth_provider(provider: str) -> str:
     return "github"
 
 
+class _AuthProviderSpec(NamedTuple):
+    """All per-provider OAuth components for the ``auth`` commands.
+
+    One table instead of the provider if-chains previously repeated in
+    ``_resolve_oauth_params`` (token-path fn), ``_resolve_auth_store``
+    (store class) and ``cmd_auth_login`` (label/error/store/base/flows),
+    so adding a provider touches one place. Labels live here too, replacing
+    the old ``_AUTH_LABELS`` dict.
+    """
+
+    key: str
+    label: str
+    error_cls: type[BaseException]
+    store_cls: Any
+    default_token_path: Any
+    oauth_base_fn: Any
+    browser_flow: Any
+    device_flow: Any | None
+
+
+def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
+    """Resolve every per-provider OAuth component for ``provider`` at once.
+
+    Unknown providers fall back to GitHub, matching
+    :func:`_normalize_auth_provider`. Imports stay function-local (resolved
+    on each call) so tests can monkeypatch e.g.
+    ``forgeo.oauth_github.run_browser_flow`` and ``auth`` never imports
+    provider modules it does not use.
+    """
+    key = _normalize_auth_provider(provider)
+    if key == "gitlab":
+        from forgeo.oauth_gitlab import (
+            GitlabOAuthError,
+            GitlabTokenStore,
+            gitlab_default_token_path,
+            gitlab_oauth_base,
+            run_browser_flow,
+            run_device_flow,
+        )
+
+        return _AuthProviderSpec(
+            key=key,
+            label="GitLab",
+            error_cls=GitlabOAuthError,
+            store_cls=GitlabTokenStore,
+            default_token_path=gitlab_default_token_path,
+            oauth_base_fn=gitlab_oauth_base,
+            browser_flow=run_browser_flow,
+            device_flow=run_device_flow,
+        )
+    if key == "jira":
+        from forgeo.oauth_jira import (
+            JiraOAuthError,
+            JiraTokenStore,
+            jira_default_token_path,
+            jira_oauth_base,
+        )
+        from forgeo.oauth_jira import (
+            run_browser_flow as run_jira_browser_flow,
+        )
+
+        return _AuthProviderSpec(
+            key=key,
+            label="Jira",
+            error_cls=JiraOAuthError,
+            store_cls=JiraTokenStore,
+            default_token_path=jira_default_token_path,
+            oauth_base_fn=jira_oauth_base,
+            browser_flow=run_jira_browser_flow,
+            device_flow=None,
+        )
+    from forgeo.oauth_github import (
+        GithubOAuthError,
+        GithubTokenStore,
+        github_default_token_path,
+        github_oauth_base,
+        run_browser_flow,
+        run_device_flow,
+    )
+
+    return _AuthProviderSpec(
+        key=key,
+        label="GitHub",
+        error_cls=GithubOAuthError,
+        store_cls=GithubTokenStore,
+        default_token_path=github_default_token_path,
+        oauth_base_fn=github_oauth_base,
+        browser_flow=run_browser_flow,
+        device_flow=run_device_flow,
+    )
+
+
 def _resolve_auth_store(provider: str, args: argparse.Namespace) -> Any:
     """Build the OAuth token store for ``provider``.
 
@@ -3077,20 +3157,9 @@ def _resolve_auth_store(provider: str, args: argparse.Namespace) -> Any:
     file and API base from CLI args, falling back to the provider's config
     section and built-in defaults.
     """
-    key = _normalize_auth_provider(provider)
-    store_cls: Any
-    if key == "gitlab":
-        from forgeo.oauth_gitlab import GitlabTokenStore
-
-        store_cls = GitlabTokenStore
-    elif key == "jira":
-        from forgeo.oauth_jira import JiraTokenStore
-
-        store_cls = JiraTokenStore
-    else:
-        from forgeo.oauth_github import GithubTokenStore
-
-        store_cls = GithubTokenStore
+    spec = _auth_provider_spec(provider)
+    key = spec.key
+    store_cls = spec.store_cls
     api_base = getattr(args, "api_base", None)
     token_file_arg = getattr(args, "token_file", None)
     config_path = _auth_config_path(args)
@@ -3196,64 +3265,16 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
 def cmd_auth_login(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth login``: run OAuth flow and store token."""
-    provider = getattr(args, "provider", "github")
-    if provider == "gitlab":
-        from forgeo.oauth_gitlab import (
-            GitlabOAuthError,
-            GitlabTokenStore,
-            gitlab_oauth_base,
-            run_browser_flow,
-            run_device_flow,
-        )
-
-        return _cmd_auth_login_flow(
-            label="GitLab",
-            provider_key="gitlab",
-            args=args,
-            error_cls=GitlabOAuthError,
-            store_cls=GitlabTokenStore,
-            oauth_base_fn=gitlab_oauth_base,
-            browser_flow=run_browser_flow,
-            device_flow=run_device_flow,
-        )
-    if provider == "jira":
-        from forgeo.oauth_jira import (
-            JiraOAuthError,
-            JiraTokenStore,
-            jira_oauth_base,
-        )
-        from forgeo.oauth_jira import (
-            run_browser_flow as run_jira_browser_flow,
-        )
-
-        return _cmd_auth_login_flow(
-            label="Jira",
-            provider_key="jira",
-            args=args,
-            error_cls=JiraOAuthError,
-            store_cls=JiraTokenStore,
-            oauth_base_fn=jira_oauth_base,
-            browser_flow=run_jira_browser_flow,
-            device_flow=None,
-        )
-    # default github
-    from forgeo.oauth_github import (
-        GithubOAuthError,
-        GithubTokenStore,
-        github_oauth_base,
-        run_browser_flow,
-        run_device_flow,
-    )
-
+    spec = _auth_provider_spec(getattr(args, "provider", "github"))
     return _cmd_auth_login_flow(
-        label="GitHub",
-        provider_key="github",
+        label=spec.label,
+        provider_key=spec.key,
         args=args,
-        error_cls=GithubOAuthError,
-        store_cls=GithubTokenStore,
-        oauth_base_fn=github_oauth_base,
-        browser_flow=run_browser_flow,
-        device_flow=run_device_flow,
+        error_cls=spec.error_cls,
+        store_cls=spec.store_cls,
+        oauth_base_fn=spec.oauth_base_fn,
+        browser_flow=spec.browser_flow,
+        device_flow=spec.device_flow,
     )
 
 
@@ -3261,7 +3282,7 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth status``: show token presence/expiry."""
     provider = getattr(args, "provider", "github")
     key = _normalize_auth_provider(provider)
-    label = _AUTH_LABELS[key]
+    label = _auth_provider_spec(key).label
     store = _resolve_auth_store(key, args)
     data = store.load()
     if data is None:

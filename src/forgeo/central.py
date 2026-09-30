@@ -850,6 +850,16 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 return None
             return info.config
 
+        def _resolve_instance_config(self, path: str) -> tuple[InstanceInfo, ForgeoConfig] | None:
+            """Resolve an instance and its config from an API path, or ``None``."""
+            info = self._resolve_instance(unquote(_instance_parts(path)[0]))
+            if info is None:
+                return None
+            config = self._instance_config(info)
+            if config is None:
+                return None
+            return info, config
+
         def _instance_tasks(self, info: InstanceInfo) -> list[Task] | None:
             """The instance's tasks, or ``None`` after sending a 502.
 
@@ -953,14 +963,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             ``stopped`` / ``not_running`` / ``restarted`` — plus the resulting
             daemon state.
             """
-            parts = _instance_parts(path)
-            name = unquote(parts[0])
-            info = self._resolve_instance(name)
-            if info is None:
+            resolved = self._resolve_instance_config(path)
+            if resolved is None:
                 return
-            config = self._instance_config(info)
-            if config is None:
-                return
+            info, config = resolved
             lock = lock_path(config)
             if action == "start":
                 self._daemon_start(info, config, lock)
@@ -1141,13 +1147,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if len(parts) != 4 or parts[1] != "tasks" or parts[3] != action:
                 self._send_not_found()
                 return
-            name = unquote(parts[0])
-            info = self._resolve_instance(name)
-            if info is None:
+            resolved = self._resolve_instance_config(path)
+            if resolved is None:
                 return
-            config = self._instance_config(info)
-            if config is None:
-                return
+            _info, config = resolved
             task_id = unquote(parts[2])
             backlog = open_backlog(config)
             task = asyncio.run(backlog.get_task(task_id))
@@ -1239,14 +1242,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             nested settings the flat config form does not render, so an omitted
             value keeps what the config already holds instead of clearing it.
             """
-            parts = _instance_parts(path)
-            name = unquote(parts[0])
-            info = self._resolve_instance(name)
-            if info is None:
+            resolved = self._resolve_instance_config(path)
+            if resolved is None:
                 return
-            config = self._instance_config(info)
-            if config is None:
-                return
+            info, config = resolved
 
             payload = self._read_json_body()
             if payload is None:

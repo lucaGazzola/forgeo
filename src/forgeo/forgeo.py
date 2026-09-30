@@ -815,7 +815,17 @@ class Forgeo:
 
     def _blocker_sections(self, rendered: list[str], *, include_marker: bool) -> list[str]:
         """Build the full blocker file sections from rendered blocks."""
-        sections = self._blocker_header(include_marker=include_marker)
+        sections: list[str] = ["# BLOCKER: Forgeo needs your input", ""]
+        if include_marker:
+            sections.append(_TASK_BLOCKER_MARKER)
+            sections.append("")
+        sections.extend(
+            [
+                "The coding agent could not finish without a human decision. The",
+                f"forgeo is paused until this is resolved. Backlog: `{self.config.backlog}`.",
+                "",
+            ]
+        )
         for block in rendered:
             sections.append(block)
             sections.append("")
@@ -862,21 +872,6 @@ class Forgeo:
                 "3. Or delete the task from the web console if it should not be done.",
             ],
         )
-
-    def _blocker_header(self, *, include_marker: bool) -> list[str]:
-        """The shared ``BLOCKER.md`` preamble (intro, optional derived marker)."""
-        lines: list[str] = ["# BLOCKER: Forgeo needs your input", ""]
-        if include_marker:
-            lines.append(_TASK_BLOCKER_MARKER)
-            lines.append("")
-        lines.extend(
-            [
-                "The coding agent could not finish without a human decision. The",
-                f"forgeo is paused until this is resolved. Backlog: `{self.config.backlog}`.",
-                "",
-            ]
-        )
-        return lines
 
     def _persist_blocker(self, sections: list[str]) -> None:
         """Write the rendered blocker file (parent dir created if needed)."""

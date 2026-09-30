@@ -634,6 +634,19 @@ class Forgeo:
         await self._discard_failed_work(task, result)
         await self._mark_failed(task, self._failure_reason(result), result)
 
+    async def _fail_git(self, task: Task, exc: Exception) -> bool:
+        """Mark ``task`` FAILED after a git error; always returns ``False``.
+
+        Shared epilogue of the commit paths, so callers collapse the
+        reset-sha/fail/return dance to ``return await self._fail_git(...)``.
+        """
+        self._last_commit_sha = None
+        await self._fail(
+            task,
+            ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
+        )
+        return False
+
     async def _mark_failed(self, task: Task, reason: list[str], result: ExecutionResult) -> None:
         """Persist ``reason`` on ``task`` and send the ``failed`` webhook notice.
 
@@ -745,12 +758,7 @@ class Forgeo:
         try:
             sha = await self.git.a_commit_all(message)
         except GitError as exc:
-            self._last_commit_sha = None
-            await self._fail(
-                task,
-                ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
-            )
-            return False
+            return await self._fail_git(task, exc)
         if sha is None:
             logger.info("No changes produced; nothing committed.")
             return True
@@ -770,18 +778,13 @@ class Forgeo:
             await self.git.a_create_review_branch(review_branch, self.config.branch)
             sha = await self.git.a_commit_all(message)
         except GitError as exc:
-            self._last_commit_sha = None
             # Return to base branch before failing
             with contextlib.suppress(GitError):
                 await self.git.a_ensure_branch(self.config.branch)
             # Discard any uncommitted changes left after failed commit attempt
             with contextlib.suppress(GitError):
                 await self.git.a_reset_hard()
-            await self._fail(
-                task,
-                ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
-            )
-            return False
+            return await self._fail_git(task, exc)
         if sha is None:
             logger.info("No changes produced; nothing committed.")
             try:
@@ -796,12 +799,7 @@ class Forgeo:
             await self.git.a_ensure_branch(self.config.branch)
         except GitError as exc:
             logger.error("Could not switch back to %s: %s", self.config.branch, exc)
-            self._last_commit_sha = None
-            await self._fail(
-                task,
-                ExecutionResult(status=ExecutionStatus.ERROR, error=f"git: {exc}"),
-            )
-            return False
+            return await self._fail_git(task, exc)
         # Ensure main is clean after switching back (review branch holds the changes)
         try:
             await self.git.a_reset_hard()

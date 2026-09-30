@@ -282,19 +282,9 @@ class ForgeoDaemon:
             "Config reloaded from %s; next cycle uses the new settings.",
             self.config_path,
         )
-        self._apply_config(new_config)
-        return True
-
-    def _apply_config(self, new_config: ForgeoConfig) -> None:
-        """Adopt ``new_config`` for the next cycle.
-
-        Path fields that the daemon's locks and state files derive from stay
-        pinned to the running daemon's values when they change — relocating
-        them mid-flight would detach the lock files from the config and let a
-        second daemon start on the new paths. Those changes are logged and
-        deferred to a restart; every other setting (interval, agent command,
-        refactor prompt, notifications, ...) takes effect from the next cycle.
-        """
+        # Path fields stay pinned to the running daemon's values when they
+        # change — relocating them mid-flight would detach the lock files
+        # from the config and let a second daemon start on the new paths.
         changed_paths = [
             field
             for field in _RELOAD_PATH_FIELDS
@@ -320,6 +310,7 @@ class ForgeoDaemon:
             self.forgeo.config = new_config
         self.config = new_config
         self.interval_seconds = new_config.interval_minutes * 60.0
+        return True
 
     def write_state(self) -> None:
         """Atomically persist the daemon's live state for external readers.

@@ -1025,7 +1025,8 @@ def _resolve_config(
 
     Resolves ``--name`` through the instance registry. Applies the optional
     ``interval_minutes`` override. Returns ``None`` when no config can be
-    produced.
+    produced (unknown instance, missing file, or invalid YAML/schema — the
+    error is printed via :func:`_print_config_load_error`).
     """
     if config_path is None:
         config_path = _resolved_config_path(args)
@@ -1038,7 +1039,11 @@ def _resolve_config(
                 "[yellow]Create one with `forgeo init`, or pass --config <file>.[/yellow]"
             )
             return None
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
+        return None
     interval = getattr(args, "interval_minutes", None)
     if interval is not None:
         config = config.model_copy(update={"interval_minutes": interval})
@@ -1153,11 +1158,7 @@ def _cmd_start_detached(args: argparse.Namespace) -> int:
     config_path = _resolved_config_path(args)
     if config_path is None:
         return 1
-    try:
-        config = _resolve_config(args, config_path)
-    except (yaml.YAMLError, ValidationError) as exc:
-        _print_config_load_error(config_path, exc)
-        return 1
+    config = _resolve_config(args, config_path)
     if config is None:
         return 1
     _register_if_missing(args, config_path, config)
@@ -2413,11 +2414,15 @@ def _print_config_load_error(
 
 
 def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:
-    """Load an existing config; prints an error and returns None when missing."""
+    """Load an existing config; prints an error and returns None when missing/invalid."""
     if not config_path.exists():
         console.print(f"[red]Config file not found: {config_path}[/red]")
         return None
-    return load_config(config_path)
+    try:
+        return load_config(config_path)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
+        return None
 
 
 def _resolve_existing_config(
@@ -2657,17 +2662,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
     Never invokes the agent and makes no writes; exits non-zero when any
     problem is found.
     """
-    config_path = _resolved_config_path(args)
-    if config_path is None:
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
         return 1
-    if not config_path.exists():
-        console.print(f"[red]Config file not found: {config_path}[/red]")
-        return 1
-    try:
-        config = load_config(config_path)
-    except (yaml.YAMLError, ValidationError) as exc:
-        _print_config_load_error(config_path, exc)
-        return 1
+    _config_path, config = resolved
     report = validate_config(config)
     console.print(render_report(config, report), soft_wrap=True)
     return 0 if report.healthy else 1

@@ -1575,17 +1575,14 @@ def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
 
 def cmd_task_list(args: argparse.Namespace) -> int:
     """Handle ``forgeo task list``: print backlog tasks; never starts an agent."""
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
     limit = args.limit
     if limit is not None and limit < 1:
         console.print("[red]--limit must be an integer >= 1.[/red]")
         return 1
-    tasks = _load_backlog_tasks(config)
-    if tasks is None:
-        return 1
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    _config, tasks = loaded
     wanted = args.status
     if wanted is not None:
         tasks = [task for task in tasks if task.status is TaskStatus[wanted.upper()]]
@@ -1738,13 +1735,10 @@ def _cmd_task_show_next(args: argparse.Namespace) -> int:
     the magic is visible, then prints the same detail (plus hint) as an
     explicit ``show``.
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    tasks = _load_backlog_tasks(config)
-    if tasks is None:
-        return 1
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    _config, tasks = loaded
     task = _default_show_task(tasks)
     if task is None:
         console.print(
@@ -1891,13 +1885,10 @@ def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
     id up front so the magic is visible, then delegates to
     :func:`cmd_task_reopen` with the id filled in.
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    tasks = _load_backlog_tasks(config)
-    if tasks is None:
-        return 1
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    _config, tasks = loaded
     task = _default_reopen_task(tasks)
     if task is None:
         console.print(
@@ -2178,13 +2169,10 @@ def cmd_task_next(args: argparse.Namespace) -> int:
     ``list_tasks`` and mirrors the cycle's pick (BLOCKED-first, then the
     oldest runnable ``OPEN`` task with overdue ``run_at`` first).
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    tasks = _load_backlog_tasks(config)
-    if tasks is None:
-        return 1
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    _config, tasks = loaded
     console.print(render_task_next(tasks), markup=False, highlight=False, soft_wrap=True)
     return 0
 
@@ -2420,6 +2408,26 @@ def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
         return None
 
 
+def _resolve_config_and_tasks(
+    args: argparse.Namespace,
+) -> tuple[ForgeoConfig, list[Task]] | int:
+    """Resolve the config file and list its backlog tasks together.
+
+    Returns ``(config, tasks)`` or exit code ``1`` when the config is
+    missing/unreadable or the backlog cannot be reached, so the read-only
+    ``task list``/``show``/``reopen``/``next``/``status`` commands share one
+    preamble instead of repeating the same resolve-and-list dance.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
+        return 1
+    return config, tasks
+
+
 def _resolve_config_and_task_id(args: argparse.Namespace) -> tuple[ForgeoConfig, str] | int:
     """Resolve the config file and the ``--task``/positional task id together.
 
@@ -2462,13 +2470,10 @@ def _load_backlog_task(config: ForgeoConfig, raw_id: str) -> tuple[BacklogStore,
 
 def cmd_status(args: argparse.Namespace) -> int:
     """Handle ``forgeo status``: read-only summary; never starts an agent."""
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    tasks = _load_backlog_tasks(config)
-    if tasks is None:
-        return 1
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, tasks = loaded
     daemon_running = is_lock_held(lock_path(config))
     last_outcome = last_outcome_from_runs(config)
     console.print(

@@ -66,7 +66,7 @@ def post_form(
         except Exception:
             pass
         raise error_cls(f"{label} request to {url} failed with HTTP {exc.code}{detail}") from exc
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise error_cls(f"{label} request to {url} failed: {exc}") from exc
 
 

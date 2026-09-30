@@ -17,16 +17,13 @@ written to disk: a restarted daemon simply asks for a new token.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 
 from forgeo.models import BacklogAuth
+from forgeo.oauth_common import post_form
 
 logger = logging.getLogger(__name__)
 
@@ -97,33 +94,15 @@ class ClientCredentialsTokenProvider:
         }
         if self.auth.scope:
             payload["scope"] = self.auth.scope
-        request = urllib.request.Request(
+        body = post_form(
             self.auth.token_url,
-            data=urllib.parse.urlencode(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
+            payload,
+            self.auth.timeout_seconds,
+            TokenError,
+            label="Token",
         )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.auth.timeout_seconds
-            ) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            # The provider's own message ("invalid_client", ...) is the most
-            # useful thing we can show, so it is surfaced rather than swallowed.
-            detail = _error_detail(exc)
-            raise TokenError(
-                f"Token request to {self.auth.token_url} failed with HTTP "
-                f"{exc.code}{detail}."
-            ) from exc
-        except (OSError, ValueError) as exc:
-            raise TokenError(
-                f"Token request to {self.auth.token_url} failed: {exc}"
-            ) from exc
 
-        if not isinstance(body, dict) or not body.get("access_token"):
+        if not body.get("access_token"):
             raise TokenError(
                 f"Token response from {self.auth.token_url} carries no access_token."
             )
@@ -140,12 +119,3 @@ class ClientCredentialsTokenProvider:
             lifetime,
         )
         return str(body["access_token"]), float(lifetime)
-
-
-def _error_detail(exc: urllib.error.HTTPError) -> str:
-    """The provider's error body, trimmed, when it says anything useful."""
-    try:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-    except Exception:  # noqa: BLE001 - the detail is a nicety, never a failure
-        return ""
-    return f": {body[:200]}" if body else ""

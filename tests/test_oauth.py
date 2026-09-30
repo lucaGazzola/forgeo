@@ -70,7 +70,7 @@ def _secret(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def patch_urlopen(monkeypatch: pytest.MonkeyPatch, handler) -> None:
-    monkeypatch.setattr("forgeo.oauth.urllib.request.urlopen", handler)
+    monkeypatch.setattr("forgeo.oauth_common.urllib.request.urlopen", handler)
 
 
 def test_token_is_requested_with_the_client_credentials_grant(

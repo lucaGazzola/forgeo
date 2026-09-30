@@ -152,6 +152,7 @@ from rich.table import Table
 from forgeo import __version__
 from forgeo.agent import DockerSandboxAgent, SandboxUnavailableError, ShellAgent
 from forgeo.backlog import (
+    BacklogStore,
     BacklogUnavailableError,
     backlog_status_counts,
     oldest_open_task,
@@ -1718,25 +1719,14 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
         return _cmd_task_show_next(args)
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    task_id, task_error = _resolve_task_id(args)
-    if task_error is not None:
-        console.print(f"[red]{task_error}[/red]")
-        return 2
-    assert task_id is not None
-    try:
-        _actual_id, task = asyncio.run(
-            _resolve_backlog_task_id(open_backlog(config), task_id)
-        )
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
-    if task is None:
-        console.print(f"[red]Unknown task: {task_id}.[/red]")
-        return 1
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
+    fetched = _load_backlog_task(config, task_id)
+    if isinstance(fetched, int):
+        return fetched
+    _backlog, task = fetched
     _print_task_detail(task)
     return 0
 
@@ -1786,15 +1776,10 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     "run now" contradict each other).
     The id may be passed positionally or with ``--task``.
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    task_id, task_error = _resolve_task_id(args)
-    if task_error is not None:
-        console.print(f"[red]{task_error}[/red]")
-        return 2
-    assert task_id is not None
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
     if bool(getattr(args, "run", False)) and getattr(args, "run_at", None) is not None:
         console.print(
             "[red]Pass either --run or --run-at, not both "
@@ -1945,24 +1930,14 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
         return _cmd_task_reopen_next(args)
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    task_id, task_error = _resolve_task_id(args)
-    if task_error is not None:
-        console.print(f"[red]{task_error}[/red]")
-        return 2
-    assert task_id is not None
-    backlog = open_backlog(config)
-    try:
-        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
-    if task is None:
-        console.print(f"[red]Unknown task: {task_id}.[/red]")
-        return 1
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
+    fetched = _load_backlog_task(config, task_id)
+    if isinstance(fetched, int):
+        return fetched
+    backlog, task = fetched
     previous = task.status
     if previous is TaskStatus.OPEN:
         console.print(f"[yellow]Task {task.id} is already OPEN.[/yellow]")
@@ -2002,25 +1977,18 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     is not permitted. Warns when remaining tasks still list the removed
     id in their dependencies. The id may be passed positionally or with ``--task``.
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    task_id, task_error = _resolve_task_id(args)
-    if task_error is not None:
-        console.print(f"[red]{task_error}[/red]")
-        return 2
-    assert task_id is not None
-    backlog = open_backlog(config)
-    try:
-        tasks = asyncio.run(backlog.list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     existing = _match_listed_task_id(tasks, task_id)
     if existing is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1
+    backlog = open_backlog(config)
     try:
         deleted = asyncio.run(backlog.delete_task(existing.id))
     except BacklogUnavailableError as exc:
@@ -2053,24 +2021,14 @@ def _cmd_task_review_transition(
     messages, ``method`` the backlog method to call, ``past`` the success
     verb phrase. The id may be passed positionally or with ``--task``.
     """
-    resolved = _resolve_existing_config(args)
-    if resolved is None:
-        return 1
-    _config_path, config = resolved
-    task_id, task_error = _resolve_task_id(args)
-    if task_error is not None:
-        console.print(f"[red]{task_error}[/red]")
-        return 2
-    assert task_id is not None
-    backlog = open_backlog(config)
-    try:
-        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
-    if task is None:
-        console.print(f"[red]Unknown task: {task_id}.[/red]")
-        return 1
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
+    fetched = _load_backlog_task(config, task_id)
+    if isinstance(fetched, int):
+        return fetched
+    backlog, task = fetched
     if task.status is not TaskStatus.REVIEW:
         console.print(
             f"[red]Task {task.id} is {task.status.value}, not REVIEW: "
@@ -2460,6 +2418,46 @@ def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
     except BacklogUnavailableError as exc:
         console.print(f"[red]Backlog unavailable: {exc}[/red]")
         return None
+
+
+def _resolve_config_and_task_id(args: argparse.Namespace) -> tuple[ForgeoConfig, str] | int:
+    """Resolve the config file and the ``--task``/positional task id together.
+
+    Returns ``(config, task_id)`` or an exit code (``1`` for a missing
+    config, ``2`` for a missing/doubled task id) so the ``task show``/
+    ``edit``/``reopen``/``rm``/review commands share one preamble instead
+    of repeating the same resolve-and-check dance.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    task_id, task_error = _resolve_task_id(args)
+    if task_error is not None:
+        console.print(f"[red]{task_error}[/red]")
+        return 2
+    assert task_id is not None
+    return config, task_id
+
+
+def _load_backlog_task(config: ForgeoConfig, raw_id: str) -> tuple[BacklogStore, Task] | int:
+    """Fetch one task by id (honoring shorthand), printing errors.
+
+    Returns ``(backlog, task)`` or exit code ``1`` when the backlog is
+    unreachable or the id matches nothing, so callers collapse the
+    ``open_backlog``/``_resolve_backlog_task_id``/``Unknown task`` block
+    to three lines.
+    """
+    backlog = open_backlog(config)
+    try:
+        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, raw_id))
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    if task is None:
+        console.print(f"[red]Unknown task: {raw_id}.[/red]")
+        return 1
+    return backlog, task
 
 
 def cmd_status(args: argparse.Namespace) -> int:

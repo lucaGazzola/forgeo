@@ -629,6 +629,32 @@ def make_browser_flow(
     return run
 
 
+def make_poll_device_token(
+    error_cls: type[Exception],
+    token_path: str,
+) -> Callable[..., dict[str, Any]]:
+    """Build a ``poll_device_token`` polling ``oauth_base`` + ``token_path``."""
+
+
+    def poll(
+        client_id: str,
+        device_code: str,
+        oauth_base: str,
+        interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
+        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        return poll_device_grant(
+            token_url=f"{oauth_base.rstrip('/')}{token_path}",
+            client_id=client_id,
+            device_code=device_code,
+            interval=interval,
+            timeout=timeout,
+            error_cls=error_cls,
+        )
+
+    return poll
+
+
 def make_device_flow(
     request_fn: Callable[..., dict[str, Any]],
     poll_fn: Callable[..., dict[str, Any]],

@@ -35,9 +35,9 @@ from forgeo.oauth_common import (
     make_browser_flow,
     make_callback_handler,
     make_device_flow,
+    make_poll_device_token,
     make_post_form,
     make_token_store,
-    poll_device_grant,
 )
 
 
@@ -90,22 +90,7 @@ def request_device_code(
     return _post_form(url, fields, timeout=timeout)
 
 
-def poll_device_token(
-    client_id: str,
-    device_code: str,
-    oauth_base: str,
-    interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
-    timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    """Poll until the user approves the device code; returns token JSON."""
-    return poll_device_grant(
-        token_url=f"{oauth_base.rstrip('/')}/login/oauth/access_token",
-        client_id=client_id,
-        device_code=device_code,
-        interval=interval,
-        timeout=timeout,
-        error_cls=GithubOAuthError,
-    )
+poll_device_token = make_poll_device_token(GithubOAuthError, "/login/oauth/access_token")
 
 
 run_device_flow = make_device_flow(

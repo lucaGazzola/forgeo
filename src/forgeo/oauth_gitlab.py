@@ -15,9 +15,9 @@ from forgeo.oauth_common import (
     make_browser_flow,
     make_callback_handler,
     make_device_flow,
+    make_poll_device_token,
     make_post_form,
     make_token_store,
-    poll_device_grant,
     strip_url_suffix,
 )
 
@@ -85,21 +85,7 @@ def request_device_code(
     raise GitlabOAuthError(f"GitLab device flow not available at {oauth_base}: {last}") from last
 
 
-def poll_device_token(
-    client_id: str,
-    device_code: str,
-    oauth_base: str,
-    interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
-    timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    return poll_device_grant(
-        token_url=f"{oauth_base.rstrip('/')}/oauth/token",
-        client_id=client_id,
-        device_code=device_code,
-        interval=interval,
-        timeout=timeout,
-        error_cls=GitlabOAuthError,
-    )
+poll_device_token = make_poll_device_token(GitlabOAuthError, "/oauth/token")
 
 
 run_device_flow = make_device_flow(

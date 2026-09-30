@@ -1501,6 +1501,44 @@ def _read_description_input(
     return description, None
 
 
+def _has_run_schedule_conflict(args: argparse.Namespace) -> bool:
+    """Report the ``--run``/``--run-at`` conflict; True when both are given.
+
+    One helper for the identical guard repeated in ``task add``/``task edit``
+    (``--run`` runs now, ``--run-at`` schedules for later), so the message
+    stays identical.
+    """
+    if bool(getattr(args, "run", False)) and getattr(args, "run_at", None) is not None:
+        console.print(
+            "[red]Pass either --run or --run-at, not both "
+            "(--run runs the task now).[/red]"
+        )
+        return True
+    return False
+
+
+def _resolve_description_text(
+    raw_description: str | None, raw_description_file: Path | None
+) -> tuple[str | None, str | None]:
+    """Resolve ``--description``/``--description-file`` to stripped text.
+
+    Wraps :func:`_read_description_input` with the blank check repeated in
+    ``task add``/``task edit``. Returns ``(text, error)`` — exactly one is
+    set; ``text`` is stripped and non-blank on success.
+    """
+    description_text, desc_error = _read_description_input(
+        raw_description, raw_description_file
+    )
+    if desc_error is not None:
+        return None, desc_error
+    if description_text is None or not description_text.strip():
+        return None, (
+            "--description must not be blank "
+            "(or pass --description-file FILE / '-' for stdin)."
+        )
+    return description_text.strip(), None
+
+
 def _next_cli_task_id(tasks: list[Task]) -> str:
     """Next ``TASK-###`` id after the highest existing ``TASK-###`` id."""
     highest = 0
@@ -1530,11 +1568,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         return 1
     _config_path, config = resolved
     run_now = bool(getattr(args, "run", False))
-    if run_now and getattr(args, "run_at", None) is not None:
-        console.print(
-            "[red]Pass either --run or --run-at, not both "
-            "(--run runs the task now).[/red]"
-        )
+    if _has_run_schedule_conflict(args):
         return 1
     title_text, title_error = _resolve_task_title(args)
     if title_error is not None:
@@ -1552,19 +1586,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         # --description / --description-file for anything needing a real spec.
         description = title
     else:
-        description_text, desc_error = _read_description_input(
+        description_text, desc_error = _resolve_description_text(
             raw_description, raw_description_file
         )
         if desc_error is not None:
             console.print(f"[red]{desc_error}[/red]")
             return 1
-        if description_text is None or not description_text.strip():
-            console.print(
-                "[red]--description must not be blank "
-                "(or pass --description-file FILE / '-' for stdin).[/red]"
-            )
-            return 1
-        description = description_text.strip()
+        assert description_text is not None
+        description = description_text
     backlog = open_backlog(config)
     try:
         existing = asyncio.run(backlog.list_tasks())
@@ -1844,11 +1873,7 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     if isinstance(loaded, int):
         return loaded
     config, task_id = loaded
-    if bool(getattr(args, "run", False)) and getattr(args, "run_at", None) is not None:
-        console.print(
-            "[red]Pass either --run or --run-at, not both "
-            "(--run runs the task now).[/red]"
-        )
+    if _has_run_schedule_conflict(args):
         return 1
     updates: dict[str, Any] = {}
     if args.title is not None:
@@ -1859,16 +1884,14 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     raw_description = getattr(args, "description", None)
     raw_description_file = getattr(args, "description_file", None)
     if raw_description is not None or raw_description_file is not None:
-        description_text, desc_error = _read_description_input(
+        description_text, desc_error = _resolve_description_text(
             raw_description, raw_description_file
         )
         if desc_error is not None:
             console.print(f"[red]{desc_error}[/red]")
             return 1
-        if description_text is None or not description_text.strip():
-            console.print("[red]--description must not be blank.[/red]")
-            return 1
-        updates["description"] = description_text.strip()
+        assert description_text is not None
+        updates["description"] = description_text
     if args.acceptance is not None and args.clear_acceptance:
         console.print("[red]Pass either --acceptance or --clear-acceptance, not both.[/red]")
         return 1

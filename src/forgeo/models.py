@@ -862,13 +862,15 @@ class ForgeoConfig(BaseModel):
     def backlog_is_issue_provider(self) -> bool:
         return self.effective_backlog_provider in ISSUE_PROVIDERS
 
-    def _check_sandbox(self) -> None:
+    @model_validator(mode="after")
+    def _docker_requires_image(self) -> ForgeoConfig:
         if self.agent_sandbox is SandboxMode.DOCKER and not (self.agent_sandbox_image or "").strip():
             raise ValueError("agent_sandbox_image is required when agent_sandbox is 'docker'")
         if self.no_changes_exit_code == self.blocked_exit_code:
             raise ValueError("no_changes_exit_code must differ from blocked_exit_code")
-
-    def _check_provider_url(self, provider: str) -> None:
+        if self.review_mode not in ("off", "branch"):
+            raise ValueError("review_mode must be 'off' or 'branch'")
+        provider = self.effective_backlog_provider
         if provider in REMOTE_PROVIDERS and not self.backlog_is_url:
             raise ValueError(
                 f"backlog must be an http:// or https:// URL when backlog_provider is "
@@ -883,8 +885,6 @@ class ForgeoConfig(BaseModel):
                 "backlog_auth is only valid when backlog is an http:// or https:// URL "
                 "and backlog_provider is 'http'"
             )
-
-    def _check_provider_blocks(self, provider: str) -> None:
         for name, label in (("jira", "Jira"), ("github", "GitHub"), ("gitlab", "GitLab")):
             cfg = getattr(self, name)
             if provider == name and cfg is None:
@@ -894,16 +894,4 @@ class ForgeoConfig(BaseModel):
                     f"{name} configuration is only valid when backlog_provider is {name!r} "
                     f"or 'auto' with a {label} backlog"
                 )
-
-    def _check_review(self) -> None:
-        if self.review_mode not in ("off", "branch"):
-            raise ValueError("review_mode must be 'off' or 'branch'")
-
-    @model_validator(mode="after")
-    def _docker_requires_image(self) -> ForgeoConfig:
-        self._check_sandbox()
-        self._check_review()
-        provider = self.effective_backlog_provider
-        self._check_provider_url(provider)
-        self._check_provider_blocks(provider)
         return self

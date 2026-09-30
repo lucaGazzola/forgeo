@@ -268,6 +268,9 @@ class JiraClient(RestTransportBase):
 class JiraBacklog(IssueBacklogBase):
     """A task provider backed by Jira issues and workflow transitions."""
 
+    provider_label = "Jira"
+    request_error_cls = JiraRequestError
+
     def __init__(
         self,
         url: str,
@@ -642,7 +645,7 @@ class JiraBacklog(IssueBacklogBase):
             previous=previous if isinstance(previous, str) else None,
         )
         if status in (TaskStatus.COMPLETED, TaskStatus.OPEN):
-            destination = (
+            destination: str | None = (
                 self.config.workflow.completed_status
                 if status is TaskStatus.COMPLETED
                 else self.config.workflow.open_status
@@ -652,26 +655,18 @@ class JiraBacklog(IssueBacklogBase):
             await self._save_metadata(key, metadata)
             return await self.get_task(key)
         if status is TaskStatus.BLOCKED:
-            await self._update_labels(key, add=add, remove=remove)
-            await self._save_metadata(key, metadata)
-            await self._transition_to(issue, self.config.workflow.blocked_status)
-            self._comment(key, "BLOCKED", reason or [])
-            return await self.get_task(key)
+            destination = self.config.workflow.blocked_status
+            comment_kind = "BLOCKED"
+        else:
+            destination = self.config.workflow.failed_status
+            if destination is None and self._matches(self.config.workflow.running_status, self._status(issue)):
+                destination = self.config.workflow.open_status
+            comment_kind = "FAILED"
         await self._update_labels(key, add=add, remove=remove)
         await self._save_metadata(key, metadata)
-        target = self.config.workflow.failed_status
-        if target is None and self._matches(self.config.workflow.running_status, self._status(issue)):
-            target = self.config.workflow.open_status
-        await self._transition_to(issue, target)
-        self._comment(key, "FAILED", reason or [])
+        await self._transition_to(issue, destination)
+        self._comment(key, comment_kind, reason or [])
         return await self.get_task(key)
-
-    async def _flush_comments(self) -> None:
-        for issue_key, body in self._take_pending_comments():
-            try:
-                await self._call(self.client.add_comment, issue_key, body)
-            except JiraRequestError as exc:
-                logger.warning("Could not add Jira comment to %s: %s", issue_key, exc)
 
     async def _delete_issue_by_id(self, issue_id: str, issue: dict[str, Any]) -> None:
         del issue

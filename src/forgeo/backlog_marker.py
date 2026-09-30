@@ -37,8 +37,6 @@ class MarkerIssueBacklog(IssueBacklogBase):
     body_key: str = "body"
     open_state: str = "open"
     close_state: str = "closed"
-    provider_label: str = "issue"
-    request_error_cls: type[Exception] = Exception
     client_cls: Any = None
     # ``update_issue`` payloads closing/reopening an issue, e.g.
     # ``{"state": "closed"}`` (GitHub) or ``{"state_event": "close"}``
@@ -256,15 +254,6 @@ class MarkerIssueBacklog(IssueBacklogBase):
         elif status not in (TaskStatus.COMPLETED, TaskStatus.OPEN):
             self._comment(number, "FAILED", reason or [])
         return await self.get_task(issue_id)
-
-    async def _flush_comments(self) -> None:
-        comments = self._take_pending_comments()
-        error_cls: Any = self.request_error_cls
-        for numeric_id, body in comments:
-            try:
-                await self._call(self.client.add_comment, numeric_id, body)
-            except error_cls as exc:
-                logger.warning("Could not add %s comment to %s: %s", self.provider_label, numeric_id, exc)
 
     async def _delete_issue_by_id(self, issue_id: str, issue: dict[str, Any]) -> None:
         """Delete a marker issue, falling back to close when delete is unsupported."""

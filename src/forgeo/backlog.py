@@ -642,6 +642,10 @@ class IssueBacklogBase(BacklogStore):
 
     _pending_comments: list[tuple[Any, str]] = []
 
+    client: Any = None
+    provider_label: str = "issue"
+    request_error_cls: type[Exception] = Exception
+
     async def _call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Run a blocking client call without blocking the event loop."""
         return await asyncio.to_thread(function, *args, **kwargs)
@@ -704,8 +708,19 @@ class IssueBacklogBase(BacklogStore):
         raise NotImplementedError
 
     async def _flush_comments(self) -> None:
-        """Post queued state comments without failing the transition."""
-        raise NotImplementedError
+        """Post queued state comments without failing the transition.
+
+        Shared by the marker (GitHub/GitLab) and Jira providers, whose
+        implementations were identical apart from the provider label and
+        error class carried on ``self``.
+        """
+        comments = self._take_pending_comments()
+        error_cls: Any = self.request_error_cls
+        for issue_id, body in comments:
+            try:
+                await self._call(self.client.add_comment, issue_id, body)
+            except error_cls as exc:
+                logger.warning("Could not add %s comment to %s: %s", self.provider_label, issue_id, exc)
 
     async def _locked_issue_task(
         self,
@@ -962,7 +977,7 @@ class IssueBacklogBase(BacklogStore):
         labels = set(extract_issue_labels(issue))
         labels.update(add)
         labels.difference_update(remove)
-        await self._call(self.client.update_issue, number, {"labels": list(labels)})  # type: ignore[attr-defined]
+        await self._call(self.client.update_issue, number, {"labels": list(labels)})
 
 
 class JSONBacklog(DocumentBacklogStore):

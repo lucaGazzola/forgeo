@@ -1245,9 +1245,8 @@ def _run_worker_with_lock(
     except KeyboardInterrupt:
         pass
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        result = _report_backlog_unavailable(exc)
         logging.getLogger("forgeo.cli").error("Backlog unavailable: %s", exc)
-        result = 1
     finally:
         lock.close()
     return result
@@ -1316,8 +1315,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             try:
                 resolved_id, found = await _resolve_backlog_task_id(backlog, task_id)
             except BacklogUnavailableError as exc:
-                console.print(f"[red]Backlog unavailable: {exc}[/red]")
-                return 1
+                return _report_backlog_unavailable(exc)
             effective_id = resolved_id if found is not None else task_id
         try:
             outcome = await forgeo.run_task_id(effective_id, reopen=reopen)
@@ -1561,8 +1559,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     try:
         existing = asyncio.run(backlog.list_tasks())
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     if args.id is not None:
         task_id = args.id.strip()
         if not task_id:
@@ -1589,8 +1586,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
         console.print(f"[red]{exc}[/red]")
         return 1
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     console.print(f"[green]Created task {created.id} — {created.title}[/green]")
     if not run_now:
         console.print(
@@ -1910,8 +1906,7 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
         effective_id = resolved_id if _found is not None else task_id
         updated = asyncio.run(backlog.update_task(effective_id, updates))
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     except (ValueError, TypeError) as exc:
         console.print(f"[red]Invalid update: {exc}[/red]")
         return 1
@@ -2005,8 +2000,7 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
         else:
             updated = asyncio.run(backlog.retry_task(task.id))
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     if updated is None:
         console.print(f"[red]Could not reopen task {task.id}.[/red]")
         return 1
@@ -2043,8 +2037,7 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     try:
         deleted = asyncio.run(backlog.delete_task(existing.id))
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     if deleted is None:
         console.print(f"[red]Could not remove task {task_id}.[/red]")
         return 1
@@ -2086,8 +2079,7 @@ def _cmd_task_review_transition(
     try:
         updated = asyncio.run(getattr(backlog, method)(task.id))
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     if updated is None:
         console.print(f"[red]Could not update task {task.id}.[/red]")
         return 1
@@ -2451,6 +2443,16 @@ def _oldest_with_status(tasks: list[Task], status: TaskStatus) -> Task | None:
     return matching[0] if matching else None
 
 
+def _report_backlog_unavailable(exc: Exception) -> int:
+    """Print the unavailable-backlog error; returns exit code ``1``.
+
+    One helper for the ``except BacklogUnavailableError`` epilogue repeated
+    across the ``task``/``run`` commands, so the message stays identical.
+    """
+    console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    return 1
+
+
 def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
     """List backlog tasks, printing the unavailable-backlog error on failure.
 
@@ -2460,7 +2462,7 @@ def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
     try:
         return asyncio.run(open_backlog(config).list_tasks())
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        _report_backlog_unavailable(exc)
         return None
 
 
@@ -2516,8 +2518,7 @@ def _load_backlog_task(config: ForgeoConfig, raw_id: str) -> tuple[BacklogStore,
     try:
         _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, raw_id))
     except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
-        return 1
+        return _report_backlog_unavailable(exc)
     if task is None:
         console.print(f"[red]Unknown task: {raw_id}.[/red]")
         return 1

@@ -95,10 +95,6 @@ class GitManager:
             return
         self._run("switch", branch)
 
-    def current_branch(self) -> str:
-        """Return the current branch name."""
-        return self._run("rev-parse", "--abbrev-ref", "HEAD")
-
     def create_review_branch(self, review_branch: str, base_branch: str) -> None:
         """Create ``review_branch`` from ``base_branch`` and switch to it.
 
@@ -112,14 +108,6 @@ class GitManager:
             self._run("reset", "--hard", base_branch)
         else:
             self._run("switch", "-c", review_branch)
-
-    def commit_all_on_branch(self, branch: str, message: str) -> str | None:
-        """Ensure ``branch`` is checked out, then stage and commit.
-
-        Returns the short sha or ``None`` when nothing to commit.
-        """
-        self.ensure_branch(branch)
-        return self.commit_all(message)
 
     def is_clean(self) -> bool:
         """Return whether the working tree has no changes."""
@@ -158,14 +146,8 @@ class GitManager:
     async def a_ensure_branch(self, branch: str) -> None:
         await asyncio.to_thread(self.ensure_branch, branch)
 
-    async def a_current_branch(self) -> str:
-        return await asyncio.to_thread(self.current_branch)
-
     async def a_create_review_branch(self, review_branch: str, base_branch: str) -> None:
         await asyncio.to_thread(self.create_review_branch, review_branch, base_branch)
-
-    async def a_commit_all_on_branch(self, branch: str, message: str) -> str | None:
-        return await asyncio.to_thread(self.commit_all_on_branch, branch, message)
 
     async def a_is_clean(self) -> bool:
         return await asyncio.to_thread(self.is_clean)

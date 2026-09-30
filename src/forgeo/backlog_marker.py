@@ -65,44 +65,13 @@ class MarkerIssueBacklog(IssueBacklogBase):
         body = issue.get(self.body_key)
         return body if isinstance(body, str) else ""
 
-    async def _fetch_issue(self, numeric_id: int) -> Any:
-        return await self._call(self.client.get_issue, numeric_id)
-
-    async def _search_page(self, *, page: int, per_page: int) -> Any:
-        # ``state="all"`` lists open and closed issues; the GitLab client
-        # accepts (and ignores) it so both providers share this method.
-        return await self._call(self.client.search_issues, page=page, per_page=per_page, state="all")
-
     async def _apply_update(self, numeric_id: int, fields: dict[str, Any]) -> Any:
         return await self._call(self.client.update_issue, numeric_id, fields)
-
-    async def _post_comment(self, numeric_id: int, body: str) -> None:
-        await self._call(self.client.add_comment, numeric_id, body)
-
-    async def _delete_issue(self, numeric_id: int) -> None:
-        await self._call(self.client.delete_issue, numeric_id)
 
     async def _close_issue(self, numeric_id: int) -> None:
         if self.close_update is None:
             raise NotImplementedError
         await self._call(self.client.update_issue, numeric_id, dict(self.close_update))
-
-    def _created_id(self, created: Any) -> str | None:
-        number = extract_issue_number(created if isinstance(created, dict) else {})
-        return str(number) if number is not None else None
-
-    def _create_fields(self, task: Task, engine: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "title": task.title,
-            self.body_key: embed_engine_state(task.description, engine),
-            "labels": [self.config.label_prefix],
-        }
-
-    def _update_body_field(self, candidate: Task, state: dict[str, Any]) -> dict[str, Any]:
-        return {self.body_key: embed_engine_state(candidate.description, state)}
-
-    def _not_found(self, issue_id: str) -> Exception:
-        return self.request_error_cls(f"{self.provider_label} issue {issue_id} response was not an object")
 
     # --- shared lifecycle ---
 
@@ -111,13 +80,13 @@ class MarkerIssueBacklog(IssueBacklogBase):
         if number is None:
             return None
         try:
-            issue = await self._fetch_issue(number)
+            issue = await self._call(self.client.get_issue, number)
         except self.request_error_cls as exc:
             if getattr(exc, "status", None) == 404:
                 return None
             raise
         if not isinstance(issue, dict):
-            raise self._not_found(issue_id)
+            raise self.request_error_cls(f"{self.provider_label} issue {issue_id} response was not an object")
         return issue
 
     async def _search_all(self) -> list[dict[str, Any]]:
@@ -126,7 +95,9 @@ class MarkerIssueBacklog(IssueBacklogBase):
         while len(issues) < self.config.max_issues:
             remaining = self.config.max_issues - len(issues)
             per_page = min(self.config.page_size, remaining)
-            page_issues = await self._search_page(page=page, per_page=per_page)
+            # ``state="all"`` lists open and closed issues; the GitLab client
+            # accepts (and ignores) it so both providers share this call.
+            page_issues = await self._call(self.client.search_issues, page=page, per_page=per_page, state="all")
             if not isinstance(page_issues, list):
                 raise self.request_error_cls(f"{self.provider_label} search response did not contain a list")
             if not page_issues:
@@ -297,7 +268,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
         error_cls: Any = self.request_error_cls
         for numeric_id, body in comments:
             try:
-                await self._post_comment(numeric_id, body)
+                await self._call(self.client.add_comment, numeric_id, body)
             except error_cls as exc:
                 logger.warning("Could not add %s comment to %s: %s", self.provider_label, numeric_id, exc)
 
@@ -307,17 +278,22 @@ class MarkerIssueBacklog(IssueBacklogBase):
         number = extract_issue_number(issue)
         assert number is not None
         try:
-            await self._delete_issue(number)
+            await self._call(self.client.delete_issue, number)
         except self.request_error_cls:
             await self._close_issue(number)
 
     async def create_task(self, task: Task) -> Task:
         engine: dict[str, Any] = {"state": TaskStatus.OPEN.value}
         engine.update(task_engine_state(task))
-        fields = self._create_fields(task, engine)
+        fields = {
+            "title": task.title,
+            self.body_key: embed_engine_state(task.description, engine),
+            "labels": [self.config.label_prefix],
+        }
         async with self._lock:
             created = await self._call(self.client.create_issue, fields)
-            created_id = self._created_id(created)
+            number = extract_issue_number(created if isinstance(created, dict) else {})
+            created_id = str(number) if number is not None else None
             if created_id is None:
                 raise self.request_error_cls(
                     f"{self.provider_label} create response did not contain an issue id"
@@ -345,7 +321,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
             if not ENGINE_STATE_FIELDS.isdisjoint(updates):
                 state = await self.get_engine_state(task_id)
                 state.update(task_engine_state(candidate))
-                fields.update(self._update_body_field(candidate, state))
+                fields.update({self.body_key: embed_engine_state(candidate.description, state)})
             if fields:
                 await self._apply_update(number, fields)
             return await self.get_task(task_id)

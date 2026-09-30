@@ -278,6 +278,54 @@ def _add_description_args(
     )
 
 
+def _add_task_common_args(
+    parser: argparse.ArgumentParser,
+    *,
+    acceptance_help: str,
+    depends_on_help: str,
+    run_at_help: str,
+    run_help: str,
+) -> None:
+    """Add the ``--acceptance``/``--depends-on``/``--run-at``/``--run`` options.
+
+    ``task add`` and ``task edit`` accept the same scheduling/trigger inputs;
+    the help texts stay per-command, so this helper only removes the
+    structural duplication.
+    """
+    parser.add_argument(
+        "--acceptance",
+        action="append",
+        default=None,
+        metavar="CRITERION",
+        help=acceptance_help,
+    )
+    parser.add_argument(
+        "--depends-on",
+        action="append",
+        default=None,
+        metavar="TASK_ID",
+        dest="depends_on",
+        help=depends_on_help,
+    )
+    parser.add_argument(
+        "--run-at",
+        default=None,
+        metavar="DATETIME",
+        dest="run_at",
+        help=run_at_help,
+    )
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help=run_help,
+    )
+
+
+def _add_clear_flag(parser: argparse.ArgumentParser, name: str, *, help: str) -> None:
+    """Add one ``--clear-<name>`` store-true flag (``task edit`` list clearing)."""
+    parser.add_argument(f"--clear-{name}", action="store_true", help=help)
+
+
 def _add_auth_store_args(
     parser: argparse.ArgumentParser,
     *,
@@ -399,33 +447,13 @@ def _add_task_add_parser(task_sub: Any) -> None:
         metavar="TASK_ID",
         help="Task id (default: next TASK-###; must be unique).",
     )
-    task_add_parser.add_argument(
-        "--acceptance",
-        action="append",
-        default=None,
-        metavar="CRITERION",
-        help="Acceptance criterion (repeatable).",
-    )
-    task_add_parser.add_argument(
-        "--depends-on",
-        action="append",
-        default=None,
-        metavar="TASK_ID",
-        dest="depends_on",
-        help="Id of a task this task waits for (repeatable).",
-    )
-    task_add_parser.add_argument(
-        "--run-at",
-        default=None,
-        metavar="DATETIME",
-        dest="run_at",
-        help="Earliest moment the task may be picked (ISO-8601, or 'now' "
+    _add_task_common_args(
+        task_add_parser,
+        acceptance_help="Acceptance criterion (repeatable).",
+        depends_on_help="Id of a task this task waits for (repeatable).",
+        run_at_help="Earliest moment the task may be picked (ISO-8601, or 'now' "
         "to run next: due tasks jump ahead of oldest-first order).",
-    )
-    task_add_parser.add_argument(
-        "--run",
-        action="store_true",
-        help="Create the task and run it immediately in one step (same "
+        run_help="Create the task and run it immediately in one step (same "
         "lock as `forgeo run`; refuses while a daemon holds it; "
         "not with --run-at).",
     )
@@ -493,62 +521,36 @@ def _add_task_edit_parser(task_sub: Any) -> None:
         "not with --description).",
     )
     task_edit_parser.add_argument(
-        "--acceptance",
-        action="append",
-        default=None,
-        metavar="CRITERION",
-        help="Acceptance criterion (repeatable; replaces the whole list).",
-    )
-    task_edit_parser.add_argument(
-        "--depends-on",
-        action="append",
-        default=None,
-        metavar="TASK_ID",
-        dest="depends_on",
-        help="Dependency task id (repeatable; replaces the whole list).",
-    )
-    task_edit_parser.add_argument(
         "--files",
         action="append",
         default=None,
         metavar="PATH",
         help="File path the agent may touch (repeatable; replaces the whole list).",
     )
-    task_edit_parser.add_argument(
-        "--clear-acceptance",
-        action="store_true",
-        help="Clear all acceptance criteria.",
-    )
-    task_edit_parser.add_argument(
-        "--clear-depends-on",
-        action="store_true",
-        help="Clear all dependencies.",
-    )
-    task_edit_parser.add_argument(
-        "--run-at",
-        default=None,
-        metavar="DATETIME",
-        dest="run_at",
-        help="Earliest moment the task may be picked (ISO-8601, or 'now' "
+    _add_task_common_args(
+        task_edit_parser,
+        acceptance_help="Acceptance criterion (repeatable; replaces the whole list).",
+        depends_on_help="Dependency task id (repeatable; replaces the whole list).",
+        run_at_help="Earliest moment the task may be picked (ISO-8601, or 'now' "
         "to run next; due tasks jump ahead of oldest-first order).",
-    )
-    task_edit_parser.add_argument(
-        "--clear-run-at",
-        action="store_true",
-        help="Clear the scheduled run time (back to oldest-first order).",
-    )
-    task_edit_parser.add_argument(
-        "--clear-files",
-        action="store_true",
-        help="Clear the files-to-modify list.",
-    )
-    task_edit_parser.add_argument(
-        "--run",
-        action="store_true",
-        help="Update the task and run it immediately in one step (same "
+        run_help="Update the task and run it immediately in one step (same "
         "lock as `forgeo run`; a BLOCKED task is reopened — and a FAILED "
         "one retried — first, so fix-and-retry needs no second command; "
         "not with --run-at).",
+    )
+    _add_clear_flag(
+        task_edit_parser, "acceptance", help="Clear all acceptance criteria."
+    )
+    _add_clear_flag(
+        task_edit_parser, "depends-on", help="Clear all dependencies."
+    )
+    _add_clear_flag(
+        task_edit_parser,
+        "run-at",
+        help="Clear the scheduled run time (back to oldest-first order).",
+    )
+    _add_clear_flag(
+        task_edit_parser, "files", help="Clear the files-to-modify list."
     )
 
 
@@ -1882,32 +1884,27 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
             return 1
         assert description_text is not None
         updates["description"] = description_text
-    if args.acceptance is not None and args.clear_acceptance:
-        console.print("[red]Pass either --acceptance or --clear-acceptance, not both.[/red]")
-        return 1
-    if args.depends_on is not None and args.clear_depends_on:
-        console.print("[red]Pass either --depends-on or --clear-depends-on, not both.[/red]")
-        return 1
-    if args.files is not None and args.clear_files:
-        console.print("[red]Pass either --files or --clear-files, not both.[/red]")
-        return 1
+    for value_attr, clear_attr, value_flag, clear_flag in (
+        ("acceptance", "clear_acceptance", "--acceptance", "--clear-acceptance"),
+        ("depends_on", "clear_depends_on", "--depends-on", "--clear-depends-on"),
+        ("files", "clear_files", "--files", "--clear-files"),
+        ("run_at", "clear_run_at", "--run-at", "--clear-run-at"),
+    ):
+        if getattr(args, value_attr, None) is not None and getattr(args, clear_attr, False):
+            console.print(f"[red]Pass either {value_flag} or {clear_flag}, not both.[/red]")
+            return 1
     run_at = getattr(args, "run_at", None)
     clear_run_at = getattr(args, "clear_run_at", False)
-    if run_at is not None and clear_run_at:
-        console.print("[red]Pass either --run-at or --clear-run-at, not both.[/red]")
-        return 1
-    if args.acceptance is not None:
-        updates["acceptance_criteria"] = list(args.acceptance)
-    elif args.clear_acceptance:
-        updates["acceptance_criteria"] = []
-    if args.depends_on is not None:
-        updates["dependencies"] = list(args.depends_on)
-    elif args.clear_depends_on:
-        updates["dependencies"] = []
-    if args.files is not None:
-        updates["files_to_modify"] = list(args.files)
-    elif args.clear_files:
-        updates["files_to_modify"] = []
+    for value_attr, clear_attr, update_key in (
+        ("acceptance", "clear_acceptance", "acceptance_criteria"),
+        ("depends_on", "clear_depends_on", "dependencies"),
+        ("files", "clear_files", "files_to_modify"),
+    ):
+        value = getattr(args, value_attr)
+        if value is not None:
+            updates[update_key] = list(value)
+        elif getattr(args, clear_attr):
+            updates[update_key] = []
     if run_at is not None:
         resolved_run_at = _resolve_run_at(run_at)
         if resolved_run_at is not None and not resolved_run_at.strip():

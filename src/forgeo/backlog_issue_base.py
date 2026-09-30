@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 if TYPE_CHECKING:
     from forgeo.models import Task, TaskStatus
@@ -401,6 +403,52 @@ def require_env_token(token_env: str, label: str, error_cls: type) -> str:
     if not token:
         raise error_cls(f"{label} token environment variable {token_env!r} is not set")
     return token
+
+
+def build_api_url(
+    base_url: str,
+    path: str,
+    query: dict[str, Any] | None = None,
+    *,
+    api_prefix: str = "",
+) -> str:
+    """Join ``base_url`` + ``api_prefix`` + ``path`` and encode ``query``.
+
+    Shared by the GitHub (no prefix) and GitLab (``/api/v4`` prefix) clients
+    so URL building stays identical in one place.
+    """
+    url = f"{base_url}{api_prefix}{path}"
+    if query:
+        url += "?" + urlencode(query, doseq=True)
+    return url
+
+
+def encode_json_body(payload: dict[str, Any] | None) -> bytes | None:
+    """Encode ``payload`` as UTF-8 JSON, or ``None`` when there is no payload."""
+    if payload is None:
+        return None
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def should_retry_on_auth_failure(
+    *,
+    attempt: int,
+    status: int | None,
+    has_oauth: bool,
+    has_provider: bool,
+) -> bool:
+    """True when a 401/403 on the first attempt warrants one OAuth retry.
+
+    Both REST clients invalidate a cached OAuth provider and retry once so a
+    freshly written token (e.g. after ``forgeo auth login``) is picked up.
+    """
+    return attempt == 0 and status in (401, 403) and has_oauth and has_provider
+
+
+def invalidate_oauth_provider(provider: Any) -> None:
+    """Best-effort OAuth cache invalidation before a retry (never raises)."""
+    with contextlib.suppress(Exception):  # noqa: BLE001 - invalidation is best-effort
+        provider.invalidate()
 
 
 def execute_json_request(

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from forgeo.backlog import BacklogUnavailableError
-from forgeo.backlog_issue_base import execute_json_request, require_env_token
+from forgeo.backlog_issue_base import (
+    build_api_url,
+    encode_json_body,
+    execute_json_request,
+    invalidate_oauth_provider,
+    require_env_token,
+    should_retry_on_auth_failure,
+)
 from forgeo.backlog_marker import MarkerIssueBacklog
 from forgeo.models import GithubBacklogConfig
 
@@ -69,10 +74,7 @@ class GithubClient:
         raise GithubRequestError("GitHub auth is not configured (token_env or oauth required)")
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
-        url = f"{self.base_url}{path}"
-        if query:
-            url += "?" + urlencode(query, doseq=True)
-        return url
+        return build_api_url(self.base_url, path, query)
 
     def _request(
         self,
@@ -84,9 +86,7 @@ class GithubClient:
     ) -> Any:
         # Retry once when GitHub rejects an OAuth token (revoked/expired)
         for attempt in (0, 1):
-            body = None
-            if payload is not None:
-                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            body = encode_json_body(payload)
             auth_header = self._auth_header()
             request = urllib.request.Request(
                 self._api_url(path, query),
@@ -106,14 +106,14 @@ class GithubClient:
             except GithubRequestError as exc:
                 # On 401/403 with OAuth, invalidate cache and retry once so a freshly
                 # written token (e.g. after `forgeo auth login`) is picked up.
-                if (
-                    attempt == 0
-                    and exc.status in (401, 403)
-                    and self.config.auth.oauth is not None
-                    and self._oauth_provider is not None
+                if should_retry_on_auth_failure(
+                    attempt=attempt,
+                    status=exc.status,
+                    has_oauth=self.config.auth.oauth is not None,
+                    has_provider=self._oauth_provider is not None,
                 ):
-                    with contextlib.suppress(Exception):  # noqa: BLE001
-                        self._oauth_provider.invalidate()
+                    assert self._oauth_provider is not None
+                    invalidate_oauth_provider(self._oauth_provider)
                     continue
                 raise
 

@@ -531,33 +531,49 @@ def _ask_provider(input_fn: SetupInput | None, out: Console) -> str:
     return provider
 
 
-def _setup_github(
-    root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
+def _setup_issue_repo(
+    provider: str, root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
 ) -> tuple[str, str, dict[str, object], str, str | None]:
-    """Collect GitHub provider details; returns (backlog, provider, cfg, state_dir, token_env)."""
+    """Collect GitHub/GitLab provider details; returns (backlog, provider, cfg, state_dir, token_env)."""
+    is_github = provider == "github"
+    label = "GitHub" if is_github else "GitLab"
+    default_env = DEFAULT_TOKEN_ENV_GITHUB if is_github else DEFAULT_TOKEN_ENV_GITLAB
     detected = _detect_github_repo(root) or ""
-    prompt = "[bold]GitHub repository[/bold] (owner/repo)" + (f" [default {detected}]" if detected else "")
-    github_repo = _ask_required(
-        input_fn, out, prompt, default=detected or None,
-        error="Repository must be owner/repo (e.g. owner/repo).", valid=lambda v: "/" in v,
-    )
-    # GitHub API base — only prompt interactively to keep non-interactive tests stable; GHE users can edit forgeo.yaml afterwards.
-    github_api_base = _ask_api_base(
-        input_fn, label="GitHub API base URL", default=DEFAULT_GITHUB_API, interactive_only=True
-    ).rstrip("/")
+    if is_github:
+        prompt = "[bold]GitHub repository[/bold] (owner/repo)" + (f" [default {detected}]" if detected else "")
+        repo = _ask_required(
+            input_fn, out, prompt, default=detected or None,
+            error="Repository must be owner/repo (e.g. owner/repo).", valid=lambda v: "/" in v,
+        )
+        # GitHub API base — only prompt interactively to keep non-interactive tests stable; GHE users can edit forgeo.yaml afterwards.
+        api_base = _ask_api_base(
+            input_fn, label="GitHub API base URL", default=DEFAULT_GITHUB_API, interactive_only=True
+        ).rstrip("/")
+    else:
+        prompt = "[bold]GitLab project[/bold] (group/project or numeric id)" + (
+            f" [default {detected}]" if detected else ""
+        )
+        repo = _ask_required(
+            input_fn, out, prompt, default=detected or None, error="Project must not be blank."
+        )
+        api_base = ""
     # Token env prompt also doubles as browser login selector to keep
     # non-interactive tests backwards compatible: entering "browser" selects OAuth.
-    token_env_raw = _ask_auth_choice(input_fn, label="GitHub", default_env=DEFAULT_TOKEN_ENV_GITHUB)
+    token_env_raw = _ask_auth_choice(input_fn, label=label, default_env=default_env)
     if _is_oauth_choice(token_env_raw):
         # OAuth / browser login path
-        spec = _ISSUE_OAUTH_SPECS["github"]
+        spec = _ISSUE_OAUTH_SPECS[provider]
         oauth_cfg, login_kwargs = _collect_issue_oauth(input_fn, out, spec)
-        github_cfg: dict[str, object] = {"repo": github_repo, "auth": {"oauth": oauth_cfg}}
-        _offer_issue_oauth_login(input_fn, out, spec, github_api_base, login_kwargs)
-        return github_api_base, "github", github_cfg, forgeo_dir, None
-    token_env = token_env_raw or DEFAULT_TOKEN_ENV_GITHUB
-    github_cfg = {"repo": github_repo, "auth": {"token_env": token_env}}
-    if input_fn is None and _ask_yes_no(
+        if not is_github:
+            api_base = _ask_api_base(input_fn, label="GitLab base URL", default=DEFAULT_GITLAB_API, interactive_only=True)
+        cfg_oauth: dict[str, object] = {"repo": repo, "auth": {"oauth": oauth_cfg}}
+        _offer_issue_oauth_login(input_fn, out, spec, api_base, login_kwargs)
+        return api_base.rstrip("/"), provider, cfg_oauth, forgeo_dir, None
+    token_env = token_env_raw or default_env
+    if not is_github:
+        api_base = _ask_api_base(input_fn, label="GitLab base URL", default=DEFAULT_GITLAB_API, interactive_only=False)
+    cfg: dict[str, object] = {"repo": repo, "auth": {"token_env": token_env}}
+    if is_github and input_fn is None and _ask_yes_no(
         input_fn,
         f"[bold]Paste GitHub token now to save to {token_env}?[/bold] (stored in ~/.config/forgeo/github_token_env.sh, 600)",
         default=False,
@@ -568,34 +584,9 @@ def _setup_github(
             _persist_token(token_env, token_value, out)
         else:
             out.print(f"[dim]Set {token_env} before forgeo validate/start: export {token_env}=ghp_...[/dim]")
-    elif input_fn is None:
+    elif is_github and input_fn is None:
         out.print(f"[dim]Create a classic PAT at https://github.com/settings/tokens/new (scope repo), then: export {token_env}=ghp_...[/dim]")
-    return github_api_base, "github", github_cfg, forgeo_dir, token_env
-
-
-def _setup_gitlab(
-    root: Path, forgeo_dir: str, input_fn: SetupInput | None, out: Console
-) -> tuple[str, str, dict[str, object], str]:
-    """Collect GitLab provider details; returns (backlog, provider, cfg, state_dir)."""
-    default_repo = _detect_github_repo(root) or ""
-    prompt = "[bold]GitLab project[/bold] (group/project or numeric id)" + (
-        f" [default {default_repo}]" if default_repo else ""
-    )
-    gitlab_repo = _ask_required(
-        input_fn, out, prompt, default=default_repo or None, error="Project must not be blank."
-    )
-    token_env_raw = _ask_auth_choice(input_fn, label="GitLab", default_env=DEFAULT_TOKEN_ENV_GITLAB)
-    if _is_oauth_choice(token_env_raw):
-        spec = _ISSUE_OAUTH_SPECS["gitlab"]
-        oauth_cfg, login_kwargs = _collect_issue_oauth(input_fn, out, spec)
-        gitlab_api = _ask_api_base(input_fn, label="GitLab base URL", default=DEFAULT_GITLAB_API, interactive_only=True)
-        gitlab_cfg_oauth: dict[str, object] = {"repo": gitlab_repo, "auth": {"oauth": oauth_cfg}}
-        _offer_issue_oauth_login(input_fn, out, spec, gitlab_api, login_kwargs)
-        return gitlab_api.rstrip("/"), "gitlab", gitlab_cfg_oauth, forgeo_dir
-    token_env = token_env_raw or DEFAULT_TOKEN_ENV_GITLAB
-    gitlab_api = _ask_api_base(input_fn, label="GitLab base URL", default=DEFAULT_GITLAB_API, interactive_only=False)
-    gitlab_cfg: dict[str, object] = {"repo": gitlab_repo, "auth": {"token_env": token_env}}
-    return gitlab_api.rstrip("/"), "gitlab", gitlab_cfg, forgeo_dir
+    return api_base.rstrip("/"), provider, cfg, forgeo_dir, token_env
 
 
 def _setup_jira(
@@ -739,14 +730,15 @@ def run_setup(
     jira_cfg: dict[str, object] | None = None
     state_dir: str | None = None
     github_token_env: str | None = None
+    gitlab_token_env: str | None = None
 
     if provider == "github":
-        backlog, backlog_provider, github_cfg, state_dir, github_token_env = _setup_github(
-            root, forgeo_dir, input_fn, out
+        backlog, backlog_provider, github_cfg, state_dir, github_token_env = _setup_issue_repo(
+            "github", root, forgeo_dir, input_fn, out
         )
     elif provider == "gitlab":
-        backlog, backlog_provider, gitlab_cfg, state_dir = _setup_gitlab(
-            root, forgeo_dir, input_fn, out
+        backlog, backlog_provider, gitlab_cfg, state_dir, gitlab_token_env = _setup_issue_repo(
+            "gitlab", root, forgeo_dir, input_fn, out
         )
     elif provider == "jira":
         backlog, backlog_provider, jira_cfg, state_dir = _setup_jira(
@@ -825,7 +817,7 @@ def run_setup(
     provider_cfgs: dict[str, dict[str, object] | None] = {"github": github_cfg, "gitlab": gitlab_cfg, "jira": jira_cfg}
     provider_pats: dict[str, str | None] = {
         "github": f"export {github_token_env}=ghp_..." if github_token_env else None,
-        "gitlab": "export GITLAB_TOKEN=glpat-...",
+        "gitlab": f"export {gitlab_token_env}=glpat-..." if gitlab_token_env else None,
         "jira": "export JIRA_TOKEN=...",
     }
     hint_cfg = provider_cfgs.get(provider)

@@ -10,9 +10,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 
 DEFAULT_REFACTOR_PROMPT = (
     "Review the codebase for improvement opportunities that do not change "
@@ -80,16 +80,25 @@ def _validate_agent_command(value: str | list[str] | None) -> str | list[str] | 
     return value
 
 
-def _require_non_blank(value: str, message: str) -> str:
+def _check_non_blank(value: str) -> str:
     if not value.strip():
-        raise ValueError(message)
+        raise ValueError("must not be blank")
     return value
 
 
-def _require_optional_non_blank(value: str | None, message: str) -> str | None:
+def _check_optional_non_blank(value: str | None) -> str | None:
     if value is not None and not value.strip():
-        raise ValueError(message)
+        raise ValueError("must not be blank")
     return value
+
+
+#: A required string that must contain more than whitespace. Replaces the
+#: per-model ``_not_blank``/``_client_id_not_blank``/``_repo_not_blank`` ...
+#: field validators that all did exactly this check.
+NonBlankStr = Annotated[str, BeforeValidator(_check_non_blank)]
+
+#: An optional string that, when set, must contain more than whitespace.
+OptionalNonBlankStr = Annotated[str | None, BeforeValidator(_check_optional_non_blank)]
 
 
 def _utcnow() -> datetime:
@@ -364,8 +373,8 @@ class BacklogAuth(BaseModel):
     """
 
     token_url: str
-    client_id: str
-    client_secret_env: str
+    client_id: NonBlankStr
+    client_secret_env: NonBlankStr
     scope: str | None = None
     timeout_seconds: float = Field(default=10, gt=0)
 
@@ -376,32 +385,17 @@ class BacklogAuth(BaseModel):
             raise ValueError("token_url must be an http:// or https:// URL")
         return value
 
-    @field_validator("client_id", "client_secret_env")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "must not be blank")
-
 
 class JiraOAuthConfig(BaseModel):
     """OAuth / browser login for Jira Cloud (Atlassian 3LO)."""
 
-    client_id: str
-    client_secret_env: str | None = None
+    client_id: NonBlankStr
+    client_secret_env: OptionalNonBlankStr = None
     scope: str | None = None
     token_file: str | Path | None = None
-    cloud_id: str | None = None
+    cloud_id: OptionalNonBlankStr = None
     callback_port: int | None = Field(default=None, ge=1, le=65535)
     flow: Literal["browser"] = "browser"
-
-    @field_validator("client_id")
-    @classmethod
-    def _client_id_not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "client_id must not be blank")
-
-    @field_validator("client_secret_env", "cloud_id")
-    @classmethod
-    def _not_blank(cls, value: str | None) -> str | None:
-        return _require_optional_non_blank(value, "value must not be blank")
 
 
 class JiraAuth(BaseModel):
@@ -418,20 +412,10 @@ class JiraAuth(BaseModel):
     """
 
     scheme: Literal["basic", "bearer"] = "basic"
-    token_env: str | None = None
-    username: str | None = None
-    username_env: str | None = None
+    token_env: OptionalNonBlankStr = None
+    username: OptionalNonBlankStr = None
+    username_env: OptionalNonBlankStr = None
     oauth: JiraOAuthConfig | None = None
-
-    @field_validator("token_env", "username_env")
-    @classmethod
-    def _env_name_not_blank(cls, value: str | None) -> str | None:
-        return _require_optional_non_blank(value, "environment variable names must not be blank")
-
-    @field_validator("username")
-    @classmethod
-    def _username_not_blank(cls, value: str | None) -> str | None:
-        return _require_optional_non_blank(value, "username must not be blank")
 
     @model_validator(mode="after")
     def _check_auth(self) -> JiraAuth:
@@ -479,34 +463,16 @@ class JiraWorkflow(BaseModel):
         return value
 
 
-_ISSUE_FIELD_NAMES: tuple[str, ...] = (
-    "acceptance_criteria",
-    "dependencies",
-    "files_to_modify",
-    "agent_command",
-    "agent_timeout_seconds",
-    "run_at",
-    "retries_left",
-)
-
-
 class _IssueFieldMappingBase(BaseModel):
     """Shared optional field mappings for issue providers."""
 
-    acceptance_criteria: str | None = None
-    dependencies: str | None = None
-    files_to_modify: str | None = None
-    agent_command: str | None = None
-    agent_timeout_seconds: str | None = None
-    run_at: str | None = None
-    retries_left: str | None = None
-
-    @field_validator(*_ISSUE_FIELD_NAMES)
-    @classmethod
-    def _check_field_names(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _require_non_blank(value, "field names must not be blank")
+    acceptance_criteria: OptionalNonBlankStr = None
+    dependencies: OptionalNonBlankStr = None
+    files_to_modify: OptionalNonBlankStr = None
+    agent_command: OptionalNonBlankStr = None
+    agent_timeout_seconds: OptionalNonBlankStr = None
+    run_at: OptionalNonBlankStr = None
+    retries_left: OptionalNonBlankStr = None
 
 
 class JiraFieldMapping(_IssueFieldMappingBase):
@@ -526,7 +492,8 @@ class _IssueBacklogConfigBase(BaseModel):
     @field_validator("label_prefix", "property_key")
     @classmethod
     def _safe_identifier(cls, value: str) -> str:
-        _require_non_blank(value, "labels and property keys must not be blank")
+        if not value.strip():
+            raise ValueError("labels and property keys must not be blank")
         if any(character.isspace() for character in value):
             raise ValueError("labels and property keys must not contain whitespace")
         return value
@@ -535,18 +502,13 @@ class JiraBacklogConfig(_IssueBacklogConfigBase):
     """Jira-specific settings for a remote task provider."""
 
     auth: JiraAuth
-    jql: str
+    jql: NonBlankStr
     project_key: str | None = None
-    issue_type: str = "Task"
+    issue_type: NonBlankStr = "Task"
     api_version: Literal[2, 3] = 3
     page_size: int = Field(default=50, ge=1, le=100)
     workflow: JiraWorkflow = Field(default_factory=JiraWorkflow)
     fields: JiraFieldMapping = Field(default_factory=JiraFieldMapping)
-
-    @field_validator("jql", "issue_type")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "Jira configuration values must not be blank")
 
 
 # ------------------------------------------------------------------ #
@@ -557,22 +519,12 @@ class JiraBacklogConfig(_IssueBacklogConfigBase):
 class _OAuthConfigBase(BaseModel):
     """Shared OAuth / browser-login fields for issue providers."""
 
-    client_id: str
+    client_id: NonBlankStr
     scope: str | None = None
     token_file: str | Path | None = None
     callback_port: int | None = Field(default=None, ge=1, le=65535)
     flow: Literal["device", "browser"] = "device"
-    client_secret_env: str | None = None
-
-    @field_validator("client_id")
-    @classmethod
-    def _client_id_not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "client_id must not be blank")
-
-    @field_validator("client_secret_env")
-    @classmethod
-    def _secret_env_not_blank(cls, value: str | None) -> str | None:
-        return _require_optional_non_blank(value, "client_secret_env must not be blank")
+    client_secret_env: OptionalNonBlankStr = None
 
 
 class GithubOAuthConfig(_OAuthConfigBase):
@@ -583,12 +535,7 @@ class _TokenOrOAuthAuthBase(BaseModel):
     """Exactly one of PAT (``token_env``) or ``oauth`` must be set."""
 
     provider_label: ClassVar[str] = "issue"
-    token_env: str | None = None
-
-    @field_validator("token_env")
-    @classmethod
-    def _token_env_not_blank(cls, value: str | None) -> str | None:
-        return _require_optional_non_blank(value, "token_env must not be blank")
+    token_env: OptionalNonBlankStr = None
 
     @model_validator(mode="after")
     def _exactly_one_auth(self) -> _TokenOrOAuthAuthBase:
@@ -664,12 +611,7 @@ class GitlabWorkflow(_IssueWorkflowBase):
 class _RepoBacklogConfigBase(_IssueBacklogConfigBase):
     """Shared ``repo`` field for GitHub/GitLab issue providers."""
 
-    repo: str
-
-    @field_validator("repo")
-    @classmethod
-    def _repo_not_blank(cls, value: str) -> str:
-        return _require_non_blank(value, "repo must not be blank")
+    repo: NonBlankStr
 
 
 class GithubBacklogConfig(_RepoBacklogConfigBase):

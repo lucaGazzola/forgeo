@@ -480,7 +480,7 @@ class CachedFileTokenProvider:
             self._refresh_requested = True
 
 
-# Shared provider boilerplate (token paths, stores, callbacks, post, device).
+# Shared provider wiring (token paths, callbacks, post, browser flow).
 DEFAULT_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"
 DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 300.0
 DEFAULT_DEVICE_POLL_INTERVAL = 5.0
@@ -522,16 +522,6 @@ def github_web_base(api_base: str) -> str:
         port = f":{parsed.port}" if parsed.port else ""
         return f"{parsed.scheme}://github.com{port}"
     return base
-
-
-def make_token_store(default_path_fn: Callable[[str | None], Path]) -> Any:
-    """Build a ``FileTokenStore`` subclass bound to ``default_path_fn``."""
-
-    class _ProviderTokenStore(FileTokenStore):
-        def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
-            super().__init__(Path(path).expanduser() if path is not None else default_path_fn(api_base))
-
-    return _ProviderTokenStore
 
 
 def make_callback_handler(provider_label: str) -> type[CallbackHandler]:
@@ -621,109 +611,6 @@ def make_browser_flow(
     return run
 
 
-def make_poll_device_token(
-    error_cls: type[Exception],
-    token_path: str,
-) -> Callable[..., dict[str, Any]]:
-    """Build a ``poll_device_token`` polling ``oauth_base`` + ``token_path``."""
-
-
-    def poll(
-        client_id: str,
-        device_code: str,
-        oauth_base: str,
-        interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
-        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-    ) -> dict[str, Any]:
-        return poll_device_grant(
-            token_url=f"{oauth_base.rstrip('/')}{token_path}",
-            client_id=client_id,
-            device_code=device_code,
-            interval=interval,
-            timeout=timeout,
-            error_cls=error_cls,
-        )
-
-    return poll
-
-
-def make_device_code_request(
-    error_cls: type[Exception],
-    provider_label: str,
-    *device_paths: str,
-) -> Callable[..., dict[str, Any]]:
-    """Build ``request_device_code`` trying each ``device_paths`` entry (404 falls through)."""
-    label = f"{provider_label} OAuth"
-
-    def request(
-        client_id: str, oauth_base: str, scope: str | None = None, *, timeout: float = 30.0
-    ) -> dict[str, Any]:
-        last: Exception | None = None
-        for path in device_paths:
-            url = f"{oauth_base.rstrip('/')}{path}"
-            fields: dict[str, str] = {"client_id": client_id}
-            if scope:
-                fields["scope"] = scope
-            try:
-                return post_form(url, fields, timeout, error_cls, label=label)
-            except error_cls as exc:
-                last = exc
-                if len(device_paths) > 1 and "404" in str(exc):
-                    continue
-                raise
-        raise error_cls(f"{provider_label} device flow not available at {oauth_base}: {last}") from last
-
-    return request
-
-
-def make_file_token_provider(
-    error_cls: type[Exception], missing_message: str
-) -> type[CachedFileTokenProvider]:
-    """Build a ``CachedFileTokenProvider`` subclass (name mirrors ``error_cls``)."""
-    name = error_cls.__name__.replace("OAuthError", "OAuthTokenProvider")
-    return type(
-        name or "_FileTokenProvider",
-        (CachedFileTokenProvider,),
-        {"error_cls": error_cls, "missing_message": missing_message},
-    )
-
-
-def make_device_flow(
-    request_fn: Callable[..., dict[str, Any]],
-    poll_fn: Callable[..., dict[str, Any]],
-    error_cls: type[Exception],
-    provider_label: str,
-    *,
-    extra_url_keys: tuple[str, ...] = (),
-    default_interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
-) -> Callable[..., dict[str, Any]]:
-    """Build a ``run_device_flow`` wrapper around :func:`run_device_login`."""
-
-    def run(
-        client_id: str,
-        oauth_base: str,
-        scope: str | None = None,
-        *,
-        open_browser: bool = True,
-        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-    ) -> dict[str, Any]:
-        return run_device_login(
-            request_fn=request_fn,
-            poll_fn=poll_fn,
-            error_cls=error_cls,
-            provider_label=provider_label,
-            client_id=client_id,
-            oauth_base=oauth_base,
-            scope=scope,
-            open_browser=open_browser,
-            timeout=timeout,
-            extra_url_keys=extra_url_keys,
-            default_interval=default_interval,
-        )
-
-    return run
-
-
 @dataclass(frozen=True)
 class SimpleOAuthBindings:
     """Wired OAuth objects for a GitHub/GitLab-style provider."""
@@ -754,10 +641,13 @@ def build_simple_oauth(
     extra_authorize_params: dict[str, str] | None = None,
     extra_url_keys: tuple[str, ...] = (),
 ) -> SimpleOAuthBindings:
-    """Wire every OAuth object for a GitHub/GitLab-style provider at once."""
+    """Wire every OAuth object for a GitHub/GitLab-style provider at once.
+
+    The device-code request/poll, device-flow runner, token store, and token
+    provider are each needed exactly once (here), so they live as closures
+    and a subclass below instead of behind one-shot factory helpers.
+    """
     post_fn = make_post_form(error_cls, f"{label} OAuth")
-    request_fn = make_device_code_request(error_cls, label, *device_paths)
-    poll_fn = make_poll_device_token(error_cls, token_path)
 
     def _default_token_path(api_base: str | None = None) -> Path:
         return host_token_path(
@@ -765,18 +655,90 @@ def build_simple_oauth(
             plain_host=plain_host, strip_suffixes=strip_suffixes,
         )
 
+    class _ProviderTokenStore(FileTokenStore):
+        def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
+            super().__init__(Path(path).expanduser() if path is not None else _default_token_path(api_base))
+
+    _provider_name = error_cls.__name__.replace("OAuthError", "OAuthTokenProvider")
+    _TokenProvider = type(
+        _provider_name or "_FileTokenProvider",
+        (CachedFileTokenProvider,),
+        {
+            "error_cls": error_cls,
+            "missing_message": (
+                f"{label} OAuth token not found at {{path}}; "
+                f"run `forgeo auth login --provider {key}` or set a PAT."
+            ),
+        },
+    )
+
+    _device_label = f"{label} OAuth"
+
+    def _request_device_code(
+        client_id: str, oauth_base: str, scope: str | None = None, *, timeout: float = 30.0
+    ) -> dict[str, Any]:
+        """Request a device code, trying each ``device_paths`` entry (404 falls through)."""
+        last: Exception | None = None
+        for path in device_paths:
+            url = f"{oauth_base.rstrip('/')}{path}"
+            fields: dict[str, str] = {"client_id": client_id}
+            if scope:
+                fields["scope"] = scope
+            try:
+                return post_form(url, fields, timeout, error_cls, label=_device_label)
+            except error_cls as exc:
+                last = exc
+                if len(device_paths) > 1 and "404" in str(exc):
+                    continue
+                raise
+        raise error_cls(f"{label} device flow not available at {oauth_base}: {last}") from last
+
+    def _poll_device_token(
+        client_id: str,
+        device_code: str,
+        oauth_base: str,
+        interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
+        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Poll ``oauth_base`` + the provider token path until approval."""
+        return poll_device_grant(
+            token_url=f"{oauth_base.rstrip('/')}{token_path}",
+            client_id=client_id,
+            device_code=device_code,
+            interval=interval,
+            timeout=timeout,
+            error_cls=error_cls,
+        )
+
+    def _run_device_flow(
+        client_id: str,
+        oauth_base: str,
+        scope: str | None = None,
+        *,
+        open_browser: bool = True,
+        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Run the full device flow: request code, prompt user, poll."""
+        return run_device_login(
+            request_fn=_request_device_code,
+            poll_fn=_poll_device_token,
+            error_cls=error_cls,
+            provider_label=label,
+            client_id=client_id,
+            oauth_base=oauth_base,
+            scope=scope,
+            open_browser=open_browser,
+            timeout=timeout,
+            extra_url_keys=extra_url_keys,
+            default_interval=DEFAULT_DEVICE_POLL_INTERVAL,
+        )
+
     return SimpleOAuthBindings(
         default_token_path=_default_token_path, oauth_base=oauth_base_fn,
-        TokenStore=make_token_store(_default_token_path),
-        TokenProvider=make_file_token_provider(
-            error_cls,
-            f"{label} OAuth token not found at {{path}}; "
-            f"run `forgeo auth login --provider {key}` or set a PAT.",
-        ),
-        request_device_code=request_fn, poll_device_token=poll_fn,
-        run_device_flow=make_device_flow(
-            request_fn, poll_fn, error_cls, label, extra_url_keys=extra_url_keys
-        ),
+        TokenStore=_ProviderTokenStore,
+        TokenProvider=_TokenProvider,
+        request_device_code=_request_device_code, poll_device_token=_poll_device_token,
+        run_device_flow=_run_device_flow,
         run_browser_flow=make_browser_flow(
             make_callback_handler(label), error_cls, label, post_fn,
             authorize_path=authorize_path, token_path=token_path,

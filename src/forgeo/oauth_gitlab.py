@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from forgeo.oauth_common import build_simple_oauth, strip_url_suffix
 
 
@@ -23,14 +21,8 @@ _provider = build_simple_oauth(
 )
 
 
-def gitlab_default_token_path(api_base: str | None = None) -> Path:
-    """Default token file for a GitLab base."""
-    return _provider.default_token_path(api_base)
-
-
-def gitlab_oauth_base(api_base: str) -> str:
-    """Derive OAuth base from a GitLab API base."""
-    return _provider.oauth_base(api_base)
+gitlab_default_token_path = _provider.default_token_path
+gitlab_oauth_base = _provider.oauth_base
 
 
 GitlabTokenStore = _provider.TokenStore

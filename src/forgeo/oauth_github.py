@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from forgeo.oauth_common import build_simple_oauth, github_web_base
 
 
@@ -21,14 +19,8 @@ _provider = build_simple_oauth(
 )
 
 
-def github_default_token_path(api_base: str | None = None) -> Path:
-    """Default token file for a GitHub API base."""
-    return _provider.default_token_path(api_base)
-
-
-def github_oauth_base(api_base: str) -> str:
-    """Derive the OAuth authorize/token base from a GitHub API base."""
-    return _provider.oauth_base(api_base)
+github_default_token_path = _provider.default_token_path
+github_oauth_base = _provider.oauth_base
 
 
 GithubTokenStore = _provider.TokenStore

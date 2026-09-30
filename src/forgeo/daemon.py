@@ -254,18 +254,6 @@ class ForgeoDaemon:
         """
         self._reload_event.set()
 
-    def _config_changed(self) -> bool:
-        """True when the config file's mtime differs from the last seen one."""
-        if self.config_path is None:
-            return False
-        mtime = _config_mtime_ns(self.config_path)
-        if mtime is None:
-            return False
-        changed = mtime != self._config_mtime_ns
-        if changed:
-            self._config_mtime_ns = mtime
-        return changed
-
     def _reload_config(self) -> bool:
         """Re-read ``forgeo.yaml`` when it changed and apply it from the next
         cycle. An invalid change is logged and the previous config stays in
@@ -275,8 +263,12 @@ class ForgeoDaemon:
         force = self._reload_event.is_set()
         if force:
             self._reload_event.clear()
-        if not force and not self._config_changed():
-            return False
+        if not force:
+            # Reload when the config file's mtime differs from the last seen one.
+            mtime = _config_mtime_ns(self.config_path)
+            if mtime is None or mtime == self._config_mtime_ns:
+                return False
+            self._config_mtime_ns = mtime
         try:
             new_config = load_config(self.config_path)
         except (OSError, yaml.YAMLError, ValidationError) as exc:

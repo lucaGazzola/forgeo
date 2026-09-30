@@ -50,13 +50,6 @@ class ValidationReport:
         return not self.problems
 
 
-def _command_text(command: str | list[str]) -> str:
-    """A single-line rendering of an agent command for the report."""
-    if isinstance(command, list):
-        return " ".join(command)
-    return command
-
-
 def validate_config(config: ForgeoConfig) -> ValidationReport:
     """Run every read-only check against a loaded config.
 
@@ -181,18 +174,14 @@ def _check_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
     report.notes.append(f"backlog parses ({len(data['tasks'])} tasks)")
 
 
-def _remote_label(provider: str) -> str:
-    return {
+def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
+    """Fetch a remote backlog once to prove it answers before a cycle needs it."""
+    provider = config.effective_backlog_provider
+    label = {
         "jira": "Jira backlog",
         "github": "GitHub backlog",
         "gitlab": "GitLab backlog",
     }.get(provider, "backlog endpoint")
-
-
-def _check_remote_backlog(config: ForgeoConfig, report: ValidationReport) -> None:
-    """Fetch a remote backlog once to prove it answers before a cycle needs it."""
-    provider = config.effective_backlog_provider
-    label = _remote_label(provider)
     try:
         if config.backlog_is_issue_provider:
             asyncio.run(open_backlog(config).validate_connection())
@@ -237,11 +226,12 @@ def _check_lock(path: Path, report: ValidationReport) -> None:
 
 def render_report(config: ForgeoConfig, report: ValidationReport) -> str:
     """Render the validation summary as plain text."""
+    command = config.agent_command
     lines = [
         f"name: {config.name}",
         f"repo: {config.repo}",
         f"branch: {config.branch}",
-        f"agent command: {_command_text(config.agent_command)}",
+        f"agent command: {' '.join(command) if isinstance(command, list) else command}",
         f"backlog: {config.backlog}",
         f"lock: {'held' if report.lock_held else 'not held'}",
     ]

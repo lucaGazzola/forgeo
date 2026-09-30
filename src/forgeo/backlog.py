@@ -809,35 +809,34 @@ class IssueBacklogBase(BacklogStore):
         """Remove all forgeo labels from ``task_id``."""
         await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
 
-    async def retry_task(self, task_id: str) -> Task | None:
-        """Shared retry: FAILED -> OPEN with counter bump and reopen transition."""
+    async def _reopen_from_status(
+        self,
+        task_id: str,
+        *,
+        from_status: TaskStatus,
+        bump: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> Task | None:
+        """Shared FAILED/BLOCKED -> OPEN: counter bump plus reopen transition."""
         async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
+            fetched = await self._locked_issue_task(task_id, require_status=from_status)
             if fetched is None:
                 return None
             issue, _task = fetched
             state = await self.get_engine_state(task_id)
             state["state"] = TaskStatus.OPEN.value
-            next_retry_state(state)
+            bump(state)
             await self._to_open(issue, task_id)
             await self._clear_labels(task_id)
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
+    async def retry_task(self, task_id: str) -> Task | None:
+        """Shared retry: FAILED -> OPEN with counter bump and reopen transition."""
+        return await self._reopen_from_status(task_id, from_status=TaskStatus.FAILED, bump=next_retry_state)
+
     async def reopen_task(self, task_id: str) -> Task | None:
         """Shared reopen: BLOCKED -> OPEN with counter reset and reopen transition."""
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.OPEN.value
-            next_reopen_state(state)
-            await self._to_open(issue, task_id)
-            await self._clear_labels(task_id)
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
+        return await self._reopen_from_status(task_id, from_status=TaskStatus.BLOCKED, bump=next_reopen_state)
 
     async def set_review(
         self, task_id: str, branch: str, sha: str | None, result: ExecutionResult
@@ -873,38 +872,33 @@ class IssueBacklogBase(BacklogStore):
             await self._flush_comments()
             return await self.get_task(task_id)
 
-    async def complete_review(self, task_id: str) -> Task | None:
-        """Shared review completion: REVIEW -> COMPLETED with close transition."""
+    async def _exit_review(self, task_id: str, target: TaskStatus, *, close: bool) -> Task | None:
+        """Shared REVIEW exit: clear review fields, transition, clear labels."""
         async with self._lock:
             fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
             if fetched is None:
                 return None
             issue, _task = fetched
             state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.COMPLETED.value
+            state["state"] = target.value
             state.pop("review_branch", None)
             state.pop("review_commit_sha", None)
-            state.pop("claimed_at", None)
-            await self._to_closed(issue, task_id)
+            if close:
+                state.pop("claimed_at", None)
+                await self._to_closed(issue, task_id)
+            else:
+                await self._to_open(issue, task_id)
             await self._clear_labels(task_id)
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
+    async def complete_review(self, task_id: str) -> Task | None:
+        """Shared review completion: REVIEW -> COMPLETED with close transition."""
+        return await self._exit_review(task_id, TaskStatus.COMPLETED, close=True)
+
     async def request_changes(self, task_id: str) -> Task | None:
         """Shared review rework: REVIEW -> OPEN with reopen transition."""
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.OPEN.value
-            state.pop("review_branch", None)
-            state.pop("review_commit_sha", None)
-            await self._to_open(issue, task_id)
-            await self._clear_labels(task_id)
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
+        return await self._exit_review(task_id, TaskStatus.OPEN, close=False)
 
     async def _update_issue_labels(
         self, issue_id: str, *, add: list[str], remove: list[str]

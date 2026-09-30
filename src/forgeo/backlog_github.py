@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import urllib.error
 import urllib.request
 from typing import Any
 from urllib.parse import quote
@@ -11,11 +10,12 @@ from urllib.parse import quote
 from forgeo.backlog import BacklogUnavailableError
 from forgeo.backlog_issue_base import (
     build_api_url,
+    clean_issue_list,
     encode_json_body,
-    execute_json_request,
-    invalidate_oauth_provider,
+    execute_rest_with_oauth_retry,
+    oauth_access_token,
     require_env_token,
-    should_retry_on_auth_failure,
+    resolve_cached_oauth_provider,
 )
 from forgeo.backlog_marker import MarkerIssueBacklog
 from forgeo.models import GithubBacklogConfig
@@ -38,18 +38,9 @@ class GithubClient:
         self._oauth_provider: Any | None = None  # lazy GithubOAuthTokenProvider when oauth is used
 
     def _oauth_token_provider(self) -> Any | None:
-        if self._oauth_provider is not None:
-            return self._oauth_provider
-        auth = self.config.auth
-        if auth.oauth is None:
-            return None
         from forgeo.oauth_github import GithubOAuthTokenProvider, GithubTokenStore
 
-        token_file = auth.oauth.token_file
-        store = GithubTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else GithubTokenStore(api_base=self.base_url)
-        provider = GithubOAuthTokenProvider(store)
-        self._oauth_provider = provider
-        return provider
+        return resolve_cached_oauth_provider(self, GithubTokenStore, GithubOAuthTokenProvider)
 
     def _auth_header(self) -> str:
         auth = self.config.auth
@@ -59,18 +50,9 @@ class GithubClient:
         if auth.oauth is not None:
             provider = self._oauth_token_provider()
             assert provider is not None
-            try:
-                token = provider.token()
-            except Exception as exc:
-                # Wrap file errors as GithubRequestError so callers surface a clear message
-                if isinstance(exc, GithubRequestError):
-                    raise
-                from forgeo.oauth_github import GithubOAuthError
+            from forgeo.oauth_github import GithubOAuthError
 
-                if isinstance(exc, GithubOAuthError):
-                    raise GithubRequestError(str(exc)) from exc
-                raise GithubRequestError(str(exc)) from exc
-            return f"Bearer {token}"
+            return f"Bearer {oauth_access_token(provider, oauth_error_cls=GithubOAuthError, request_error_cls=GithubRequestError)}"
         raise GithubRequestError("GitHub auth is not configured (token_env or oauth required)")
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
@@ -85,10 +67,10 @@ class GithubClient:
         payload: dict[str, Any] | None = None,
     ) -> Any:
         # Retry once when GitHub rejects an OAuth token (revoked/expired)
-        for attempt in (0, 1):
+        def _build_request() -> urllib.request.Request:
             body = encode_json_body(payload)
             auth_header = self._auth_header()
-            request = urllib.request.Request(
+            return urllib.request.Request(
                 self._api_url(path, query),
                 data=body,
                 method=method,
@@ -99,23 +81,15 @@ class GithubClient:
                     **({"Content-Type": "application/json"} if body is not None else {}),
                 },
             )
-            try:
-                return execute_json_request(
-                    request, self.config.timeout_seconds, GithubRequestError, method
-                )
-            except GithubRequestError as exc:
-                # On 401/403 with OAuth, invalidate cache and retry once so a freshly
-                # written token (e.g. after `forgeo auth login`) is picked up.
-                if should_retry_on_auth_failure(
-                    attempt=attempt,
-                    status=exc.status,
-                    has_oauth=self.config.auth.oauth is not None,
-                    has_provider=self._oauth_provider is not None,
-                ):
-                    assert self._oauth_provider is not None
-                    invalidate_oauth_provider(self._oauth_provider)
-                    continue
-                raise
+
+        return execute_rest_with_oauth_retry(
+            build_request=_build_request,
+            timeout=self.config.timeout_seconds,
+            error_cls=GithubRequestError,
+            method=method,
+            has_oauth=self.config.auth.oauth is not None,
+            get_cached_provider=lambda: self._oauth_provider,
+        )
 
     def _repo_path(self) -> str:
         # GitHub API expects owner/repo as two separate path segments;
@@ -131,10 +105,7 @@ class GithubClient:
     ) -> list[dict[str, Any]]:
         path = f"/repos/{self._repo_path()}/issues"
         query: dict[str, Any] = {"state": state, "per_page": per_page, "page": page}
-        data = self._request("GET", path, query=query)
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        return []
+        return clean_issue_list(self._request("GET", path, query=query))
 
     def get_issue(self, issue_number: int) -> dict[str, Any]:
         path = f"/repos/{self._repo_path()}/issues/{issue_number}"
@@ -165,19 +136,7 @@ class GithubBacklog(MarkerIssueBacklog):
     close_state = "closed"
     provider_label = "GitHub"
     request_error_cls = GithubRequestError
-
-    def __init__(
-        self,
-        url: str,
-        config: GithubBacklogConfig,
-        *,
-        output_cap: int | None = None,
-        client: GithubClient | None = None,
-    ) -> None:
-        super().__init__(url, config, output_cap=output_cap, client=client or GithubClient(url, config))
-
-    def __repr__(self) -> str:
-        return f"GithubBacklog({self.url!r})"
+    client_cls = GithubClient
 
     async def _search_page(self, *, page: int, per_page: int) -> Any:
         return await self._call(self.client.search_issues, page=page, per_page=per_page, state="all")

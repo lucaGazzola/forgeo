@@ -45,13 +45,19 @@ class MarkerIssueBacklog(IssueBacklogBase):
     close_state: str = "closed"
     provider_label: str = "issue"
     request_error_cls: type[Exception] = Exception
+    client_cls: Any = None
 
     def __init__(self, url: str, config: Any, *, output_cap: int | None = None, client: Any = None) -> None:
         super().__init__(output_cap=output_cap)
         self.url = url.rstrip("/")
         self.config = config
+        if client is None and self.client_cls is not None:
+            client = self.client_cls(url, config)
         self.client = client
         self._pending_comments: list[tuple[int, str]] = []
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.url!r})"
 
     # --- provider primitives (override in subclasses) ---
 

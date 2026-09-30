@@ -8,6 +8,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
@@ -449,6 +450,75 @@ def invalidate_oauth_provider(provider: Any) -> None:
     """Best-effort OAuth cache invalidation before a retry (never raises)."""
     with contextlib.suppress(Exception):  # noqa: BLE001 - invalidation is best-effort
         provider.invalidate()
+
+
+def resolve_cached_oauth_provider(client: Any, store_cls: Any, provider_cls: Any) -> Any | None:
+    """Lazy ``store``/``provider`` pair shared by the GitHub/GitLab clients."""
+    if client._oauth_provider is not None:
+        return client._oauth_provider
+    auth = client.config.auth
+    if auth.oauth is None:
+        return None
+    token_file = auth.oauth.token_file
+    store = (
+        store_cls(path=token_file, api_base=client.base_url)
+        if token_file is not None
+        else store_cls(api_base=client.base_url)
+    )
+    provider = provider_cls(store)
+    client._oauth_provider = provider
+    return provider
+
+
+def oauth_access_token(
+    provider: Any,
+    *,
+    oauth_error_cls: type[Exception],
+    request_error_cls: type[Exception],
+) -> str:
+    """Return ``provider.token()``, mapping provider errors to ``request_error_cls``."""
+    try:
+        return str(provider.token())
+    except Exception as exc:
+        if isinstance(exc, request_error_cls):
+            raise
+        if isinstance(exc, oauth_error_cls):
+            raise request_error_cls(str(exc)) from exc
+        raise request_error_cls(str(exc)) from exc
+
+
+def clean_issue_list(data: Any) -> list[dict[str, Any]]:
+    """Filter a search response down to its issue dicts (shared by GitHub/GitLab)."""
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def execute_rest_with_oauth_retry(
+    *,
+    build_request: Callable[[], urllib.request.Request],
+    timeout: float,
+    error_cls: type[Exception],
+    method: str,
+    has_oauth: bool,
+    get_cached_provider: Callable[[], Any | None],
+) -> Any:
+    """Run ``build_request()`` with one OAuth retry on 401/403 (GitHub/GitLab)."""
+    for attempt in (0, 1):
+        request = build_request()
+        try:
+            return execute_json_request(request, timeout, error_cls, method)
+        except error_cls as exc:
+            provider = get_cached_provider()
+            if should_retry_on_auth_failure(
+                attempt=attempt,
+                status=getattr(exc, "status", None),
+                has_oauth=has_oauth,
+                has_provider=provider is not None,
+            ):
+                invalidate_oauth_provider(provider)
+                continue
+            raise
 
 
 def execute_json_request(

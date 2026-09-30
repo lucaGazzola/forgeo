@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import urllib.error
 import urllib.request
 from typing import Any
 from urllib.parse import quote
@@ -11,11 +10,12 @@ from urllib.parse import quote
 from forgeo.backlog import BacklogUnavailableError
 from forgeo.backlog_issue_base import (
     build_api_url,
+    clean_issue_list,
     encode_json_body,
-    execute_json_request,
-    invalidate_oauth_provider,
+    execute_rest_with_oauth_retry,
+    oauth_access_token,
     require_env_token,
-    should_retry_on_auth_failure,
+    resolve_cached_oauth_provider,
 )
 from forgeo.backlog_marker import MarkerIssueBacklog
 from forgeo.models import GitlabBacklogConfig
@@ -38,18 +38,9 @@ class GitlabClient:
         self._oauth_provider: Any | None = None
 
     def _oauth_token_provider(self) -> Any | None:
-        if self._oauth_provider is not None:
-            return self._oauth_provider
-        auth = self.config.auth
-        if auth.oauth is None:
-            return None
         from forgeo.oauth_gitlab import GitlabOAuthTokenProvider, GitlabTokenStore
 
-        token_file = auth.oauth.token_file
-        store = GitlabTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else GitlabTokenStore(api_base=self.base_url)
-        provider = GitlabOAuthTokenProvider(store)
-        self._oauth_provider = provider
-        return provider
+        return resolve_cached_oauth_provider(self, GitlabTokenStore, GitlabOAuthTokenProvider)
 
     def _auth_headers(self) -> dict[str, str]:
         auth = self.config.auth
@@ -60,17 +51,9 @@ class GitlabClient:
         if auth.oauth is not None:
             provider = self._oauth_token_provider()
             assert provider is not None
-            try:
-                token = provider.token()
-            except Exception as exc:
-                if isinstance(exc, GitlabRequestError):
-                    raise
-                from forgeo.oauth_gitlab import GitlabOAuthError
+            from forgeo.oauth_gitlab import GitlabOAuthError
 
-                if isinstance(exc, GitlabOAuthError):
-                    raise GitlabRequestError(str(exc)) from exc
-                raise GitlabRequestError(str(exc)) from exc
-            return {"Authorization": f"Bearer {token}"}
+            return {"Authorization": f"Bearer {oauth_access_token(provider, oauth_error_cls=GitlabOAuthError, request_error_cls=GitlabRequestError)}"}
         raise GitlabRequestError("GitLab auth is not configured (token_env or oauth required)")
 
     def _project_path(self) -> str:
@@ -88,39 +71,30 @@ class GitlabClient:
         query: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> Any:
-        for attempt in (0, 1):
+        def _build_request() -> urllib.request.Request:
             body = encode_json_body(payload)
             headers = {
                 "Accept": "application/json",
                 **self._auth_headers(),
                 **({"Content-Type": "application/json"} if body is not None else {}),
             }
-            request = urllib.request.Request(
+            return urllib.request.Request(
                 self._api_url(path, query), data=body, method=method, headers=headers
             )
-            try:
-                return execute_json_request(
-                    request, self.config.timeout_seconds, GitlabRequestError, method
-                )
-            except GitlabRequestError as exc:
-                if should_retry_on_auth_failure(
-                    attempt=attempt,
-                    status=exc.status,
-                    has_oauth=self.config.auth.oauth is not None,
-                    has_provider=self._oauth_provider is not None,
-                ):
-                    assert self._oauth_provider is not None
-                    invalidate_oauth_provider(self._oauth_provider)
-                    continue
-                raise
+
+        return execute_rest_with_oauth_retry(
+            build_request=_build_request,
+            timeout=self.config.timeout_seconds,
+            error_cls=GitlabRequestError,
+            method=method,
+            has_oauth=self.config.auth.oauth is not None,
+            get_cached_provider=lambda: self._oauth_provider,
+        )
 
     def search_issues(self, *, page: int = 1, per_page: int = 20) -> list[dict[str, Any]]:
         path = f"/projects/{self._project_path()}/issues"
         query: dict[str, Any] = {"per_page": per_page, "page": page, "scope": "all", "state": "all"}
-        data = self._request("GET", path, query=query)
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        return []
+        return clean_issue_list(self._request("GET", path, query=query))
 
     def get_issue(self, iid: int) -> dict[str, Any]:
         path = f"/projects/{self._project_path()}/issues/{iid}"
@@ -151,19 +125,7 @@ class GitlabBacklog(MarkerIssueBacklog):
     close_state = "closed"
     provider_label = "GitLab"
     request_error_cls = GitlabRequestError
-
-    def __init__(
-        self,
-        url: str,
-        config: GitlabBacklogConfig,
-        *,
-        output_cap: int | None = None,
-        client: GitlabClient | None = None,
-    ) -> None:
-        super().__init__(url, config, output_cap=output_cap, client=client or GitlabClient(url, config))
-
-    def __repr__(self) -> str:
-        return f"GitlabBacklog({self.url!r})"
+    client_cls = GitlabClient
 
     async def _post_comment(self, numeric_id: int, body: str) -> None:
         await self._call(self.client.add_note, numeric_id, body)

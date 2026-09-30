@@ -382,7 +382,19 @@ def build_task(
 
     clean_title = title.strip() if isinstance(title, str) and title.strip() else issue_id
     clean_description = description.strip() if description.strip() else clean_title
-    agent_command = state.get("agent_command")
+    agent_command_value = state.get("agent_command")
+    if isinstance(agent_command_value, str):
+        agent_command: str | list[str] | None = (
+            agent_command_value if agent_command_value.strip() else None
+        )
+    elif (
+        isinstance(agent_command_value, list)
+        and agent_command_value
+        and all(isinstance(item, str) for item in agent_command_value)
+    ):
+        agent_command = agent_command_value
+    else:
+        agent_command = None
     agent_response = state.get("agent_response")
     review_branch = state.get("review_branch")
     review_commit_sha = state.get("review_commit_sha")
@@ -398,7 +410,7 @@ def build_task(
         created_at=created,
         updated_at=updated,
         run_at=run_at,
-        agent_command=agent_command if isinstance(agent_command, str) else None,
+        agent_command=agent_command,
         agent_timeout_seconds=as_optional_float(state.get("agent_timeout_seconds")),
         blocker_reason=as_string_list(state.get("blocker_reason")),
         blocked_count=as_nonnegative_int(state.get("blocked_count")),

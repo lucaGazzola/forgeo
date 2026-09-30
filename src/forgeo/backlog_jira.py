@@ -30,10 +30,9 @@ from forgeo.backlog import (
 from forgeo.backlog_issue_base import (
     RestTransportBase,
     adf_to_plain_text,
-    as_nonnegative_int,
     as_optional_float,
     as_optional_int,
-    as_string_list,
+    build_task,
     claim_cutoff,
     is_claim_stale,
     parse_datetime,
@@ -183,20 +182,21 @@ class JiraClient(RestTransportBase):
             }
         return self._request("GET", path, query=query)
 
+    def _issue_path(self, issue_key: str, suffix: str = "") -> str:
+        """Path for one issue, optionally with a ``suffix`` like ``/transitions``."""
+        return f"/issue/{quote(issue_key, safe='')}{suffix}"
+
     def get_issue(self, issue_key: str, *, fields: list[str]) -> dict[str, Any]:
         """Fetch one issue by key."""
         return self._request(
             "GET",
-            f"/issue/{quote(issue_key, safe='')}",
+            self._issue_path(issue_key),
             query={"fields": list(dict.fromkeys(fields))},
         )
 
     def get_transitions(self, issue_key: str) -> list[dict[str, Any]]:
         """Return workflow transitions currently available to the caller."""
-        data = self._request(
-            "GET",
-            f"/issue/{quote(issue_key, safe='')}/transitions",
-        )
+        data = self._request("GET", self._issue_path(issue_key, "/transitions"))
         transitions = data.get("transitions", [])
         return transitions if isinstance(transitions, list) else []
 
@@ -204,7 +204,7 @@ class JiraClient(RestTransportBase):
         """Apply one workflow transition."""
         self._request(
             "POST",
-            f"/issue/{quote(issue_key, safe='')}/transitions",
+            self._issue_path(issue_key, "/transitions"),
             payload={"transition": {"id": transition_id}},
         )
 
@@ -221,7 +221,7 @@ class JiraClient(RestTransportBase):
         }
         self._request(
             "PUT",
-            f"/issue/{quote(issue_key, safe='')}",
+            self._issue_path(issue_key),
             payload=payload,
         )
 
@@ -231,7 +231,7 @@ class JiraClient(RestTransportBase):
 
     def delete_issue(self, issue_key: str) -> None:
         """Delete an issue."""
-        self._request("DELETE", f"/issue/{quote(issue_key, safe='')}")
+        self._request("DELETE", self._issue_path(issue_key))
 
     def add_comment(self, issue_key: str, body: str) -> None:
         """Add a human-readable transition comment."""
@@ -240,7 +240,7 @@ class JiraClient(RestTransportBase):
             comment_body = plain_text_to_adf(body)
         self._request(
             "POST",
-            f"/issue/{quote(issue_key, safe='')}/comment",
+            self._issue_path(issue_key, "/comment"),
             payload={"body": comment_body},
         )
 
@@ -249,7 +249,7 @@ class JiraClient(RestTransportBase):
         try:
             return self._request(
                 "GET",
-                f"/issue/{quote(issue_key, safe='')}/properties/{quote(property_key, safe='')}",
+                self._issue_path(issue_key, f"/properties/{quote(property_key, safe='')}"),
             )
         except JiraRequestError as exc:
             if exc.status == 404:
@@ -260,7 +260,7 @@ class JiraClient(RestTransportBase):
         """Replace one issue property."""
         self._request(
             "PUT",
-            f"/issue/{quote(issue_key, safe='')}/properties/{quote(property_key, safe='')}",
+            self._issue_path(issue_key, f"/properties/{quote(property_key, safe='')}"),
             payload={"value": value},
         )
 
@@ -455,65 +455,36 @@ class JiraBacklog(IssueBacklogBase):
         fields = issue.get("fields", {})
         if not isinstance(fields, dict):
             return None
-        title = fields.get("summary")
-        title = title.strip() if isinstance(title, str) and title.strip() else key
-        description = adf_to_plain_text(fields.get("description"))
-        if not description:
-            description = title
         mapping = self.config.fields
-        acceptance = as_string_list(fields.get(mapping.acceptance_criteria))
-        dependencies = as_string_list(fields.get(mapping.dependencies))
+        dependencies: Any
         if mapping.dependencies is None:
             dependencies = self._issue_link_dependencies(fields.get("issuelinks"))
-        files_to_modify = as_string_list(fields.get(mapping.files_to_modify))
-        command_value = fields.get(mapping.agent_command)
-        command: str | list[str] | None
-        if (
-            (isinstance(command_value, str) and command_value.strip())
-            or (
-                isinstance(command_value, list)
-                and command_value
-                and all(isinstance(item, str) for item in command_value)
-            )
-        ):
-            command = command_value
         else:
-            command = None
+            dependencies = fields.get(mapping.dependencies)
         timeout = as_optional_float(fields.get(mapping.agent_timeout_seconds))
         if timeout is not None and timeout <= 0:
             timeout = None
-        run_at_field = mapping.run_at or "duedate"
-        run_at = parse_optional_datetime(fields.get(run_at_field))
         retries_left = as_optional_int(fields.get(mapping.retries_left))
         if retries_left is not None and retries_left < 0:
             retries_left = None
-        return Task(
-            id=key,
-            title=title,
-            description=description,
-            dependencies=dependencies,
-            acceptance_criteria=acceptance,
-            files_to_modify=files_to_modify,
+        run_at_field = mapping.run_at or "duedate"
+        return build_task(
+            issue_id=key,
+            title=fields.get("summary"),
+            description=adf_to_plain_text(fields.get("description")),
             status=status,
-            created_at=parse_datetime(fields.get("created")),
-            updated_at=parse_datetime(fields.get("updated")),
-            run_at=run_at,
-            agent_command=command,
-            agent_timeout_seconds=timeout,
-            blocker_reason=as_string_list(metadata.get("blocker_reason")),
-            blocked_count=as_nonnegative_int(metadata.get("blocked_count")),
-            failure_reason=as_string_list(metadata.get("failure_reason")),
-            agent_response=(
-                metadata.get("agent_response")
-                if isinstance(metadata.get("agent_response"), str)
-                else None
-            ),
-            retries_left=retries_left,
-            retry_count=as_nonnegative_int(metadata.get("retry_count")),
-            failed_wait_cycles=as_nonnegative_int(metadata.get("failed_wait_cycles")),
-            review_branch=metadata.get("review_branch") if isinstance(metadata.get("review_branch"), str) else None,
-            review_commit_sha=metadata.get("review_commit_sha") if isinstance(metadata.get("review_commit_sha"), str) else None,
-            review_required=metadata.get("review_required") if isinstance(metadata.get("review_required"), bool) else None,
+            created=parse_datetime(fields.get("created")),
+            updated=parse_datetime(fields.get("updated")),
+            run_at=parse_optional_datetime(fields.get(run_at_field)),
+            state={
+                **metadata,
+                "dependencies": dependencies,
+                "acceptance_criteria": fields.get(mapping.acceptance_criteria),
+                "files_to_modify": fields.get(mapping.files_to_modify),
+                "agent_command": fields.get(mapping.agent_command),
+                "agent_timeout_seconds": timeout,
+                "retries_left": retries_left,
+            },
         )
 
     @staticmethod

@@ -4,63 +4,49 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
+    DEFAULT_DEVICE_POLL_INTERVAL,
+    DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    DEFAULT_TOKEN_DIR,
     EXPIRY_MARGIN_SECONDS,
     CachedFileTokenProvider,
-    CallbackHandler,
-    FileTokenStore,
+    host_token_path,
+    make_callback_handler,
+    make_device_flow,
+    make_post_form,
+    make_token_store,
     poll_device_grant,
-    post_form,
-    run_device_login,
     run_pkce_browser_login,
+    strip_url_suffix,
 )
-
-DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 300.0
-DEFAULT_DEVICE_POLL_INTERVAL = 5.0
 
 
 class GitlabOAuthError(RuntimeError):
     """A browser/device login step failed; message is user-facing."""
 
 
-DEFAULT_GITLAB_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"
+DEFAULT_GITLAB_TOKEN_DIR = DEFAULT_TOKEN_DIR
 
 
 def gitlab_default_token_path(api_base: str | None = None) -> Path:
     """Default token file for a GitLab base."""
-    base = (api_base or "https://gitlab.com").rstrip("/")
-    # api_base may be https://gitlab.com or https://gitlab.example.com/api/v4 or https://gitlab.example.com
-    # Strip /api/v4 suffix for host derivation
-    if base.endswith("/api/v4"):
-        base = base[: -len("/api/v4")]
-    parsed = urlparse(base)
-    host = parsed.hostname or "gitlab"
-    if host == "gitlab.com":
-        name = "gitlab.json"
-    else:
-        safe = host.replace(".", "_")
-        name = f"gitlab_{safe}.json"
-    return DEFAULT_GITLAB_TOKEN_DIR / name
+    return host_token_path(
+        "gitlab",
+        api_base,
+        default_base="https://gitlab.com",
+        plain_host="gitlab.com",
+        strip_suffixes=("/api/v4", "/api"),
+    )
 
 
 def gitlab_oauth_base(api_base: str) -> str:
     """Derive OAuth base from a GitLab API base."""
-    base = api_base.rstrip("/")
-    if base.endswith("/api/v4"):
-        base = base[: -len("/api/v4")]
-    # Also strip possible trailing /api
-    if base.endswith("/api"):
-        base = base[: -len("/api")]
-    return base.rstrip("/")
+    return strip_url_suffix(api_base.rstrip("/"), ("/api/v4", "/api"))
 
 
-class GitlabTokenStore(FileTokenStore):
-    """Read/write a GitLab OAuth token file (0600, atomic)."""
-
-    def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
-        super().__init__(Path(path).expanduser() if path is not None else gitlab_default_token_path(api_base))
+GitlabTokenStore = make_token_store(gitlab_default_token_path)
 
 
 class GitlabOAuthTokenProvider(CachedFileTokenProvider):
@@ -72,8 +58,7 @@ class GitlabOAuthTokenProvider(CachedFileTokenProvider):
     )
 
 
-def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:
-    return post_form(url, fields, timeout, GitlabOAuthError, label="GitLab OAuth")
+_post_form = make_post_form(GitlabOAuthError, "GitLab OAuth")
 
 
 def request_device_code(
@@ -118,31 +103,16 @@ def poll_device_token(
     )
 
 
-def run_device_flow(
-    client_id: str,
-    oauth_base: str,
-    scope: str | None = None,
-    *,
-    open_browser: bool = True,
-    timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    return run_device_login(
-        request_fn=request_device_code,
-        poll_fn=poll_device_token,
-        error_cls=GitlabOAuthError,
-        provider_label="GitLab",
-        client_id=client_id,
-        oauth_base=oauth_base,
-        scope=scope,
-        open_browser=open_browser,
-        timeout=timeout,
-        extra_url_keys=("verification_url",),
-        default_interval=DEFAULT_DEVICE_POLL_INTERVAL,
-    )
+run_device_flow = make_device_flow(
+    request_device_code,
+    poll_device_token,
+    GitlabOAuthError,
+    "GitLab",
+    extra_url_keys=("verification_url",),
+)
 
 
-class _CallbackHandler(CallbackHandler):
-    provider_label = "GitLab"
+_CallbackHandler = make_callback_handler("GitLab")
 
 
 def run_browser_flow(

@@ -8,15 +8,17 @@ import os
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
+    DEFAULT_TOKEN_DIR,
     CachedFileTokenProvider,
-    CallbackHandler,
     FileTokenStore,
     begin_browser_login,
+    host_token_path,
+    make_callback_handler,
+    make_post_form,
     open_authorize_url,
-    post_form,
     stamp_issued_at,
     wait_for_callback,
 )
@@ -28,20 +30,19 @@ class JiraOAuthError(RuntimeError):
     """A Jira OAuth step failed; message is user-facing."""
 
 
-DEFAULT_JIRA_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"
+DEFAULT_JIRA_TOKEN_DIR = DEFAULT_TOKEN_DIR
 ATLASSIAN_AUTH_BASE = "https://auth.atlassian.com"
 ATLASSIAN_API_BASE = "https://api.atlassian.com"
 
 
 def jira_default_token_path(api_base: str | None = None) -> Path:
     """Default token file for a Jira base."""
-    base = (api_base or "https://jira.example.com").rstrip("/")
-    parsed = urlparse(base)
-    host = parsed.hostname or "jira"
-    if host == "jira.example.com":
-        return DEFAULT_JIRA_TOKEN_DIR / "jira.json"
-    safe = host.replace(".", "_")
-    return DEFAULT_JIRA_TOKEN_DIR / f"jira_{safe}.json"
+    return host_token_path(
+        "jira",
+        api_base,
+        default_base="https://jira.example.com",
+        plain_host="jira.example.com",
+    )
 
 
 def jira_oauth_base(api_base: str | None = None) -> str:
@@ -96,8 +97,7 @@ class JiraOAuthTokenProvider(CachedFileTokenProvider):
             return None
 
 
-def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:
-    return post_form(url, fields, timeout, JiraOAuthError, label="Jira OAuth")
+_post_form = make_post_form(JiraOAuthError, "Jira OAuth")
 
 
 def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> dict[str, Any]:
@@ -128,8 +128,7 @@ def _fetch_accessible_resources(access_token: str) -> list[dict[str, Any]]:
         return []
 
 
-class _CallbackHandler(CallbackHandler):
-    provider_label = "Jira"
+_CallbackHandler = make_callback_handler("Jira")
 
 
 def run_browser_flow(

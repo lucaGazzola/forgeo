@@ -486,3 +486,107 @@ class CachedFileTokenProvider:
             self._refresh_requested = False
             self._token = str(data["access_token"]) if data.get("access_token") else None
             self._expires_at = self._expires_at_for(data)
+
+
+# Shared provider boilerplate (token paths, stores, callbacks, post, device).
+DEFAULT_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"
+DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 300.0
+DEFAULT_DEVICE_POLL_INTERVAL = 5.0
+
+
+def strip_url_suffix(base: str, suffixes: tuple[str, ...]) -> str:
+    """Strip the first matching suffix from ``base``."""
+    for suffix in suffixes:
+        if base.endswith(suffix):
+            return base[: -len(suffix)].rstrip("/")
+    return base
+
+
+def host_token_path(
+    provider: str,
+    api_base: str | None,
+    *,
+    default_base: str,
+    plain_host: str,
+    strip_suffixes: tuple[str, ...] = (),
+) -> Path:
+    """Default ``<provider>[_<host>].json`` token file for an API base."""
+    base = (api_base or default_base).rstrip("/")
+    if strip_suffixes:
+        base = strip_url_suffix(base, strip_suffixes)
+    host = urlparse(base).hostname or provider
+    if host == plain_host:
+        return DEFAULT_TOKEN_DIR / f"{provider}.json"
+    return DEFAULT_TOKEN_DIR / f"{provider}_{host.replace('.', '_')}.json"
+
+
+def github_web_base(api_base: str) -> str:
+    """Derive the web base from a GitHub API base URL."""
+    base = api_base.rstrip("/")
+    if base.endswith("/api/v3"):
+        return base[:-7].rstrip("/")
+    parsed = urlparse(base)
+    if parsed.hostname == "api.github.com":
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://github.com{port}"
+    return base
+
+
+def make_token_store(default_path_fn: Callable[[str | None], Path]) -> Any:
+    """Build a ``FileTokenStore`` subclass bound to ``default_path_fn``."""
+
+    class _ProviderTokenStore(FileTokenStore):
+        def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
+            super().__init__(Path(path).expanduser() if path is not None else default_path_fn(api_base))
+
+    return _ProviderTokenStore
+
+
+def make_callback_handler(provider_label: str) -> type[CallbackHandler]:
+    """Build the loopback ``CallbackHandler`` subclass for ``provider_label``."""
+    return type(f"_{provider_label}CallbackHandler", (CallbackHandler,), {"provider_label": provider_label})
+
+
+def make_post_form(error_cls: type[Exception], label: str) -> Callable[..., dict[str, Any]]:
+    """Build a ``(url, fields, timeout=30)`` POST helper bound to ``error_cls``."""
+
+    def _post(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:
+        return post_form(url, fields, timeout, error_cls, label=label)
+
+    return _post
+
+
+def make_device_flow(
+    request_fn: Callable[..., dict[str, Any]],
+    poll_fn: Callable[..., dict[str, Any]],
+    error_cls: type[Exception],
+    provider_label: str,
+    *,
+    extra_url_keys: tuple[str, ...] = (),
+    default_interval: float = DEFAULT_DEVICE_POLL_INTERVAL,
+) -> Callable[..., dict[str, Any]]:
+    """Build a ``run_device_flow`` wrapper around :func:`run_device_login`."""
+
+    def run(
+        client_id: str,
+        oauth_base: str,
+        scope: str | None = None,
+        *,
+        open_browser: bool = True,
+        timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        return run_device_login(
+            request_fn=request_fn,
+            poll_fn=poll_fn,
+            error_cls=error_cls,
+            provider_label=provider_label,
+            client_id=client_id,
+            oauth_base=oauth_base,
+            scope=scope,
+            open_browser=open_browser,
+            timeout=timeout,
+            extra_url_keys=extra_url_keys,
+            default_interval=default_interval,
+        )
+
+    return run

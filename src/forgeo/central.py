@@ -91,6 +91,7 @@ from forgeo.instances import (
     registry_path,
 )
 from forgeo.models import ISSUE_PROVIDERS, ForgeoConfig, Task, TaskStatus
+from forgeo.oauth_common import github_web_base
 from forgeo.paths import daemon_state_path, lock_path, runs_path
 from forgeo.runs import RunRecorder
 from forgeo.web_common import (
@@ -135,16 +136,7 @@ def _github_web_base(api_base: str) -> str:
     ``https://github.example.com/api/v3`` → ``https://github.example.com``,
     otherwise the base itself when already a web URL.
     """
-    base = api_base.rstrip("/")
-    if base.endswith("/api/v3"):
-        return base[:-7].rstrip("/")
-    parsed = urlparse(base)
-    if parsed.hostname == "api.github.com":
-        # Only rewrite the exact api.github.com host; do not touch
-        # hosts like api.github.com.example.com.
-        port = f":{parsed.port}" if parsed.port else ""
-        return f"{parsed.scheme}://github.com{port}"
-    return base
+    return github_web_base(api_base)
 
 
 def _github_repo_root(config: ForgeoConfig, base: str) -> str | None:

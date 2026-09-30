@@ -23,96 +23,53 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
+    DEFAULT_DEVICE_POLL_INTERVAL,
+    DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
+    DEFAULT_TOKEN_DIR,
     EXPIRY_MARGIN_SECONDS,
     CachedFileTokenProvider,
-    CallbackHandler,
-    FileTokenStore,
+    github_web_base,
+    host_token_path,
+    make_callback_handler,
+    make_device_flow,
+    make_post_form,
+    make_token_store,
     poll_device_grant,
-    post_form,
-    run_device_login,
     run_pkce_browser_login,
 )
-
-# Give up on the device-flow poll after this long.
-DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 300.0
-# Poll interval returned by GitHub, fallback.
-DEFAULT_DEVICE_POLL_INTERVAL = 5.0
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
 
 
 class GithubOAuthError(RuntimeError):
     """A browser/device login step failed; message is user-facing."""
 
 
-# ---------------------------------------------------------------------------
-# Token persistence
-# ---------------------------------------------------------------------------
-
-DEFAULT_GITHUB_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"
+DEFAULT_GITHUB_TOKEN_DIR = DEFAULT_TOKEN_DIR
 
 
 def github_default_token_path(api_base: str | None = None) -> Path:
-    """Default token file for a GitHub API base.
-
-    ``https://api.github.com`` -> ``~/.config/forgeo/tokens/github.json``
-    ``https://github.example.com/api/v3`` -> ``~/.config/forgeo/tokens/github_github.example.com.json``
-    """
-    base = (api_base or "https://api.github.com").rstrip("/")
-    # Derive a host token: reuse logic similar to central._github_web_base
-    # For GHE: https://github.example.com/api/v3 -> host github.example.com
-    parsed = urlparse(base)
-    host = parsed.hostname or "github"
-    if host == "api.github.com":
-        name = "github.json"
-    else:
-        # Use host, replacing dots for filename safety
-        safe = host.replace(".", "_")
-        name = f"github_{safe}.json"
-    return DEFAULT_GITHUB_TOKEN_DIR / name
+    """Default token file for a GitHub API base."""
+    return host_token_path(
+        "github",
+        api_base,
+        default_base="https://api.github.com",
+        plain_host="api.github.com",
+        strip_suffixes=("/api/v3",),
+    )
 
 
 def github_oauth_base(api_base: str) -> str:
-    """Derive the OAuth authorize/token base from a GitHub API base.
-
-    Mirrors ``central._github_web_base``:
-    * ``https://api.github.com`` -> ``https://github.com``
-    * ``https://github.example.com/api/v3`` -> ``https://github.example.com``
-    * otherwise strip trailing /api/v3 and any path.
-    """
-    base = api_base.rstrip("/")
-    if base.endswith("/api/v3"):
-        return base[:-7].rstrip("/")
-    parsed = urlparse(base)
-    if parsed.hostname == "api.github.com":
-        port = f":{parsed.port}" if parsed.port else ""
-        return f"{parsed.scheme}://github.com{port}"
-    return base
+    """Derive the OAuth authorize/token base from a GitHub API base."""
+    return github_web_base(api_base)
 
 
-class GithubTokenStore(FileTokenStore):
-    """Read/write a GitHub OAuth token file (``0600``, atomic)."""
-
-    def __init__(self, path: Path | str | None = None, *, api_base: str | None = None) -> None:
-        super().__init__(Path(path).expanduser() if path is not None else github_default_token_path(api_base))
-
-
-# ---------------------------------------------------------------------------
-# Cached provider (file-backed, thread-safe, in-memory expiry)
-# ---------------------------------------------------------------------------
+GithubTokenStore = make_token_store(github_default_token_path)
 
 
 class GithubOAuthTokenProvider(CachedFileTokenProvider):
-    """File-backed, cached token for ``GithubClient``.
-
-    Mirrors ``oauth.ClientCredentialsTokenProvider`` but reads from a file
-    that browser login wrote. Thread-safe.
-    """
+    """File-backed, cached token for ``GithubClient``."""
 
     error_cls = GithubOAuthError
     missing_message = (
@@ -120,14 +77,7 @@ class GithubOAuthTokenProvider(CachedFileTokenProvider):
     )
 
 
-# ---------------------------------------------------------------------------
-# Device flow
-# ---------------------------------------------------------------------------
-
-
-def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:
-    """POST application/x-www-form-urlencoded and decode JSON."""
-    return post_form(url, fields, timeout, GithubOAuthError, label="GitHub OAuth")
+_post_form = make_post_form(GithubOAuthError, "GitHub OAuth")
 
 
 def request_device_code(
@@ -159,41 +109,15 @@ def poll_device_token(
     )
 
 
-def run_device_flow(
-    client_id: str,
-    oauth_base: str,
-    scope: str | None = None,
-    *,
-    open_browser: bool = True,
-    timeout: float = DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    """Run the full device flow: request code, prompt user, poll.
-
-    Returns the token JSON (with ``access_token``).
-    """
-    return run_device_login(
-        request_fn=request_device_code,
-        poll_fn=poll_device_token,
-        error_cls=GithubOAuthError,
-        provider_label="GitHub",
-        client_id=client_id,
-        oauth_base=oauth_base,
-        scope=scope,
-        open_browser=open_browser,
-        timeout=timeout,
-        default_interval=DEFAULT_DEVICE_POLL_INTERVAL,
-    )
+run_device_flow = make_device_flow(
+    request_device_code,
+    poll_device_token,
+    GithubOAuthError,
+    "GitHub",
+)
 
 
-# ---------------------------------------------------------------------------
-# Browser (authorization code + PKCE) flow
-# ---------------------------------------------------------------------------
-
-
-class _CallbackHandler(CallbackHandler):
-    """Capture ``code``/``state`` from the loopback redirect."""
-
-    provider_label = "GitHub"
+_CallbackHandler = make_callback_handler("GitHub")
 
 
 def run_browser_flow(
@@ -206,11 +130,7 @@ def run_browser_flow(
     callback_port: int | None = None,
     timeout: float = 300.0,
 ) -> dict[str, Any]:
-    """Open browser for GitHub OAuth and exchange code for token.
-
-    Uses PKCE (S256) for public clients; falls back to client_secret for
-    confidential clients when provided.
-    """
+    """Open browser for GitHub OAuth and exchange code for token."""
 
     def _authorize_url(redirect_uri: str, state: str, challenge: str) -> str:
         params: dict[str, str] = {

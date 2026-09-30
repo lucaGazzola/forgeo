@@ -290,6 +290,20 @@ class BacklogUnavailableError(RuntimeError):
     """
 
 
+class IssueRequestError(BacklogUnavailableError):
+    """An issue-provider request failed; carries the HTTP ``status`` when known.
+
+    GitHub, GitLab and Jira errors share this shape — the shared REST
+    transport constructs them with ``status=...`` and readers check
+    ``exc.status`` (e.g. for 404s) — so the contract lives here once
+    instead of triplicated across the providers.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 def normalize_store(data: Any) -> dict[str, Any]:
     """Coerce a decoded backlog document into the internal store shape.
 

@@ -5,15 +5,13 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from forgeo.backlog import BacklogUnavailableError
+from forgeo.backlog import IssueRequestError
 from forgeo.backlog_issue_base import RestIssueClientBase
 from forgeo.backlog_marker import MarkerIssueBacklog
 
 
-class GithubRequestError(BacklogUnavailableError):
-    def __init__(self, message: str, *, status: int | None = None) -> None:
-        super().__init__(message)
-        self.status = status
+class GithubRequestError(IssueRequestError):
+    """A GitHub request failed or returned an unusable response."""
 
 
 class GithubClient(RestIssueClientBase):

@@ -26,8 +26,8 @@ from urllib.parse import quote
 from pydantic import ValidationError
 
 from forgeo.backlog import (
-    BacklogUnavailableError,
     IssueBacklogBase,
+    IssueRequestError,
     validate_task_updates,
 )
 from forgeo.backlog_issue_base import (
@@ -56,12 +56,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_API_VERSION = 3
 
 
-class JiraRequestError(BacklogUnavailableError):
+class JiraRequestError(IssueRequestError):
     """A Jira request failed or returned an unusable response."""
-
-    def __init__(self, message: str, *, status: int | None = None) -> None:
-        super().__init__(message)
-        self.status = status
 
 
 class JiraClient(RestTransportBase):

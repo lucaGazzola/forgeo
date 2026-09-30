@@ -5,19 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from forgeo.oauth_common import (
+    CachedFileTokenProvider,
     CallbackHandler,
     FileTokenStore,
     begin_browser_login,
     open_authorize_url,
     post_form,
+    stamp_issued_at,
     wait_for_callback,
 )
 
@@ -54,67 +54,25 @@ class JiraTokenStore(FileTokenStore):
         super().__init__(Path(path).expanduser() if path is not None else jira_default_token_path(api_base))
 
     def save(self, data: dict[str, Any]) -> None:
-        data = dict(data)
-        if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
-            data["issued_at"] = time.time()
-        super().save(data)
+        super().save(stamp_issued_at(data))
 
 
 EXPIRY_MARGIN_SECONDS = 60.0
 
 
-class JiraOAuthTokenProvider:
-    """File-backed cached token with refresh support."""
+class JiraOAuthTokenProvider(CachedFileTokenProvider):
+    """File-backed cached token with refresh-grant support."""
+
+    error_cls = JiraOAuthError
+    missing_message = "Jira OAuth token not found at {path}; run `forgeo auth login --provider jira`."
+    expiry_margin = EXPIRY_MARGIN_SECONDS
 
     def __init__(self, store: JiraTokenStore, *, client_id: str | None = None, client_secret_env: str | None = None) -> None:
-        self.store = store
+        super().__init__(store)
         self.client_id = client_id
         self.client_secret_env = client_secret_env
-        self._lock = threading.Lock()
-        self._token: str | None = None
-        self._expires_at: float = 0.0
-        self._refresh_requested = False
 
-    def token(self) -> str:
-        with self._lock:
-            if self._token is not None and time.monotonic() < self._expires_at:
-                return self._token
-            data = self.store.load()
-            if data is None or not data.get("access_token"):
-                raise JiraOAuthError(
-                    f"Jira OAuth token not found at {self.store.path}; run `forgeo auth login --provider jira`."
-                )
-            expires_in = data.get("expires_in")
-            refresh_due = self._refresh_requested
-            if self._token is not None and self._expires_at != float("inf"):
-                refresh_due = True
-            issued_at = data.get("issued_at")
-            if (
-                isinstance(expires_in, int | float)
-                and isinstance(issued_at, int | float)
-                and time.time() >= float(issued_at) + float(expires_in) - EXPIRY_MARGIN_SECONDS
-            ):
-                refresh_due = True
-            if data.get("refresh_token") and isinstance(expires_in, int | float) and refresh_due:
-                refreshed = self._refresh(data)
-                if refreshed:
-                    data = refreshed
-            self._refresh_requested = False
-            # Now set cache
-            access = str(data["access_token"])
-            lifetime = data.get("expires_in")
-            if isinstance(lifetime, int | float) and lifetime > 0:
-                remaining = float(lifetime) - EXPIRY_MARGIN_SECONDS
-                issued_at = data.get("issued_at")
-                if isinstance(issued_at, int | float):
-                    remaining = float(issued_at) + float(lifetime) - time.time() - EXPIRY_MARGIN_SECONDS
-                self._expires_at = time.monotonic() + max(remaining, 0.0)
-            else:
-                self._expires_at = float("inf")
-            self._token = access
-            return access
-
-    def _refresh(self, data: dict[str, Any]) -> dict[str, Any] | None:
+    def _refresh_data(self, data: dict[str, Any]) -> dict[str, Any] | None:
         refresh = data.get("refresh_token")
         if not isinstance(refresh, str) or not refresh:
             return None
@@ -130,31 +88,12 @@ class JiraOAuthTokenProvider:
                 new_data["cloud_id"] = data["cloud_id"]
             if "refresh_token" not in new_data and refresh:
                 new_data["refresh_token"] = refresh
+            new_data = stamp_issued_at(new_data)
             self.store.save(new_data)
             return new_data
         except Exception as exc:  # noqa: BLE001
             logger.warning("Jira token refresh failed: %s", exc)
             return None
-
-    def invalidate(self) -> None:
-        with self._lock:
-            self._token = None
-            self._expires_at = 0.0
-            self._refresh_requested = True
-
-    def save_token(self, data: dict[str, Any]) -> None:
-        data = dict(data)
-        if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
-            data["issued_at"] = time.time()
-        self.store.save(data)
-        with self._lock:
-            self._refresh_requested = False
-            self._token = str(data["access_token"]) if data.get("access_token") else None
-            lifetime = data.get("expires_in")
-            if isinstance(lifetime, int | float) and lifetime > 0:
-                self._expires_at = time.monotonic() + max(float(lifetime) - EXPIRY_MARGIN_SECONDS, 0.0)
-            else:
-                self._expires_at = float("inf")
 
 
 def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict[str, Any]:

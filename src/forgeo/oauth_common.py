@@ -284,9 +284,21 @@ def announce_device_code(
     return device_code, interval
 
 
+def stamp_issued_at(data: dict[str, Any]) -> dict[str, Any]:
+    """Copy ``data`` adding ``issued_at=now`` when it carries ``expires_in``.
+
+    Lets file-backed providers judge absolute expiry (``issued_at`` +
+    ``expires_in``) instead of only the in-memory cache clock, so a token
+    file re-read after a restart still expires on time.
+    """
+    data = dict(data)
+    if isinstance(data.get("expires_in"), int | float) and "issued_at" not in data:
+        data["issued_at"] = time.time()
+    return data
+
+
 class FileTokenStore:
     """Generic 0600 JSON token file store."""
-
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path).expanduser()
 
@@ -330,7 +342,9 @@ EXPIRY_MARGIN_SECONDS = 30.0
 class CachedFileTokenProvider:
     """File-backed, cached token with in-memory expiry; thread-safe.
 
-    Subclasses set :attr:`error_cls` and :attr:`missing_message`.
+    Subclasses set :attr:`error_cls` and :attr:`missing_message`. Providers
+    with a refresh grant (e.g. Jira) override :meth:`_refresh_data`; the base
+    never refreshes and just reuses the stored access token.
     """
 
     error_cls: type[Exception] = RuntimeError
@@ -344,9 +358,36 @@ class CachedFileTokenProvider:
         self._lock = Lock()
         self._token: str | None = None
         self._expires_at: float = 0.0
+        self._refresh_requested = False
 
     def _missing_error(self) -> Exception:
         return self.error_cls(self.missing_message.format(path=self.store.path))
+
+    def _refresh_data(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Try to renew an expired/invalidated token; return new data or ``None``."""
+        del data
+        return None
+
+    def _stored_expired(self, data: dict[str, Any]) -> bool:
+        """Whether the stored ``data`` is past its absolute expiry (needs ``issued_at``)."""
+        expires_in = data.get("expires_in")
+        issued_at = data.get("issued_at")
+        return (
+            isinstance(expires_in, int | float)
+            and isinstance(issued_at, int | float)
+            and time.time() >= float(issued_at) + float(expires_in) - self.expiry_margin
+        )
+
+    def _expires_at_for(self, data: dict[str, Any]) -> float:
+        """In-memory cache deadline for ``data`` (``issued_at``-aware when stamped)."""
+        lifetime = data.get("expires_in")
+        if isinstance(lifetime, int | float) and lifetime > 0:
+            remaining = float(lifetime) - self.expiry_margin
+            issued_at = data.get("issued_at")
+            if isinstance(issued_at, int | float):
+                remaining = float(issued_at) + float(lifetime) - time.time() - self.expiry_margin
+            return time.monotonic() + max(remaining, 0.0)
+        return float("inf")
 
     def token(self) -> str:
         with self._lock:
@@ -355,12 +396,13 @@ class CachedFileTokenProvider:
             data = self.store.load()
             if data is None or not data.get("access_token"):
                 raise self._missing_error()
+            if self._refresh_requested or self._stored_expired(data):
+                refreshed = self._refresh_data(data)
+                if refreshed:
+                    data = refreshed
+            self._refresh_requested = False
             access = str(data["access_token"])
-            lifetime = data.get("expires_in")
-            if isinstance(lifetime, int | float) and lifetime > 0:
-                self._expires_at = time.monotonic() + max(float(lifetime) - self.expiry_margin, 0.0)
-            else:
-                self._expires_at = float("inf")
+            self._expires_at = self._expires_at_for(data)
             self._token = access
             return access
 
@@ -368,14 +410,13 @@ class CachedFileTokenProvider:
         with self._lock:
             self._token = None
             self._expires_at = 0.0
+            self._refresh_requested = True
 
     def save_token(self, data: dict[str, Any]) -> None:
-        """Persist ``data`` and prime the cache."""
+        """Persist ``data`` (stamping ``issued_at``) and prime the cache."""
+        data = stamp_issued_at(data)
         self.store.save(data)
         with self._lock:
+            self._refresh_requested = False
             self._token = str(data["access_token"]) if data.get("access_token") else None
-            lifetime = data.get("expires_in")
-            if isinstance(lifetime, int | float) and lifetime > 0:
-                self._expires_at = time.monotonic() + max(float(lifetime) - self.expiry_margin, 0.0)
-            else:
-                self._expires_at = float("inf")
+            self._expires_at = self._expires_at_for(data)

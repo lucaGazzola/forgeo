@@ -87,9 +87,9 @@ def _check_non_blank(value: str) -> str:
 
 
 def _check_optional_non_blank(value: str | None) -> str | None:
-    if value is not None and not value.strip():
-        raise ValueError("must not be blank")
-    return value
+    if value is None:
+        return None
+    return _check_non_blank(value)
 
 
 #: A required string that must contain more than whitespace. Replaces the

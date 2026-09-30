@@ -478,15 +478,6 @@ class CachedFileTokenProvider:
             self._expires_at = 0.0
             self._refresh_requested = True
 
-    def save_token(self, data: dict[str, Any]) -> None:
-        """Persist ``data`` (stamping ``issued_at``) and prime the cache."""
-        data = stamp_issued_at(data)
-        self.store.save(data)
-        with self._lock:
-            self._refresh_requested = False
-            self._token = str(data["access_token"]) if data.get("access_token") else None
-            self._expires_at = self._expires_at_for(data)
-
 
 # Shared provider boilerplate (token paths, stores, callbacks, post, device).
 DEFAULT_TOKEN_DIR = Path.home() / ".config" / "forgeo" / "tokens"

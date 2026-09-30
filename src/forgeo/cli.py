@@ -1582,10 +1582,8 @@ def cmd_task_list(args: argparse.Namespace) -> int:
     if limit is not None and limit < 1:
         console.print("[red]--limit must be an integer >= 1.[/red]")
         return 1
-    try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     wanted = args.status
     if wanted is not None:
@@ -1686,21 +1684,15 @@ def _default_show_task(tasks: list[Task]) -> Task | None:
     task so its detail still explains why it waits. ``None`` when there is no
     ``OPEN`` or ``BLOCKED`` task to show.
     """
-    blocked = sorted(
-        (task for task in tasks if task.status is TaskStatus.BLOCKED),
-        key=lambda task: task.created_at,
-    )
+    blocked = _oldest_with_status(tasks, TaskStatus.BLOCKED)
     if blocked:
-        return blocked[0]
+        return blocked
     picked = oldest_open_task(tasks)
     if picked is not None:
         return picked
-    waiting = sorted(
-        (task for task in tasks if task.status is TaskStatus.OPEN),
-        key=lambda task: task.created_at,
-    )
+    waiting = _oldest_with_status(tasks, TaskStatus.OPEN)
     if waiting:
-        return waiting[0]
+        return waiting
     return None
 
 
@@ -1760,10 +1752,8 @@ def _cmd_task_show_next(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
-    try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     task = _default_show_task(tasks)
     if task is None:
@@ -1899,18 +1889,12 @@ def _default_reopen_task(tasks: list[Task]) -> Task | None:
     task the oldest ``FAILED`` task is next (same ``reopen``/``retry`` split
     as the explicit path). ``None`` when no task is reopenable.
     """
-    blocked = sorted(
-        (task for task in tasks if task.status is TaskStatus.BLOCKED),
-        key=lambda task: task.created_at,
-    )
+    blocked = _oldest_with_status(tasks, TaskStatus.BLOCKED)
     if blocked:
-        return blocked[0]
-    failed = sorted(
-        (task for task in tasks if task.status is TaskStatus.FAILED),
-        key=lambda task: task.created_at,
-    )
+        return blocked
+    failed = _oldest_with_status(tasks, TaskStatus.FAILED)
     if failed:
-        return failed[0]
+        return failed
     return None
 
 
@@ -1926,10 +1910,8 @@ def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
-    try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     task = _default_reopen_task(tasks)
     if task is None:
@@ -2169,10 +2151,7 @@ def render_task_next(tasks: list[Task], *, now: Any = None) -> str:
 
     if now is None:
         now = datetime.now(UTC)
-    blocked = sorted(
-        (task for task in tasks if task.status is TaskStatus.BLOCKED),
-        key=lambda task: task.created_at,
-    )
+    blocked = _sorted_with_status(tasks, TaskStatus.BLOCKED)
     if blocked:
         ids = ", ".join(task.id for task in blocked)
         lines = [
@@ -2245,10 +2224,8 @@ def cmd_task_next(args: argparse.Namespace) -> int:
     if resolved is None:
         return 1
     _config_path, config = resolved
-    try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     console.print(render_task_next(tasks), markup=False, highlight=False, soft_wrap=True)
     return 0
@@ -2323,10 +2300,7 @@ def _status_reason_lines(tasks: list[Task], status: TaskStatus) -> list[str]:
     Shows at most ``_STATUS_REASON_SHOWN`` tasks, then a ``+N more`` line so
     ``forgeo status`` stays readable with a large blocked/failed backlog.
     """
-    matching = sorted(
-        (task for task in tasks if task.status is status),
-        key=lambda task: task.created_at,
-    )
+    matching = _sorted_with_status(tasks, status)
     lines: list[str] = []
     for task in matching[:_STATUS_REASON_SHOWN]:
         reason = (
@@ -2405,12 +2379,9 @@ def render_status(
 def _waiting_hint(tasks: list[Task]) -> str | None:
     """A status line naming the oldest OPEN task that is not yet runnable and
     the dependency ids keeping it waiting, or ``None`` when there is none."""
-    open_tasks = [
-        task for task in tasks if task.status is TaskStatus.OPEN
-    ]
-    if not open_tasks:
+    oldest = _oldest_with_status(tasks, TaskStatus.OPEN)
+    if oldest is None:
         return None
-    oldest = min(open_tasks, key=lambda task: task.created_at)
     unmet = unsatisfied_dependencies(tasks, oldest)
     if not unmet:
         return None
@@ -2464,16 +2435,41 @@ def _resolve_existing_config(
     return config_path, config
 
 
+def _sorted_with_status(tasks: list[Task], status: TaskStatus) -> list[Task]:
+    """Tasks with ``status``, oldest first (by ``created_at``)."""
+    return sorted(
+        (task for task in tasks if task.status is status),
+        key=lambda task: task.created_at,
+    )
+
+
+def _oldest_with_status(tasks: list[Task], status: TaskStatus) -> Task | None:
+    """Oldest task with ``status``, or ``None`` when there is none."""
+    matching = _sorted_with_status(tasks, status)
+    return matching[0] if matching else None
+
+
+def _load_backlog_tasks(config: ForgeoConfig) -> list[Task] | None:
+    """List backlog tasks, printing the unavailable-backlog error on failure.
+
+    Returns ``None`` when the backlog cannot be reached so callers can
+    ``return 1`` without repeating the ``try/except``.
+    """
+    try:
+        return asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return None
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Handle ``forgeo status``: read-only summary; never starts an agent."""
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
     _config_path, config = resolved
-    try:
-        tasks = asyncio.run(open_backlog(config).list_tasks())
-    except BacklogUnavailableError as exc:
-        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+    tasks = _load_backlog_tasks(config)
+    if tasks is None:
         return 1
     daemon_running = is_lock_held(lock_path(config))
     last_outcome = last_outcome_from_runs(config)

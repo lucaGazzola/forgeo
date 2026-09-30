@@ -812,9 +812,9 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             """Route one mutating verb under ``/api/instances/`` to its handler.
 
             Shared by the ``POST``/``PATCH``/``DELETE``/``PUT`` dispatchers:
-            each parses the path and forwards ``/api/instances/`` requests to
-            its handler, answering ``404`` otherwise — so the prefix check
-            lives in one place instead of four copy-pasted ``_do_*`` bodies.
+            each forwards ``/api/instances/`` requests to its handler,
+            answering ``404`` otherwise — so the prefix check lives in one
+            place instead of four copy-pasted verb bodies.
             """
             parsed = urlparse(self.path)
             path = parsed.path
@@ -825,28 +825,16 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self._send_not_found()
 
         def do_POST(self) -> None:
-            self._dispatch(self._do_post)
-
-        def _do_post(self) -> None:
-            self._route_instance_api(self._post_instance_api)
+            self._dispatch(lambda: self._route_instance_api(self._post_instance_api))
 
         def do_PATCH(self) -> None:
-            self._dispatch(self._do_patch)
-
-        def _do_patch(self) -> None:
-            self._route_instance_api(self._patch_instance_task)
+            self._dispatch(lambda: self._route_instance_api(self._patch_instance_task))
 
         def do_DELETE(self) -> None:
-            self._dispatch(self._do_delete)
-
-        def _do_delete(self) -> None:
-            self._route_instance_api(self._delete_instance_task)
+            self._dispatch(lambda: self._route_instance_api(self._delete_instance_task))
 
         def do_PUT(self) -> None:
-            self._dispatch(self._do_put)
-
-        def _do_put(self) -> None:
-            self._route_instance_api(self._put_instance_api)
+            self._dispatch(lambda: self._route_instance_api(self._put_instance_api))
 
         def _resolve_instance(self, name: str) -> InstanceInfo | None:
             """The registered instance, or ``None`` after sending a 404."""

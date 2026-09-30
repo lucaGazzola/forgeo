@@ -277,17 +277,6 @@ class WebLockError(Exception):
     """A central-dashboard lock/stop action failed; the message is user-facing."""
 
 
-def _pid_alive(pid: int) -> bool:
-    """True when ``pid`` belongs to a live process."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 class WebLock:
     """The host-global lock for the central dashboard.
 
@@ -337,7 +326,13 @@ class WebLock:
         pid = self.pid
         if pid is None:
             return False
-        return _pid_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     def acquire(self, *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
         """Take the lock, refusing while a live dashboard holds it.
@@ -392,16 +387,6 @@ def web_task_id_for(tasks: list[Task]) -> str:
 def _instance_parts(path: str) -> list[str]:
     """The path segments after the ``/api/instances/`` prefix."""
     return path[len("/api/instances/") :].split("/")
-
-
-def _config_validation_message(exc: ValidationError) -> str:
-    """A readable one-line error for a config payload that failed validation."""
-    details = []
-    for error in exc.errors():
-        loc = ".".join(str(part) for part in error.get("loc", ()))
-        message = str(error.get("msg", "invalid"))
-        details.append(f"{loc}: {message}" if loc else message)
-    return "invalid config: " + "; ".join(details)
 
 
 def _read_json_dict(path: Path) -> dict[str, Any] | None:
@@ -459,19 +444,6 @@ def read_tasks(config: ForgeoConfig | None) -> list[Task]:
     return parsed
 
 
-def _read_tasks_or_error(config: ForgeoConfig | None) -> tuple[list[Task], str | None]:
-    """Tasks for ``config`` plus the reason they could not be read, if any.
-
-    The home page aggregates every registered instance, so one unreachable
-    backlog endpoint must not take the whole page down with it.
-    """
-    try:
-        return read_tasks(config), None
-    except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
-        logger.warning("Could not read the backlog: %s", exc)
-        return [], str(exc)
-
-
 def _task_payload(
     task: Task,
     tasks: list[Task],
@@ -500,19 +472,6 @@ def _task_payload(
         if external is not None:
             payload["external_url"] = external
     return payload
-
-
-def _blocker_content(config: ForgeoConfig | None) -> str | None:
-    """The ``BLOCKER.md`` contents, or ``None`` when absent or unreadable."""
-    if config is None:
-        return None
-    blocker = Path(config.blocker_file)
-    if not blocker.is_file():
-        return None
-    try:
-        return blocker.read_text(encoding="utf-8")
-    except OSError:
-        return None
 
 
 def _last_outcome(config: ForgeoConfig | None) -> str | None:
@@ -609,7 +568,11 @@ def _status_payload(info: InstanceInfo) -> dict[str, Any]:
 def _summary(info: InstanceInfo) -> dict[str, Any]:
     """One home-page/API row for a registered instance."""
     config = info.config
-    tasks, backlog_error = _read_tasks_or_error(config)
+    try:
+        tasks, backlog_error = read_tasks(config), None
+    except Exception as exc:  # noqa: BLE001 - any backend failure is reportable
+        logger.warning("Could not read the backlog: %s", exc)
+        tasks, backlog_error = [], str(exc)
     return {
         "name": info.name,
         "config_path": str(info.config_path),
@@ -678,13 +641,6 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_unauthorized(self) -> None:
-            self._send_json(
-                401,
-                {"error": "unauthorized"},
-                {"WWW-Authenticate": 'Bearer realm="forgeo"'},
-            )
-
         def _send_not_found(self) -> None:
             """Send the shared 404 response for an unknown route."""
             self._send_json(404, {"error": "not found"})
@@ -727,7 +683,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             expected = "Bearer " + self._token
             if hmac.compare_digest(self.headers.get("Authorization", ""), expected):
                 return True
-            self._send_unauthorized()
+            self._send_json(
+                401,
+                {"error": "unauthorized"},
+                {"WWW-Authenticate": 'Bearer realm="forgeo"'},
+            )
             return False
 
         def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
@@ -1216,7 +1176,12 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             try:
                 config = ForgeoConfig.model_validate(payload)
             except ValidationError as exc:
-                return self._reject(400, _config_validation_message(exc))
+                details = []
+                for error in exc.errors():
+                    loc = ".".join(str(part) for part in error.get("loc", ()))
+                    message = str(error.get("msg", "invalid"))
+                    details.append(f"{loc}: {message}" if loc else message)
+                return self._reject(400, "invalid config: " + "; ".join(details))
 
             saved = save_config(info.config_path, config)
             self._send_json(
@@ -1305,7 +1270,15 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             if endpoint == "blocker":
-                self._send_json(200, {"content": _blocker_content(info.config)})
+                content: str | None = None
+                if info.config is not None:
+                    blocker = Path(info.config.blocker_file)
+                    if blocker.is_file():
+                        try:
+                            content = blocker.read_text(encoding="utf-8")
+                        except OSError:
+                            content = None
+                self._send_json(200, {"content": content})
                 return
             if endpoint == "config":
                 if info.config is None:

@@ -1784,14 +1784,10 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
         return _cmd_task_show_next(args)
-    loaded = _resolve_config_and_task_id(args)
-    if isinstance(loaded, int):
-        return loaded
-    config, task_id = loaded
-    fetched = _load_backlog_task(config, task_id)
+    fetched = _resolve_config_backlog_task(args)
     if isinstance(fetched, int):
         return fetched
-    _backlog, task = fetched
+    _config, _backlog, task = fetched
     _print_task_detail(task)
     return 0
 
@@ -1989,14 +1985,10 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
         return _cmd_task_reopen_next(args)
-    loaded = _resolve_config_and_task_id(args)
-    if isinstance(loaded, int):
-        return loaded
-    config, task_id = loaded
-    fetched = _load_backlog_task(config, task_id)
+    fetched = _resolve_config_backlog_task(args)
     if isinstance(fetched, int):
         return fetched
-    backlog, task = fetched
+    config, backlog, task = fetched
     previous = task.status
     if previous is TaskStatus.OPEN:
         console.print(f"[yellow]Task {task.id} is already OPEN.[/yellow]")
@@ -2080,14 +2072,10 @@ def _cmd_task_review_transition(
     messages, ``method`` the backlog method to call, ``past`` the success
     verb phrase. The id may be passed positionally or with ``--task``.
     """
-    loaded = _resolve_config_and_task_id(args)
-    if isinstance(loaded, int):
-        return loaded
-    config, task_id = loaded
-    fetched = _load_backlog_task(config, task_id)
+    fetched = _resolve_config_backlog_task(args)
     if isinstance(fetched, int):
         return fetched
-    backlog, task = fetched
+    _config, backlog, task = fetched
     if task.status is not TaskStatus.REVIEW:
         console.print(
             f"[red]Task {task.id} is {task.status.value}, not REVIEW: "
@@ -2534,6 +2522,26 @@ def _load_backlog_task(config: ForgeoConfig, raw_id: str) -> tuple[BacklogStore,
         console.print(f"[red]Unknown task: {raw_id}.[/red]")
         return 1
     return backlog, task
+
+
+def _resolve_config_backlog_task(
+    args: argparse.Namespace,
+) -> tuple[ForgeoConfig, BacklogStore, Task] | int:
+    """Resolve the config file and fetch the referenced backlog task together.
+
+    Returns ``(config, backlog, task)`` or an exit code so the ``task show``/
+    ``reopen``/review commands share one preamble instead of repeating the
+    same resolve-then-fetch dance.
+    """
+    loaded = _resolve_config_and_task_id(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, task_id = loaded
+    fetched = _load_backlog_task(config, task_id)
+    if isinstance(fetched, int):
+        return fetched
+    backlog, task = fetched
+    return config, backlog, task
 
 
 def cmd_status(args: argparse.Namespace) -> int:

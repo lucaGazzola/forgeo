@@ -232,6 +232,62 @@ def next_reopen_state(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def apply_terminal_transition(
+    state: dict[str, Any],
+    status: TaskStatus,
+    reason: list[str] | None = None,
+    *,
+    previous: str | None = None,
+) -> dict[str, Any]:
+    """Mutate engine ``state`` for a COMPLETED/OPEN/BLOCKED/FAILED transition.
+
+    Shared by the marker (GitHub/GitLab) and Jira ``_transition_metadata``
+    implementations, which mutated the state dict identically apart from
+    Jira's retry-counter reset when the previous state was FAILED.
+    """
+    from forgeo.models import TaskStatus
+
+    state["state"] = status.value
+    if status is TaskStatus.COMPLETED:
+        state.pop("claimed_at", None)
+        state["failure_reason"] = []
+        state["blocker_reason"] = []
+        if previous == TaskStatus.FAILED.value:
+            state["retry_count"] = 0
+            state["failed_wait_cycles"] = 0
+    elif status is TaskStatus.OPEN:
+        state["failure_reason"] = []
+        if previous == TaskStatus.FAILED.value:
+            state["retry_count"] = 0
+            state["failed_wait_cycles"] = 0
+        state.pop("claimed_at", None)
+    elif status is TaskStatus.BLOCKED:
+        state["blocker_reason"] = list(reason or [])
+        bump_state_counter(state, "blocked_count")
+        state["failure_reason"] = []
+        state.pop("claimed_at", None)
+    else:
+        state["failure_reason"] = list(reason or [])
+        state["failed_wait_cycles"] = 0
+        state.pop("claimed_at", None)
+    return state
+
+
+def transition_label_update(status: TaskStatus, labels: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Return the ``(add, remove)`` label update for a terminal transition.
+
+    Shared by the marker (GitHub/GitLab) and Jira ``_transition_metadata``
+    implementations, which applied identical label changes per status.
+    """
+    from forgeo.models import TaskStatus
+
+    if status is TaskStatus.BLOCKED:
+        return [labels["blocked"]], [labels["running"], labels["failed"]]
+    if status is TaskStatus.FAILED:
+        return [labels["failed"]], [labels["running"], labels["blocked"]]
+    return [], list(labels.values())
+
+
 def claim_cutoff(timeout_seconds: float) -> datetime:
     """Expiry instant for a claim lease."""
     return datetime.now(UTC) - timedelta(seconds=timeout_seconds)

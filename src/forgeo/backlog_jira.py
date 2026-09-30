@@ -37,11 +37,11 @@ from forgeo.backlog import (
 )
 from forgeo.backlog_issue_base import (
     adf_to_plain_text,
+    apply_terminal_transition,
     as_nonnegative_int,
     as_optional_float,
     as_optional_int,
     as_string_list,
-    bump_state_counter,
     claim_cutoff,
     execute_json_request,
     is_claim_stale,
@@ -49,6 +49,7 @@ from forgeo.backlog_issue_base import (
     parse_optional_datetime,
     plain_text_to_adf,
     require_env_token,
+    transition_label_update,
 )
 from forgeo.models import (
     ExecutionResult,
@@ -725,54 +726,27 @@ class JiraBacklog(IssueBacklogBase):
         joined = _join_output_logs(result, self._output_cap)
         if joined is not None:
             metadata["agent_response"] = joined
-        metadata["state"] = status.value
+        apply_terminal_transition(
+            metadata, status, reason, previous=previous if isinstance(previous, str) else None
+        )
+        add, remove = transition_label_update(status, self._labels)
         if status is TaskStatus.COMPLETED:
-            metadata.pop("claimed_at", None)
-            metadata["failure_reason"] = []
-            metadata["blocker_reason"] = []
-            if previous == TaskStatus.FAILED.value:
-                metadata["retry_count"] = 0
-                metadata["failed_wait_cycles"] = 0
             await self._transition_to(issue, self.config.workflow.completed_status)
-            await self._update_labels(
-                key,
-                add=[],
-                remove=list(self._labels.values()),
-            )
+            await self._update_labels(key, add=add, remove=remove)
             await self._save_metadata(key, metadata)
             return await self.get_task(key)
         if status is TaskStatus.OPEN:
-            metadata["failure_reason"] = []
-            if previous == TaskStatus.FAILED.value:
-                metadata["retry_count"] = 0
-                metadata["failed_wait_cycles"] = 0
-            metadata.pop("claimed_at", None)
             await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(key, add=[], remove=list(self._labels.values()))
+            await self._update_labels(key, add=add, remove=remove)
             await self._save_metadata(key, metadata)
             return await self.get_task(key)
         if status is TaskStatus.BLOCKED:
-            metadata["blocker_reason"] = list(reason or [])
-            bump_state_counter(metadata, "blocked_count")
-            metadata["failure_reason"] = []
-            metadata.pop("claimed_at", None)
-            await self._update_labels(
-                key,
-                add=[self._labels["blocked"]],
-                remove=[self._labels["running"], self._labels["failed"]],
-            )
+            await self._update_labels(key, add=add, remove=remove)
             await self._save_metadata(key, metadata)
             await self._transition_to(issue, self.config.workflow.blocked_status)
             self._comment(key, "BLOCKED", reason or [])
             return await self.get_task(key)
-        metadata["failure_reason"] = list(reason or [])
-        metadata["failed_wait_cycles"] = 0
-        metadata.pop("claimed_at", None)
-        await self._update_labels(
-            key,
-            add=[self._labels["failed"]],
-            remove=[self._labels["running"], self._labels["blocked"]],
-        )
+        await self._update_labels(key, add=add, remove=remove)
         await self._save_metadata(key, metadata)
         target = self.config.workflow.failed_status
         if target is None and self._matches(self.config.workflow.running_status, self._status(issue)):

@@ -16,8 +16,8 @@ from pydantic import ValidationError
 from forgeo.backlog import IssueBacklogBase, _join_output_logs, validate_task_updates
 from forgeo.backlog_issue_base import (
     ENGINE_STATE_FIELDS,
+    apply_terminal_transition,
     build_task,
-    bump_state_counter,
     claim_cutoff,
     embed_engine_state,
     extract_engine_state,
@@ -28,6 +28,7 @@ from forgeo.backlog_issue_base import (
     parse_numeric_issue_id,
     parse_optional_datetime,
     task_engine_state,
+    transition_label_update,
 )
 from forgeo.models import ExecutionResult, Task, TaskStatus
 
@@ -285,45 +286,18 @@ class MarkerIssueBacklog(IssueBacklogBase):
         joined = _join_output_logs(result, self._output_cap)
         if joined is not None:
             state["agent_response"] = joined
-        state["state"] = status.value
+        apply_terminal_transition(state, status, reason)
+        add, remove = transition_label_update(status, self._labels)
         if status is TaskStatus.COMPLETED:
-            state.pop("claimed_at", None)
-            state["failure_reason"] = []
-            state["blocker_reason"] = []
             await self._transition_state(issue_id, self.close_state)
-            await self._update_labels(issue_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(issue_id, state)
-            return await self.get_task(issue_id)
-        if status is TaskStatus.OPEN:
-            state["failure_reason"] = []
-            state.pop("claimed_at", None)
+        elif status is TaskStatus.OPEN:
             await self._transition_state(issue_id, self.open_state)
-            await self._update_labels(issue_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(issue_id, state)
-            return await self.get_task(issue_id)
-        if status is TaskStatus.BLOCKED:
-            state["blocker_reason"] = list(reason or [])
-            bump_state_counter(state, "blocked_count")
-            state["failure_reason"] = []
-            state.pop("claimed_at", None)
-            await self._update_labels(
-                issue_id,
-                add=[self._labels["blocked"]],
-                remove=[self._labels["running"], self._labels["failed"]],
-            )
-            await self.put_engine_state(issue_id, state)
-            self._comment(number, "BLOCKED", reason or [])
-            return await self.get_task(issue_id)
-        state["failure_reason"] = list(reason or [])
-        state["failed_wait_cycles"] = 0
-        state.pop("claimed_at", None)
-        await self._update_labels(
-            issue_id,
-            add=[self._labels["failed"]],
-            remove=[self._labels["running"], self._labels["blocked"]],
-        )
+        await self._update_labels(issue_id, add=add, remove=remove)
         await self.put_engine_state(issue_id, state)
-        self._comment(number, "FAILED", reason or [])
+        if status is TaskStatus.BLOCKED:
+            self._comment(number, "BLOCKED", reason or [])
+        elif status not in (TaskStatus.COMPLETED, TaskStatus.OPEN):
+            self._comment(number, "FAILED", reason or [])
         return await self.get_task(issue_id)
 
     async def _flush_comments(self) -> None:

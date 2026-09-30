@@ -17,11 +17,8 @@ acceptance criteria and dependencies.
 from __future__ import annotations
 
 import base64
-import contextlib
-import json
 import logging
 import os
-import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from typing import Any
@@ -43,8 +40,10 @@ from forgeo.backlog_issue_base import (
     as_optional_int,
     as_string_list,
     claim_cutoff,
-    execute_json_request,
+    encode_json_body,
+    execute_rest_with_oauth_retry,
     is_claim_stale,
+    oauth_access_token,
     parse_datetime,
     parse_optional_datetime,
     plain_text_to_adf,
@@ -139,16 +138,13 @@ class JiraClient:
         if auth.oauth is not None:
             provider = self._oauth_token_provider()
             assert provider is not None
-            try:
-                token = provider.token()
-            except Exception as exc:
-                if isinstance(exc, JiraRequestError):
-                    raise
-                from forgeo.oauth_jira import JiraOAuthError
+            from forgeo.oauth_jira import JiraOAuthError
 
-                if isinstance(exc, JiraOAuthError):
-                    raise JiraRequestError(str(exc)) from exc
-                raise JiraRequestError(str(exc)) from exc
+            token = oauth_access_token(
+                provider,
+                oauth_error_cls=JiraOAuthError,
+                request_error_cls=JiraRequestError,
+            )
             return f"Bearer {token}"
         # PAT branch
         if auth.token_env is None or not auth.token_env.strip():
@@ -174,11 +170,10 @@ class JiraClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Perform one authenticated request and decode its JSON response."""
-        for attempt in (0, 1):
-            body = None
-            if payload is not None:
-                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            request = urllib.request.Request(
+
+        def _build_request() -> urllib.request.Request:
+            body = encode_json_body(payload)
+            return urllib.request.Request(
                 self._api_url(path, query),
                 data=body,
                 method=method,
@@ -188,25 +183,18 @@ class JiraClient:
                     **({"Content-Type": "application/json"} if body is not None else {}),
                 },
             )
-            try:
-                data = execute_json_request(
-                    request, self.config.timeout_seconds, JiraRequestError, method
-                )
-            except JiraRequestError as exc:
-                if (
-                    attempt == 0
-                    and exc.status in (401, 403)
-                    and self.config.auth.oauth is not None
-                    and self._oauth_provider is not None
-                ):
-                    with contextlib.suppress(Exception):  # noqa: BLE001
-                        self._oauth_provider.invalidate()
-                    continue
-                raise
-            if not isinstance(data, dict):
-                raise JiraRequestError(f"{method} {request.full_url} returned a non-object JSON body")
-            return data
-        raise JiraRequestError(f"{method} {self._api_url(path, query)} failed after retry")
+
+        data = execute_rest_with_oauth_retry(
+            build_request=_build_request,
+            timeout=self.config.timeout_seconds,
+            error_cls=JiraRequestError,
+            method=method,
+            has_oauth=self.config.auth.oauth is not None,
+            get_cached_provider=lambda: self._oauth_provider,
+        )
+        if not isinstance(data, dict):
+            raise JiraRequestError(f"{method} {self._api_url(path, query)} returned a non-object JSON body")
+        return data
 
     def search_issues(
         self,

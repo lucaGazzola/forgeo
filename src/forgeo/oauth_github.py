@@ -21,7 +21,6 @@ and are read by :class:`GithubClient` at request time, mirroring the
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -31,15 +30,11 @@ from forgeo.oauth_common import (
     CachedFileTokenProvider,
     CallbackHandler,
     FileTokenStore,
-    announce_device_code,
-    begin_browser_login,
-    open_authorize_url,
     poll_device_grant,
     post_form,
-    wait_for_callback,
+    run_device_login,
+    run_pkce_browser_login,
 )
-
-logger = logging.getLogger(__name__)
 
 # Give up on the device-flow poll after this long.
 DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS = 300.0
@@ -176,12 +171,18 @@ def run_device_flow(
 
     Returns the token JSON (with ``access_token``).
     """
-    logger.info("Requesting GitHub device code for client %r", client_id)
-    data = request_device_code(client_id, oauth_base, scope=scope)
-    device_code, interval = announce_device_code(
-        data, GithubOAuthError, open_browser=open_browser, default_interval=DEFAULT_DEVICE_POLL_INTERVAL
+    return run_device_login(
+        request_fn=request_device_code,
+        poll_fn=poll_device_token,
+        error_cls=GithubOAuthError,
+        provider_label="GitHub",
+        client_id=client_id,
+        oauth_base=oauth_base,
+        scope=scope,
+        open_browser=open_browser,
+        timeout=timeout,
+        default_interval=DEFAULT_DEVICE_POLL_INTERVAL,
     )
-    return poll_device_token(client_id, device_code, oauth_base, interval=interval, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -210,33 +211,42 @@ def run_browser_flow(
     Uses PKCE (S256) for public clients; falls back to client_secret for
     confidential clients when provided.
     """
-    verifier, challenge, state, server, redirect_uri = begin_browser_login(
-        _CallbackHandler, GithubOAuthError, callback_port
+
+    def _authorize_url(redirect_uri: str, state: str, challenge: str) -> str:
+        params: dict[str, str] = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope or "repo",
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        return f"{oauth_base.rstrip('/')}/login/oauth/authorize?{urlencode(params)}"
+
+    def _token_fields(code: str, redirect_uri: str, verifier: str) -> dict[str, str]:
+        fields: dict[str, str] = {
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+            "grant_type": "authorization_code",
+        }
+        if client_secret:
+            fields["client_secret"] = client_secret
+        return fields
+
+    return run_pkce_browser_login(
+        handler_cls=_CallbackHandler,
+        error_cls=GithubOAuthError,
+        provider_label="GitHub",
+        build_authorize_url=_authorize_url,
+        build_token_fields=_token_fields,
+        post_fn=_post_form,
+        token_url=f"{oauth_base.rstrip('/')}/login/oauth/access_token",
+        open_browser=open_browser,
+        callback_port=callback_port,
+        timeout=timeout,
     )
-    # Build authorize URL
-    params: dict[str, str] = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "scope": scope or "repo",
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    auth_url = f"{oauth_base.rstrip('/')}/login/oauth/authorize?{urlencode(params)}"
-    open_authorize_url(auth_url, "GitHub", open_browser=open_browser)
-    code, redirect_uri = wait_for_callback(server, _CallbackHandler, state, timeout, GithubOAuthError, "GitHub")
-    # Exchange code for token
-    token_url = f"{oauth_base.rstrip('/')}/login/oauth/access_token"
-    fields: dict[str, str] = {
-        "client_id": client_id,
-        "code": code,
-        "redirect_uri": redirect_uri,
-        "code_verifier": verifier,
-        "grant_type": "authorization_code",
-    }
-    if client_secret:
-        fields["client_secret"] = client_secret
-    return _post_form(token_url, fields)
 
 
 __all__ = [

@@ -18,6 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -282,6 +283,71 @@ def announce_device_code(
         print(f"Code expires in {expires_in}s")
     print("Waiting for approval...", flush=True)
     return device_code, interval
+
+
+def run_device_login(
+    *,
+    request_fn: Callable[..., dict[str, Any]],
+    poll_fn: Callable[..., dict[str, Any]],
+    error_cls: type[Exception],
+    provider_label: str,
+    client_id: str,
+    oauth_base: str,
+    scope: str | None = None,
+    open_browser: bool = True,
+    timeout: float = 300.0,
+    extra_url_keys: tuple[str, ...] = (),
+    default_interval: float = 5.0,
+) -> dict[str, Any]:
+    """Run the full device flow: request code, prompt user, poll.
+
+    ``request_fn``/``poll_fn`` are the provider's ``request_device_code``/
+    ``poll_device_token`` (``(client_id, oauth_base, scope=...)`` and
+    ``(client_id, device_code, oauth_base, interval=..., timeout=...)``).
+    Shared so GitHub/GitLab don't duplicate the request/announce/poll dance.
+    """
+    logger.info("Requesting %s device code for client %r", provider_label, client_id)
+    data = request_fn(client_id, oauth_base, scope=scope)
+    device_code, interval = announce_device_code(
+        data,
+        error_cls,
+        open_browser=open_browser,
+        extra_url_keys=extra_url_keys,
+        default_interval=default_interval,
+    )
+    return poll_fn(client_id, device_code, oauth_base, interval=interval, timeout=timeout)
+
+
+def run_pkce_browser_login(
+    *,
+    handler_cls: type[CallbackHandler],
+    error_cls: type[Exception],
+    provider_label: str,
+    build_authorize_url: Callable[[str, str, str], str],
+    build_token_fields: Callable[[str, str, str], dict[str, str]],
+    post_fn: Callable[[str, dict[str, str]], dict[str, Any]],
+    token_url: str,
+    open_browser: bool = True,
+    callback_port: int | None = None,
+    timeout: float = 300.0,
+) -> dict[str, Any]:
+    """Run the PKCE browser flow: loopback server, authorize URL, code exchange.
+
+    ``build_authorize_url(redirect_uri, state, challenge)`` returns the
+    provider's authorize URL; ``build_token_fields(code, redirect_uri,
+    verifier)`` returns the token-exchange fields (including
+    ``client_secret`` when the caller wants it). Shared so GitHub/GitLab
+    don't duplicate the begin/open/wait/exchange dance.
+    """
+    verifier, challenge, state, server, redirect_uri = begin_browser_login(
+        handler_cls, error_cls, callback_port
+    )
+    auth_url = build_authorize_url(redirect_uri, state, challenge)
+    open_authorize_url(auth_url, provider_label, open_browser=open_browser)
+    code, redirect_uri = wait_for_callback(
+        server, handler_cls, state, timeout, error_cls, provider_label
+    )
+    return post_fn(token_url, build_token_fields(code, redirect_uri, verifier))
 
 
 def stamp_issued_at(data: dict[str, Any]) -> dict[str, Any]:

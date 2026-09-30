@@ -197,11 +197,6 @@ def _add_task_common_args(
     )
 
 
-def _add_clear_flag(parser: argparse.ArgumentParser, name: str, *, help: str) -> None:
-    """Add one ``--clear-<name>`` store-true flag (``task edit`` list clearing)."""
-    parser.add_argument(f"--clear-{name}", action="store_true", help=help)
-
-
 def _add_auth_store_args(
     parser: argparse.ArgumentParser,
     *,
@@ -259,11 +254,6 @@ def _add_timeout_parser(sub: Any, name: str, *, help: str, timeout_help: str) ->
         default=STOP_TIMEOUT_SECONDS,
         help=timeout_help,
     )
-
-
-def _add_run_flag(parser: argparse.ArgumentParser, *, help: str) -> None:
-    """Add the shared ``--run`` store-true flag (``reopen``/``run`` immediate run)."""
-    parser.add_argument("--run", action="store_true", help=help)
 
 
 def _add_init_parser(sub: Any) -> None:
@@ -424,7 +414,9 @@ def _add_task_edit_parser(task_sub: Any) -> None:
         ("files", "Clear the files-to-modify list."),
     )
     for _flag_name, _flag_help in _CLEAR_FLAGS:
-        _add_clear_flag(task_edit_parser, _flag_name, help=_flag_help)
+        task_edit_parser.add_argument(
+            f"--clear-{_flag_name}", action="store_true", help=_flag_help
+        )
 
 
 def _add_task_reopen_parser(task_sub: Any) -> None:
@@ -437,8 +429,9 @@ def _add_task_reopen_parser(task_sub: Any) -> None:
         positional_help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
         "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
     )
-    _add_run_flag(
-        task_reopen_parser,
+    task_reopen_parser.add_argument(
+        "--run",
+        action="store_true",
         help="Reopen the task and run it immediately in one step (same "
         "lock as `forgeo run`; refuses while a daemon holds it).",
     )
@@ -1783,7 +1776,11 @@ def _default_reopen_task(tasks: list[Task]) -> Task | None:
     task the oldest ``FAILED`` task is next (same ``reopen``/``retry`` split
     as the explicit path). ``None`` when no task is reopenable.
     """
-    return _oldest_of_statuses(tasks, TaskStatus.BLOCKED, TaskStatus.FAILED)
+    for status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
+        oldest = _oldest_with_status(tasks, status)
+        if oldest is not None:
+            return oldest
+    return None
 
 
 def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
@@ -2295,20 +2292,6 @@ def _oldest_with_status(tasks: list[Task], status: TaskStatus) -> Task | None:
     """Oldest task with ``status``, or ``None`` when there is none."""
     matching = _sorted_with_status(tasks, status)
     return matching[0] if matching else None
-
-
-def _oldest_of_statuses(tasks: list[Task], *statuses: TaskStatus) -> Task | None:
-    """Oldest task with the first non-empty ``status`` in ``statuses``.
-
-    One helper for the priority-fallback chains repeated in the no-id
-    ``task show``/``reopen`` defaults (``BLOCKED`` first, then the next
-    status), so the ordering lives in the caller, not in copy-pasted loops.
-    """
-    for status in statuses:
-        oldest = _oldest_with_status(tasks, status)
-        if oldest is not None:
-            return oldest
-    return None
 
 
 def _report_backlog_unavailable(exc: Exception) -> int:

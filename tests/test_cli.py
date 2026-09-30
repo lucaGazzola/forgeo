@@ -1329,6 +1329,55 @@ def test_auth_login_passes_browser_options_to_github_flow(tmp_path, monkeypatch)
     assert (tmp_path / "token.json").exists()
 
 
+def test_auth_login_routes_jira_through_shared_flow(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_jira_browser(client_id, oauth_base, scope, **kwargs):
+        calls.update(client_id=client_id, oauth_base=oauth_base, scope=scope, **kwargs)
+        return {"access_token": "secret", "cloud_id": "cloud-123"}
+
+    monkeypatch.setattr("forgeo.oauth_jira.run_browser_flow", fake_jira_browser)
+    args = build_parser().parse_args(
+        [
+            "auth",
+            "login",
+            "--provider",
+            "jira",
+            "--client-id",
+            "client",
+            "--token-file",
+            str(tmp_path / "jira.json"),
+            "--no-open-browser",
+        ]
+    )
+
+    assert cmd_auth_login(args) == 0
+    assert calls["client_id"] == "client"
+    assert calls["open_browser"] is False
+    assert calls["cloud_id"] is None
+    assert (tmp_path / "jira.json").exists()
+
+
+def test_auth_login_jira_rejects_device_flow(tmp_path):
+    args = build_parser().parse_args(
+        [
+            "auth",
+            "login",
+            "--provider",
+            "jira",
+            "--client-id",
+            "client",
+            "--flow",
+            "device",
+            "--token-file",
+            str(tmp_path / "jira.json"),
+        ]
+    )
+
+    assert cmd_auth_login(args) == 2
+    assert not (tmp_path / "jira.json").exists()
+
+
 def test_auth_status_uses_project_default_config(tmp_path, monkeypatch, capsys):
     config_dir = tmp_path / "project"
     token_path = config_dir / "tokens" / "github.json"

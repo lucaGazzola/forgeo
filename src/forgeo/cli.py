@@ -3121,9 +3121,13 @@ def _cmd_auth_login_flow(
     store_cls: Any,
     oauth_base_fn: Any,
     browser_flow: Any,
-    device_flow: Any,
+    device_flow: Any | None = None,
 ) -> int:
-    """Run a browser/device OAuth flow for GitHub or GitLab and store the token."""
+    """Run a browser/device OAuth flow and store the token.
+
+    Shared by ``auth login`` for GitHub, GitLab and Jira. With
+    ``device_flow=None`` (Jira) only the browser flow is supported.
+    """
     params = _resolve_oauth_params(provider_key, args)
     if params is None:
         return 1
@@ -3136,17 +3140,26 @@ def _cmd_auth_login_flow(
     client_secret = params["client_secret"]
     oauth_base = oauth_base_fn(api_base)
     console.print(f"[bold]{label} auth[/bold]: provider={provider_key} api_base={api_base} oauth_base={oauth_base} flow={flow}")
+    if flow != "browser" and device_flow is None:
+        console.print(f"[red]{label} OAuth supports browser flow only; use --flow browser.[/red]")
+        return 2
     try:
         if flow == "browser":
+            browser_kwargs: dict[str, Any] = {
+                "client_secret": client_secret,
+                "open_browser": not getattr(args, "no_open_browser", False),
+                "callback_port": callback_port,
+            }
+            if "cloud_id" in params:
+                browser_kwargs["cloud_id"] = params["cloud_id"]
             token_data = browser_flow(
                 client_id,
                 oauth_base,
                 scope,
-                client_secret=client_secret,
-                open_browser=not getattr(args, "no_open_browser", False),
-                callback_port=callback_port,
+                **browser_kwargs,
             )
         else:
+            assert device_flow is not None
             token_data = device_flow(client_id, oauth_base, scope, open_browser=not getattr(args, "no_open_browser", False))
     except error_cls as exc:
         console.print(f"[red]{label} login failed: {exc}[/red]")
@@ -3158,7 +3171,10 @@ def _cmd_auth_login_flow(
         store = store_cls(path=token_file, api_base=api_base)
         store.save(token_data)
         console.print(f"[green]{label} token saved to {store.path} (0600).[/green]")
-        console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
+        if token_data.get("cloud_id"):
+            console.print(f"[dim]Cloud ID {token_data['cloud_id']} [/dim]")
+        else:
+            console.print(f"[dim]Token type {token_data.get('token_type','Bearer')} scope {token_data.get('scope','')} [/dim]")
         console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
     except OSError as exc:
         console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
@@ -3204,53 +3220,22 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
         from forgeo.oauth_jira import (
             JiraOAuthError,
             JiraTokenStore,
+            jira_oauth_base,
         )
         from forgeo.oauth_jira import (
             run_browser_flow as run_jira_browser_flow,
         )
 
-        jira_params = _resolve_oauth_params("jira", args)
-        if jira_params is None:
-            return 1
-        api_base = jira_params["api_base"]
-        client_id = jira_params["client_id"]
-        flow = jira_params["flow"]
-        scope = jira_params["scope"]
-        token_file = jira_params["token_file"]
-        callback_port = jira_params["callback_port"]
-        cloud_id = jira_params["cloud_id"]
-        client_secret = jira_params["client_secret"]
-        console.print(f"[bold]Jira auth[/bold]: provider=jira api_base={api_base} flow={flow}")
-        if flow != "browser":
-            console.print("[red]Jira OAuth supports browser flow only; use --flow browser.[/red]")
-            return 2
-        try:
-            token_data = run_jira_browser_flow(
-                client_id,
-                None,
-                scope,
-                client_secret=client_secret,
-                cloud_id=cloud_id,
-                open_browser=not getattr(args, "no_open_browser", False),
-                callback_port=callback_port,
-            )
-        except JiraOAuthError as exc:
-            console.print(f"[red]Jira login failed: {exc}[/red]")
-            return 1
-        except KeyboardInterrupt:
-            console.print("[yellow]Login cancelled.[/yellow]")
-            return 130
-        try:
-            store = JiraTokenStore(path=token_file, api_base=api_base)
-            store.save(token_data)
-            console.print(f"[green]Jira token saved to {store.path} (0600).[/green]")
-            if token_data.get("cloud_id"):
-                console.print(f"[dim]Cloud ID {token_data['cloud_id']} [/dim]")
-            console.print("[green]Login succeeded. Validate with `forgeo validate`.[/green]")
-        except OSError as exc:
-            console.print(f"[red]Could not save token to {token_file}: {exc}[/red]")
-            return 1
-        return 0
+        return _cmd_auth_login_flow(
+            label="Jira",
+            provider_key="jira",
+            args=args,
+            error_cls=JiraOAuthError,
+            store_cls=JiraTokenStore,
+            oauth_base_fn=jira_oauth_base,
+            browser_flow=run_jira_browser_flow,
+            device_flow=None,
+        )
     # default github
     from forgeo.oauth_github import (
         GithubOAuthError,

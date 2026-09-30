@@ -3137,68 +3137,38 @@ def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
     :func:`_normalize_auth_provider`. Imports stay function-local (resolved
     on each call) so tests can monkeypatch e.g.
     ``forgeo.oauth_github.run_browser_flow`` and ``auth`` never imports
-    provider modules it does not use.
+    provider modules it does not use. Attribute names follow the
+    ``<Stem>OAuthError`` / ``<Stem>TokenStore`` /
+    ``<key>_default_token_path`` / ``<key>_oauth_base`` convention shared
+    by the three provider modules; Jira has no device flow, so
+    ``device_flow`` resolves to ``None`` there.
     """
     key = _normalize_auth_provider(provider)
+    _provider_module: Any
     if key == "gitlab":
-        from forgeo.oauth_gitlab import (
-            GitlabOAuthError,
-            GitlabTokenStore,
-            gitlab_default_token_path,
-            gitlab_oauth_base,
-            run_browser_flow,
-            run_device_flow,
-        )
+        from forgeo import oauth_gitlab as _gitlab_module
 
-        return _AuthProviderSpec(
-            key=key,
-            label="GitLab",
-            error_cls=GitlabOAuthError,
-            store_cls=GitlabTokenStore,
-            default_token_path=gitlab_default_token_path,
-            oauth_base_fn=gitlab_oauth_base,
-            browser_flow=run_browser_flow,
-            device_flow=run_device_flow,
-        )
-    if key == "jira":
-        from forgeo.oauth_jira import (
-            JiraOAuthError,
-            JiraTokenStore,
-            jira_default_token_path,
-            jira_oauth_base,
-        )
-        from forgeo.oauth_jira import (
-            run_browser_flow as run_jira_browser_flow,
-        )
+        _provider_module = _gitlab_module
+        stem, label = "Gitlab", "GitLab"
+    elif key == "jira":
+        from forgeo import oauth_jira as _jira_module
 
-        return _AuthProviderSpec(
-            key=key,
-            label="Jira",
-            error_cls=JiraOAuthError,
-            store_cls=JiraTokenStore,
-            default_token_path=jira_default_token_path,
-            oauth_base_fn=jira_oauth_base,
-            browser_flow=run_jira_browser_flow,
-            device_flow=None,
-        )
-    from forgeo.oauth_github import (
-        GithubOAuthError,
-        GithubTokenStore,
-        github_default_token_path,
-        github_oauth_base,
-        run_browser_flow,
-        run_device_flow,
-    )
+        _provider_module = _jira_module
+        stem, label = "Jira", "Jira"
+    else:
+        from forgeo import oauth_github as _github_module
 
+        _provider_module = _github_module
+        stem, label = "Github", "GitHub"
     return _AuthProviderSpec(
         key=key,
-        label="GitHub",
-        error_cls=GithubOAuthError,
-        store_cls=GithubTokenStore,
-        default_token_path=github_default_token_path,
-        oauth_base_fn=github_oauth_base,
-        browser_flow=run_browser_flow,
-        device_flow=run_device_flow,
+        label=label,
+        error_cls=getattr(_provider_module, f"{stem}OAuthError"),
+        store_cls=getattr(_provider_module, f"{stem}TokenStore"),
+        default_token_path=getattr(_provider_module, f"{key}_default_token_path"),
+        oauth_base_fn=getattr(_provider_module, f"{key}_oauth_base"),
+        browser_flow=_provider_module.run_browser_flow,
+        device_flow=getattr(_provider_module, "run_device_flow", None),
     )
 
 

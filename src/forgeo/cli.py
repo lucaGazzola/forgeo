@@ -2925,22 +2925,19 @@ def _resolve_auth_store(provider: str, args: argparse.Namespace) -> Any:
     return store_cls(api_base=api_base)
 
 
-def _cmd_auth_login_flow(
-    *,
-    label: str,
-    provider_key: str,
-    args: argparse.Namespace,
-    error_cls: type[BaseException],
-    store_cls: Any,
-    oauth_base_fn: Any,
-    browser_flow: Any,
-    device_flow: Any | None = None,
-) -> int:
-    """Run a browser/device OAuth flow and store the token.
+def cmd_auth_login(args: argparse.Namespace) -> int:
+    """Handle ``forgeo auth login``: run OAuth flow and store the token.
 
-    Shared by ``auth login`` for GitHub, GitLab and Jira. With
-    ``device_flow=None`` (Jira) only the browser flow is supported.
+    With no device flow (Jira) only the browser flow is supported.
     """
+    spec = _auth_provider_spec(getattr(args, "provider", "github"))
+    label = spec.label
+    provider_key = spec.key
+    error_cls = spec.error_cls
+    store_cls = spec.store_cls
+    oauth_base_fn = spec.oauth_base_fn
+    browser_flow = spec.browser_flow
+    device_flow = spec.device_flow
     params = _resolve_oauth_params(provider_key, args)
     if params is None:
         return 1
@@ -3005,21 +3002,6 @@ def cmd_auth(args: argparse.Namespace) -> int:
         return cmd_auth_logout(args)
     build_parser().print_help()
     return 0
-
-
-def cmd_auth_login(args: argparse.Namespace) -> int:
-    """Handle ``forgeo auth login``: run OAuth flow and store token."""
-    spec = _auth_provider_spec(getattr(args, "provider", "github"))
-    return _cmd_auth_login_flow(
-        label=spec.label,
-        provider_key=spec.key,
-        args=args,
-        error_cls=spec.error_cls,
-        store_cls=spec.store_cls,
-        oauth_base_fn=spec.oauth_base_fn,
-        browser_flow=spec.browser_flow,
-        device_flow=spec.device_flow,
-    )
 
 
 def cmd_auth_status(args: argparse.Namespace) -> int:

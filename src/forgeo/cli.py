@@ -1,129 +1,8 @@
 """Command-line interface.
 
-Commands:
-
-* ``forgeo`` / ``forgeo init`` — guided first-time setup: asks for the
-  forgeo folder, the coding agent command, and the refactor prompt, then
-  writes a ``forgeo.yaml``. Running ``forgeo`` or ``forgeo start`` without
-  a config triggers it automatically.
-* ``forgeo start --config forgeo.yaml`` — start the scheduled forgeo on one
-  repository detached in the background and exit. Every ``interval_minutes``
-  it picks an ``OPEN`` task from the configured provider, or runs a refactoring
-  pass when the provider has no runnable task; everything is committed and
-  pushed on the main branch. When the agent needs human input, a detailed
-  ``BLOCKER.md`` file is written with what you must do. The daemon binds no
-  ports; live state is written to ``daemon.state.json`` and is served to you
-  by ``forgeo web``.
-  ``forgeo start -f`` (``--foreground``) runs the daemon in the foreground
-  instead, interruptible with Ctrl-C. The daemon watches
-  ``forgeo.yaml`` and re-reads it on the next cycle boundary when it changes
-  (or on ``SIGHUP``); path changes (``repo``, ``backlog``, ``blocker_file``,
-  ``log_file``) still need a ``forgeo restart``.
-* ``forgeo once --config forgeo.yaml`` — run exactly one cycle and exit.
-   Shares the per-forgeo lock with the daemon, so it never overlaps a
-   running ``start``.
-* ``forgeo run [--task TASK-001 | TASK-001] --config forgeo.yaml`` — run exactly one
-   specific ``OPEN`` task by id and exit, without waiting for the backlog
-   order or a scheduled run. The id may be passed positionally
-   (``forgeo run TASK-001``) or with ``--task`` — never both; short ids
-   work too (``3``, ``TASK-3`` or ``#3`` for ``TASK-003``). For triage: rerun a ``FAILED`` task (after
-   reopening it) or try a risky task right now. With ``--reopen`` a
-   ``BLOCKED`` task is reopened (and a ``FAILED`` task retried) first, so
-   the ``show -> edit -> reopen -> run`` recovery loop collapses to one
-   command. Reuses the same per-forgeo
-   lock as ``once`` and the daemon, so it never overlaps them; it refuses
-   with a clear error when the task does not exist or is not ``OPEN``.
-* ``forgeo task add [--title T | "T"] [--description D] [--description-file F] [--run]`` — create a
-   new ``OPEN`` task in the configured backlog without hand-editing JSON
-   or opening the dashboard (the title may be passed positionally as
-   ``forgeo task add "Fix typo"`` or with ``--title`` — never both; ids auto-assign as ``TASK-###`` unless
-   ``--id`` is given; ``--description`` defaults to the title so
-   one-liners need only ``--title``; ``--description -`` /
-   ``--description-file -`` reads
-   stdin and ``--description-file PATH`` reads a file, so multiline specs
-   never need shell quoting; ``--run`` runs the new task immediately in
-   the same command instead of waiting for the next cycle (not with
-   ``--run-at``); ``--run-at now`` jumps the queue, an ISO-8601
-   time schedules it).    ``forgeo task list [--status S]`` shows tasks from
-   the terminal; ``forgeo task next`` shows which task the scheduler would
-   pick next and why the rest wait (dependencies, future ``run-at``, queue
-   order — the answer to "why isn't my task running?");
-    every task-id command (``task show``/``edit``/``reopen``/``rm``/
-   ``complete-review``/``request-changes``) takes the id positionally
-   (``forgeo task show TASK-003``) or with ``--task`` — never both;
-   short ids work everywhere (``3``, ``TASK-3`` or ``#3`` for
-   ``TASK-003``):
-     ``forgeo task show [TASK_ID]`` prints one task's full
-     detail (description, acceptance, dependencies, blocker/failure
-     reasons) — with no id it shows the next task the scheduler would
-     pick (oldest ``BLOCKED`` first, else the oldest runnable ``OPEN``),
-     so the ``next -> show`` triage loop needs no copy-paste; ``forgeo task edit [TASK_ID]`` updates a task's title,
-    description, acceptance criteria, dependencies, files or ``--run-at``
-    schedule in place
-     (the terminal equivalent of editing it in the dashboard — fix a
-      ``BLOCKED`` task before reopening it, or ``--run-at now`` to run it
-      next; ``--description-file`` / ``-`` stdin works here too; ``--run``
-      fixes and retries it in the same command, reopening a ``BLOCKED``
-      task — or retrying a ``FAILED`` one — first);
-       ``forgeo task reopen [TASK_ID]``
-      moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN`` (with no id
-      it reopens the oldest ``BLOCKED`` task, else the oldest ``FAILED``
-      one, so the paused-forgeo recovery needs no copy-paste; ``--run``
-      reopens and runs it in the same command);
-    ``forgeo task rm [TASK_ID]`` deletes a task (typos, duplicates, or
-    tasks that will never be done — no JSON editing or dashboard
-    needed); ``forgeo task complete-review [TASK_ID]`` marks a ``REVIEW``
-    task ``COMPLETED`` after merging its branch, and
-    ``forgeo task request-changes [TASK_ID]`` sends a ``REVIEW`` task back
-    to ``OPEN`` for rework (the terminal equivalent of the dashboard's
-    Complete / Request-changes buttons). Never starts an agent.
-* ``forgeo validate --config forgeo.yaml`` — read-only dry run: validate the
-   config, repository, branch and remote resolution, backlog, agent command,
-   and lock state. Reports all problems at once, never invokes the agent, and
-   exits non-zero when any problem is found.
-* ``forgeo check`` — run the contributor quality gates (``pytest``,
-   ``ruff check``, ``mypy src/forgeo``) one after another and print a
-   PASS/FAIL summary. Read-only; needs no config file and never starts an
-   agent. Exits non-zero when any gate fails or a gate tool is not installed.
-* ``forgeo status --config forgeo.yaml`` — print a read-only summary of the
-   forgeo (config, backlog, daemon lock, last log outcome) and exit. Never
-   starts an agent.
-* ``forgeo logs --config forgeo.yaml`` — print the tail of the forgeo log
-   file (``log_file``) and exit; ``-n`` sets how many lines, ``-f`` follows
-   new lines like ``tail -f``. Read-only; never starts an agent.
-* ``forgeo stop --config forgeo.yaml`` — stop a running daemon gracefully
-  (SIGTERM; a cycle in progress finishes first).
-* ``forgeo restart --config forgeo.yaml`` — stop the daemon when running,
-  then start it again detached in the background, re-reading the config.
-* ``forgeo instance add NAME --config PATH`` — register an existing
-   ``forgeo.yaml`` under a stable instance name. Optional: ``start`` and
-   ``stop`` register Forgeo automatically under its config's ``name``
-   when it is not in the registry yet.
-* ``forgeo instance rm NAME`` — unregister an instance (never touches its
-   config file or repository).
-* ``forgeo instance list`` / ``forgeo list`` — a table of every registered
-   instance: config path, repository, daemon state, last outcome, and
-   backlog counts.
-* ``forgeo web [--host HOST] [--port PORT] [--token [TOKEN]]`` — serve the
-   central multi-instance dashboard in the foreground (default ``0.0.0.0:8790``),
-   aggregating every registered instance straight from its files. With
-   ``-d``/``--detach`` it starts in the background and returns once the
-   server reports it bound; ``forgeo web stop`` SIGTERMs a running
-   dashboard and ``forgeo web status`` reports whether one is running.
-   The dashboard is host-global (one per user): its lock lives at
-   ``~/.config/forgeo/web.lock`` (or ``$FORGEO_CONFIG_DIR/web.lock``),
-   independent of any per-repo backlog lock. ``--token`` (optional) turns on
-   bearer auth on every ``/api/*`` route: the token is persisted to
-   ``~/.config/forgeo/web.toml`` (generated and printed once when given with
-   no value), and a token already present there enables auth even without
-   the flag. With no flag and no token file the dashboard stays open.
-
-``start``, ``once``, ``run``, ``task add``, ``task list``, ``task next``,
-``task show``, ``task edit``, ``task reopen``, ``task rm``,
-``task complete-review``, ``task request-changes``, ``status``, ``logs``,
-``validate``, ``stop`` and ``restart`` each accept either ``--config PATH``
-(a config file) or ``--name NAME`` (an instance resolved from the
-registry); the two options are mutually exclusive.
+Subcommand help lives on the parsers themselves (``forgeo --help``,
+``forgeo <cmd> --help``) and the user guides live under ``docs/``;
+this module only wires those parsers to their implementations.
 """
 
 from __future__ import annotations
@@ -197,9 +76,6 @@ from forgeo.web_common import DEFAULT_LOG_LINES, tail_lines
 DEFAULT_CONFIG = Path("forgeo.yaml")
 
 console = Console()
-
-
-
 
 
 def _add_config_or_name(parser: argparse.ArgumentParser) -> None:

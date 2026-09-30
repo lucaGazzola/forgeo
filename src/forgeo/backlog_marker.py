@@ -24,8 +24,6 @@ from forgeo.backlog_issue_base import (
     extract_issue_labels,
     extract_issue_number,
     is_claim_stale,
-    next_reopen_state,
-    next_retry_state,
     parse_datetime,
     parse_numeric_issue_id,
     parse_optional_datetime,
@@ -243,6 +241,16 @@ class MarkerIssueBacklog(IssueBacklogBase):
     async def _update_labels(self, issue_id: str, *, add: list[str], remove: list[str]) -> None:
         await self._update_issue_labels(issue_id, add=add, remove=remove)
 
+    async def _to_open(self, issue: dict[str, Any], task_id: str) -> None:
+        """Reopen ``task_id`` (marker providers share one open state)."""
+        del issue
+        await self._transition_state(task_id, self.open_state)
+
+    async def _to_closed(self, issue: dict[str, Any], task_id: str) -> None:
+        """Close ``task_id`` (marker providers share one closed state)."""
+        del issue
+        await self._transition_state(task_id, self.close_state)
+
     async def _transition_state(self, issue_id: str, state: str) -> None:
         issue = await self._get_issue(issue_id)
         if issue is None:
@@ -318,9 +326,6 @@ class MarkerIssueBacklog(IssueBacklogBase):
         self._comment(number, "FAILED", reason or [])
         return await self.get_task(issue_id)
 
-    def _comment(self, numeric_id: int, state: str, reason: list[str]) -> None:
-        self._queue_state_comment(numeric_id, state, reason)
-
     async def _flush_comments(self) -> None:
         comments = self._take_pending_comments()
         error_cls: Any = self.request_error_cls
@@ -329,89 +334,6 @@ class MarkerIssueBacklog(IssueBacklogBase):
                 await self._post_comment(numeric_id, body)
             except error_cls as exc:
                 logger.warning("Could not add %s comment to %s: %s", self.provider_label, numeric_id, exc)
-
-    async def retry_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
-            if fetched is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.OPEN.value
-            next_retry_state(state)
-            await self._transition_state(task_id, self.open_state)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
-
-    async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
-        async with self._lock:
-            issue = await self._locked_issue(task_id)
-            if issue is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                state["agent_response"] = joined
-            state["state"] = TaskStatus.REVIEW.value
-            state["review_branch"] = branch
-            if sha is not None:
-                state["review_commit_sha"] = sha
-            state.pop("claimed_at", None)
-            state["failure_reason"] = []
-            state["blocker_reason"] = []
-            await self._update_labels(
-                task_id,
-                add=[self._labels["review"]],
-                remove=[self._labels["running"], self._labels["blocked"], self._labels["failed"]],
-            )
-            await self.put_engine_state(task_id, state)
-            number = extract_issue_number(issue)
-            assert number is not None
-            self._comment(number, "REVIEW", [f"branch {branch}" + (f" sha {sha}" if sha else "")])
-            await self._flush_comments()
-            return await self.get_task(task_id)
-
-    async def complete_review(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
-            if fetched is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.COMPLETED.value
-            state.pop("review_branch", None)
-            state.pop("review_commit_sha", None)
-            state.pop("claimed_at", None)
-            await self._transition_state(task_id, self.close_state)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
-
-    async def request_changes(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
-            if fetched is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.OPEN.value
-            state.pop("review_branch", None)
-            state.pop("review_commit_sha", None)
-            await self._transition_state(task_id, self.open_state)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
-
-    async def reopen_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
-            if fetched is None:
-                return None
-            state = await self.get_engine_state(task_id)
-            state["state"] = TaskStatus.OPEN.value
-            next_reopen_state(state)
-            await self._transition_state(task_id, self.open_state)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self.put_engine_state(task_id, state)
-            return await self.get_task(task_id)
 
     async def delete_task(self, task_id: str) -> Task | None:
         async with self._lock:

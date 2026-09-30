@@ -45,8 +45,6 @@ from forgeo.backlog_issue_base import (
     claim_cutoff,
     execute_json_request,
     is_claim_stale,
-    next_reopen_state,
-    next_retry_state,
     parse_datetime,
     parse_optional_datetime,
     plain_text_to_adf,
@@ -700,6 +698,16 @@ class JiraBacklog(IssueBacklogBase):
                 update={"labels": update},
             )
 
+    async def _to_open(self, issue: dict[str, Any], task_id: str) -> None:
+        """Move ``issue`` to the configured Jira open status."""
+        del task_id
+        await self._transition_to(issue, self.config.workflow.open_status)
+
+    async def _to_closed(self, issue: dict[str, Any], task_id: str) -> None:
+        """Move ``issue`` to the configured Jira completed status."""
+        del task_id
+        await self._transition_to(issue, self.config.workflow.completed_status)
+
     async def _transition_metadata(
         self,
         issue: dict[str, Any],
@@ -773,97 +781,12 @@ class JiraBacklog(IssueBacklogBase):
         self._comment(key, "FAILED", reason or [])
         return await self.get_task(key)
 
-    def _comment(self, issue_key: str, state: str, reason: list[str]) -> None:
-        """Add a bounded, clearly marked Jira comment without affecting the run."""
-        self._queue_state_comment(issue_key, state, reason)
-
     async def _flush_comments(self) -> None:
         for issue_key, body in self._take_pending_comments():
             try:
                 await self._call(self.client.add_comment, issue_key, body)
             except JiraRequestError as exc:
                 logger.warning("Could not add Jira comment to %s: %s", issue_key, exc)
-
-    async def set_review(self, task_id: str, branch: str, sha: str | None, result: ExecutionResult) -> Task | None:
-        async with self._lock:
-            issue = await self._locked_issue(task_id)
-            if issue is None:
-                return None
-            metadata = await self._metadata(task_id)
-            joined = _join_output_logs(result, self._output_cap)
-            if joined is not None:
-                metadata["agent_response"] = joined
-            metadata["state"] = TaskStatus.REVIEW.value
-            metadata["review_branch"] = branch
-            if sha is not None:
-                metadata["review_commit_sha"] = sha
-            metadata.pop("claimed_at", None)
-            metadata["failure_reason"] = []
-            metadata["blocker_reason"] = []
-            await self._update_labels(task_id, add=[self._labels["review"]], remove=[self._labels["running"], self._labels["blocked"], self._labels["failed"]])
-            await self._save_metadata(task_id, metadata)
-            self._comment(task_id, "REVIEW", [f"branch {branch}" + (f" sha {sha}" if sha else "")])
-            await self._flush_comments()
-            return await self.get_task(task_id)
-
-    async def complete_review(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            metadata = await self._metadata(task_id)
-            metadata["state"] = TaskStatus.COMPLETED.value
-            metadata.pop("review_branch", None)
-            metadata.pop("review_commit_sha", None)
-            metadata.pop("claimed_at", None)
-            await self._transition_to(issue, self.config.workflow.completed_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, metadata)
-            return await self.get_task(task_id)
-
-    async def request_changes(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            metadata = await self._metadata(task_id)
-            metadata["state"] = TaskStatus.OPEN.value
-            metadata.pop("review_branch", None)
-            metadata.pop("review_commit_sha", None)
-            await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, metadata)
-            return await self.get_task(task_id)
-
-    async def retry_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            metadata = await self._metadata(task_id)
-            metadata["state"] = TaskStatus.OPEN.value
-            next_retry_state(metadata)
-            await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, metadata)
-            return await self.get_task(task_id)
-
-    async def reopen_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
-            if fetched is None:
-                return None
-            issue, _task = fetched
-            metadata = await self._metadata(task_id)
-            metadata["state"] = TaskStatus.OPEN.value
-            next_reopen_state(metadata)
-            await self._transition_to(issue, self.config.workflow.open_status)
-            await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
-            await self._save_metadata(task_id, metadata)
-            return await self.get_task(task_id)
 
     async def delete_task(self, task_id: str) -> Task | None:
         async with self._lock:

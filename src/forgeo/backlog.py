@@ -43,6 +43,8 @@ from forgeo.backlog_issue_base import (
     extract_issue_number,
     forgeo_labels,
     format_state_comment,
+    next_reopen_state,
+    next_retry_state,
 )
 from forgeo.io import atomic_write_text
 from forgeo.models import ExecutionResult, ForgeoConfig, Task, TaskStatus
@@ -784,6 +786,123 @@ class IssueBacklogBase(BacklogStore):
                 return None
             state = await self.get_engine_state(task_id)
             bump_state_counter(state, "failed_wait_cycles")
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
+    async def _update_labels(self, issue_id: str, *, add: list[str], remove: list[str]) -> None:
+        """Apply label additions/removals (provider-specific)."""
+        raise NotImplementedError
+
+    async def _to_open(self, issue: dict[str, Any], task_id: str) -> None:
+        """Move ``issue`` back to the provider's open state."""
+        raise NotImplementedError
+
+    async def _to_closed(self, issue: dict[str, Any], task_id: str) -> None:
+        """Move ``issue`` to the provider's closed state."""
+        raise NotImplementedError
+
+    def _comment(self, key: Any, state: str, reason: list[str]) -> None:
+        """Queue a ``[forgeo] STATE`` comment for ``key``."""
+        self._queue_state_comment(key, state, reason)
+
+    async def _clear_labels(self, task_id: str) -> None:
+        """Remove all forgeo labels from ``task_id``."""
+        await self._update_labels(task_id, add=[], remove=list(self._labels.values()))
+
+    async def retry_task(self, task_id: str) -> Task | None:
+        """Shared retry: FAILED -> OPEN with counter bump and reopen transition."""
+        async with self._lock:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.FAILED)
+            if fetched is None:
+                return None
+            issue, _task = fetched
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.OPEN.value
+            next_retry_state(state)
+            await self._to_open(issue, task_id)
+            await self._clear_labels(task_id)
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
+    async def reopen_task(self, task_id: str) -> Task | None:
+        """Shared reopen: BLOCKED -> OPEN with counter reset and reopen transition."""
+        async with self._lock:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.BLOCKED)
+            if fetched is None:
+                return None
+            issue, _task = fetched
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.OPEN.value
+            next_reopen_state(state)
+            await self._to_open(issue, task_id)
+            await self._clear_labels(task_id)
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
+    async def set_review(
+        self, task_id: str, branch: str, sha: str | None, result: ExecutionResult
+    ) -> Task | None:
+        """Shared review start: persist branch/sha, label REVIEW, comment, flush."""
+        async with self._lock:
+            issue = await self._locked_issue(task_id)
+            if issue is None:
+                return None
+            state = await self.get_engine_state(task_id)
+            joined = _join_output_logs(result, self._output_cap)
+            if joined is not None:
+                state["agent_response"] = joined
+            state["state"] = TaskStatus.REVIEW.value
+            state["review_branch"] = branch
+            if sha is not None:
+                state["review_commit_sha"] = sha
+            state.pop("claimed_at", None)
+            state["failure_reason"] = []
+            state["blocker_reason"] = []
+            await self._update_labels(
+                task_id,
+                add=[self._labels["review"]],
+                remove=[self._labels["running"], self._labels["blocked"], self._labels["failed"]],
+            )
+            await self.put_engine_state(task_id, state)
+            number = extract_issue_number(issue)
+            self._comment(
+                number if number is not None else task_id,
+                "REVIEW",
+                [f"branch {branch}" + (f" sha {sha}" if sha else "")],
+            )
+            await self._flush_comments()
+            return await self.get_task(task_id)
+
+    async def complete_review(self, task_id: str) -> Task | None:
+        """Shared review completion: REVIEW -> COMPLETED with close transition."""
+        async with self._lock:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
+                return None
+            issue, _task = fetched
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.COMPLETED.value
+            state.pop("review_branch", None)
+            state.pop("review_commit_sha", None)
+            state.pop("claimed_at", None)
+            await self._to_closed(issue, task_id)
+            await self._clear_labels(task_id)
+            await self.put_engine_state(task_id, state)
+            return await self.get_task(task_id)
+
+    async def request_changes(self, task_id: str) -> Task | None:
+        """Shared review rework: REVIEW -> OPEN with reopen transition."""
+        async with self._lock:
+            fetched = await self._locked_issue_task(task_id, require_status=TaskStatus.REVIEW)
+            if fetched is None:
+                return None
+            issue, _task = fetched
+            state = await self.get_engine_state(task_id)
+            state["state"] = TaskStatus.OPEN.value
+            state.pop("review_branch", None)
+            state.pop("review_commit_sha", None)
+            await self._to_open(issue, task_id)
+            await self._clear_labels(task_id)
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 

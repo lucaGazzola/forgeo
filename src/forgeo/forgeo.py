@@ -352,12 +352,6 @@ class Forgeo:
     # Task execution                                                      #
     # ------------------------------------------------------------------ #
 
-    def _needs_review(self, task: Task) -> bool:
-        """Whether ``task`` should go to REVIEW on success."""
-        if task.review_required is not None:
-            return task.review_required
-        return self.config.review_mode == "branch"
-
     def _review_branch_for(self, task: Task) -> str:
         """Feature branch name for ``task``."""
         sanitized = re.sub(r"[^A-Za-z0-9._/-]+", "-", task.id).strip("-")
@@ -381,7 +375,10 @@ class Forgeo:
         """
         logger.info("Running task %s (%s)", task.id, task.title)
         max_retries = self.config.no_changes_retry_max
-        needs_review = self._needs_review(task)
+        if task.review_required is not None:
+            needs_review = task.review_required
+        else:
+            needs_review = self.config.review_mode == "branch"
         for attempt in range(max_retries + 1):
             self._last_run_reason = None
             result, ok = await self._run_agent(
@@ -897,22 +894,20 @@ class Forgeo:
         the derived-view model: the file is written once at block time and
         Forgeo stays paused until the human deletes it.
         """
-        rendered = [self._render_entry(entry) for entry in entries]
+        rendered = [
+            self._render_block(
+                self._render_reason_sections(
+                    entry.task, entry.instruction, entry.result.reason
+                ),
+                [
+                    "Decide how to handle this refactoring question, then delete this file.",
+                    "Forgeo will continue on the next scheduled run.",
+                ],
+            )
+            for entry in entries
+        ]
         self._persist_blocker(self._blocker_sections(rendered, include_marker=False))
         logger.info("Blocker file written to %s", self.config.blocker_file)
-
-    def _render_entry(self, entry: BlockerEntry) -> str:
-        """Render the explanation and required human action for one refactor block."""
-        reason = self._render_reason_sections(
-            entry.task, entry.instruction, entry.result.reason
-        )
-        return self._render_block(
-            reason,
-            [
-                "Decide how to handle this refactoring question, then delete this file.",
-                "Forgeo will continue on the next scheduled run.",
-            ],
-        )
 
     @staticmethod
     def _render_reason_sections(

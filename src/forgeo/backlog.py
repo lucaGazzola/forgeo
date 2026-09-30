@@ -714,7 +714,8 @@ class IssueBacklogBase(BacklogStore):
         implementations were identical apart from the provider label and
         error class carried on ``self``.
         """
-        comments = self._take_pending_comments()
+        comments = self._pending_comments
+        self._pending_comments = []
         error_cls: Any = self.request_error_cls
         for issue_id, body in comments:
             try:
@@ -770,12 +771,6 @@ class IssueBacklogBase(BacklogStore):
         except ValidationError as exc:
             raise ValueError(f"invalid task field(s): {exc}") from exc
         return issue, candidate
-
-    def _take_pending_comments(self) -> list[tuple[Any, str]]:
-        """Drain queued state comments, collapsing the flush preamble."""
-        comments = self._pending_comments
-        self._pending_comments = []
-        return comments
 
     def _prepare_terminal_state(
         self,
@@ -1006,7 +1001,10 @@ class JSONBacklog(DocumentBacklogStore):
         async with self._lock:
             try:
                 store = await self._read()
-                self._rotate_snapshots()
+                paths = self.snapshot_paths
+                for index in range(len(paths) - 1, 0, -1):
+                    if paths[index - 1].exists():
+                        os.replace(paths[index - 1], paths[index])
                 self._write_store(self.snapshot_paths[0], store)
                 logger.info("Backlog snapshot written to %s", self.snapshot_paths[0])
             except OSError as exc:
@@ -1060,12 +1058,6 @@ class JSONBacklog(DocumentBacklogStore):
             logger.warning("Corrupt backlog at %s renamed to %s", self.path, corrupt_path)
         except OSError:
             logger.warning("Corrupt backlog at %s could not be preserved", self.path)
-
-    def _rotate_snapshots(self) -> None:
-        paths = self.snapshot_paths
-        for index in range(len(paths) - 1, 0, -1):
-            if paths[index - 1].exists():
-                os.replace(paths[index - 1], paths[index])
 
     async def _write(self, store: dict[str, Any]) -> None:
         self._write_store(self.path, store)

@@ -225,9 +225,10 @@ success, `Unknown task: <id>` for missing ids.
 
 ### `forgeo task reopen [TASK_ID] [--run]`
 
-Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task` (short ids like `3` work). `FAILED` tasks re-queue through the retry path. `--run` reopens and runs the task in the same command (the `reopen -> run` loop in one step; shares the run lock with `once`/`run`/daemon, so it refuses while one holds it).
+Move a `BLOCKED` or `FAILED` task back to `OPEN` (the terminal equivalent of resolving `BLOCKER.md` and reopening from the dashboard). The id may be passed positionally or with `--task` (short ids like `3` work); with neither, the oldest `BLOCKED` task is reopened (else the oldest `FAILED` one), so recovering a paused forgeo needs no id copy-paste. `FAILED` tasks re-queue through the retry path. `--run` reopens and runs the task in the same command (the `reopen -> run` loop in one step; shares the run lock with `once`/`run`/daemon, so it refuses while one holds it).
 
 ```bash
+forgeo task reopen             # oldest BLOCKED (else oldest FAILED)
 forgeo task reopen TASK-003
 forgeo task reopen --task TASK-003
 forgeo task reopen --task TASK-003 --run  # reopen + run now, no second command
@@ -235,7 +236,7 @@ forgeo task reopen --task TASK-003 --run  # reopen + run now, no second command
 
 | Flag | Description |
 | --- | --- |
-| `--task <id>` / `TASK_ID` | `BLOCKED` or `FAILED` task id, flag or positional (one required). |
+| `--task <id>` / `TASK_ID` | `BLOCKED` or `FAILED` task id, flag or positional (omit both to reopen the oldest `BLOCKED`, else the oldest `FAILED`). |
 | `--run` | Reopen the task and run it immediately (same lock as `forgeo run`; refuses while a daemon holds it). |
 | `--config <file>` / `--name <name>` | Config file or registry name. |
 
@@ -323,14 +324,14 @@ daemon: not running
 last outcome: task
 waiting on: TASK-002 (needs COMPLETED: TASK-001 (OPEN))
 blocked: TASK-003 — Needs human — first line of the blocker reason
-action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then `forgeo task reopen --task <id>`
+action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), then `forgeo task reopen` (oldest BLOCKED)
 ```
 
 `waiting on` appears when the oldest `OPEN` task has unmet dependencies. `run_at` due tasks are shown ahead of older ones.
 
 `blocked:` / `failed:` lines (up to 3 each, oldest first, with the reason's
 first line) appear when tasks need attention, plus a single `action:` line
-with the most useful next step (resolve + `forgeo task reopen --task <id>`,
+with the most useful next step (resolve + `forgeo task reopen` (oldest BLOCKED),
 `forgeo start`, or add tasks via `forgeo task add`).
 
 ## `forgeo logs`

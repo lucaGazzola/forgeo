@@ -2131,6 +2131,81 @@ def test_task_reopen_refuses_completed_task(git_repo, tmp_path, capsys):
     assert "cannot be reopened" in capsys.readouterr().out
 
 
+def test_task_reopen_no_id_reopens_oldest_blocked(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-002",
+                status="BLOCKED",
+                created_at=datetime(2026, 1, 2, tzinfo=UTC),
+            ),
+            make_task(
+                id="TASK-001",
+                status="BLOCKED",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            make_task(id="TASK-003", status="FAILED"),
+        ],
+    )
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_reopen(args) == 0
+    out = capsys.readouterr().out
+    assert "Reopening TASK-001 (no id given" in out
+    assert "Reopened task TASK-001" in out
+    statuses = {task["id"]: task["status"] for task in read_backlog_tasks(tmp_path)}
+    assert statuses["TASK-001"] == "OPEN"
+    assert statuses["TASK-002"] == "BLOCKED"
+
+
+def test_task_reopen_no_id_falls_back_to_oldest_failed(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [
+            make_task(
+                id="TASK-002",
+                status="FAILED",
+                created_at=datetime(2026, 1, 2, tzinfo=UTC),
+            ),
+            make_task(
+                id="TASK-001",
+                status="FAILED",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            make_task(id="TASK-003", status="OPEN"),
+        ],
+    )
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_reopen(args) == 0
+    out = capsys.readouterr().out
+    assert "Reopening TASK-001 (no id given" in out
+    assert "Reopened task TASK-001" in out
+    statuses = {task["id"]: task["status"] for task in read_backlog_tasks(tmp_path)}
+    assert statuses["TASK-001"] == "OPEN"
+    assert statuses["TASK-002"] == "FAILED"
+
+
+def test_task_reopen_no_id_without_reopenable_tasks(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="OPEN")])
+    args = argparse.Namespace(config=config_path, task=None, task_id=None)
+
+    assert cmd_task_reopen(args) == 1
+    assert "No BLOCKED or FAILED tasks" in capsys.readouterr().out
+
+
+def test_task_reopen_no_id_main_entrypoint(git_repo, tmp_path, capsys):
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(tmp_path, [make_task(id="TASK-001", status="BLOCKED")])
+
+    assert main(["task", "reopen", "--config", str(config_path)]) == 0
+    assert "Reopened task TASK-001" in capsys.readouterr().out
+
+
 def test_task_group_dispatches_to_subcommands(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
     write_backlog(tmp_path, [make_task(id="TASK-001")])

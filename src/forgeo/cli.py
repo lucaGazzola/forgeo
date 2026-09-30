@@ -65,9 +65,11 @@ Commands:
       next; ``--description-file`` / ``-`` stdin works here too; ``--run``
       fixes and retries it in the same command, reopening a ``BLOCKED``
       task — or retrying a ``FAILED`` one — first);
-      ``forgeo task reopen [TASK_ID]``
-     moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN`` (``--run``
-     reopens and runs it in the same command);
+       ``forgeo task reopen [TASK_ID]``
+      moves a ``BLOCKED`` or ``FAILED`` task back to ``OPEN`` (with no id
+      it reopens the oldest ``BLOCKED`` task, else the oldest ``FAILED``
+      one, so the paused-forgeo recovery needs no copy-paste; ``--run``
+      reopens and runs it in the same command);
     ``forgeo task rm [TASK_ID]`` deletes a task (typos, duplicates, or
     tasks that will never be done — no JSON editing or dashboard
     needed); ``forgeo task complete-review [TASK_ID]`` marks a ``REVIEW``
@@ -492,14 +494,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default=None,
         metavar="TASK_ID",
-        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work).",
+        help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work; "
+        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
     )
     task_reopen_parser.add_argument(
         "task_id",
         nargs="?",
         default=None,
         metavar="TASK_ID",
-        help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+        help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
     )
     task_reopen_parser.add_argument(
         "--run",
@@ -1897,6 +1901,63 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     return _run_task_now(config, updated.id, reopen=True)
 
 
+def _default_reopen_task(tasks: list[Task]) -> Task | None:
+    """The task ``reopen`` retries when no id is given: oldest ``BLOCKED`` first.
+
+    That mirrors the cycle's pause rule (any ``BLOCKED`` task pauses the
+    forgeo, so the oldest one is what needs eyes first); with no ``BLOCKED``
+    task the oldest ``FAILED`` task is next (same ``reopen``/``retry`` split
+    as the explicit path). ``None`` when no task is reopenable.
+    """
+    blocked = sorted(
+        (task for task in tasks if task.status is TaskStatus.BLOCKED),
+        key=lambda task: task.created_at,
+    )
+    if blocked:
+        return blocked[0]
+    failed = sorted(
+        (task for task in tasks if task.status is TaskStatus.FAILED),
+        key=lambda task: task.created_at,
+    )
+    if failed:
+        return failed[0]
+    return None
+
+
+def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
+    """Handle ``forgeo task reopen`` with no id: reopen the oldest waiting task.
+
+    Never starts an agent, unless ``--run`` is passed (then the defaulted
+    task is reopened and run, like the explicit path). Reports the defaulted
+    id up front so the magic is visible, then delegates to
+    :func:`cmd_task_reopen` with the id filled in.
+    """
+    resolved = _resolve_existing_config(args)
+    if resolved is None:
+        return 1
+    _config_path, config = resolved
+    try:
+        tasks = asyncio.run(open_backlog(config).list_tasks())
+    except BacklogUnavailableError as exc:
+        console.print(f"[red]Backlog unavailable: {exc}[/red]")
+        return 1
+    task = _default_reopen_task(tasks)
+    if task is None:
+        console.print(
+            "[yellow]No BLOCKED or FAILED tasks to reopen — "
+            "add one with `forgeo task add --title ...` or wait for the next cycle.[/yellow]"
+        )
+        return 1
+    console.print(
+        f"[dim]Reopening {task.id} (no id given — the oldest "
+        f"{task.status.value} task).[/dim]"
+    )
+    forwarded_kwargs = dict(vars(args))
+    forwarded_kwargs["task"] = task.id
+    forwarded_kwargs["task_id"] = None
+    return cmd_task_reopen(argparse.Namespace(**forwarded_kwargs))
+
+
 def cmd_task_reopen(args: argparse.Namespace) -> int:
     """Handle ``forgeo task reopen``: move a ``BLOCKED``/``FAILED`` task to ``OPEN``.
 
@@ -1906,8 +1967,12 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     daemon). ``BLOCKED`` tasks reopen directly; ``FAILED``
     tasks re-queue through the retry path. Tasks that are ``OPEN``,
     ``REVIEW`` or ``COMPLETED`` are refused with an explanation.
-    The id may be passed positionally or with ``--task``.
+    The id may be passed positionally or with ``--task``; with neither,
+    the oldest ``BLOCKED`` task (else the oldest ``FAILED`` one) is
+    reopened, so the paused-forgeo recovery needs no id copy-paste.
     """
+    if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
+        return _cmd_task_reopen_next(args)
     resolved = _resolve_existing_config(args)
     if resolved is None:
         return 1
@@ -2123,7 +2188,7 @@ def render_task_next(tasks: list[Task], *, now: Any = None) -> str:
         lines = [
             f"next: (paused) — {len(blocked)} BLOCKED task(s): {ids}",
             "why: forgeo renders BLOCKER.md while any task is BLOCKED",
-            "hint: resolve them, then `forgeo task reopen --task <id>` to retry",
+            "hint: resolve them, then `forgeo task reopen` (oldest BLOCKED) to retry",
         ]
         return "\n".join(lines)
     picked = oldest_open_task(tasks, now=now)
@@ -2294,7 +2359,7 @@ def _next_action(
     if counts.get("BLOCKED", 0) > 0:
         return (
             "action: resolve BLOCKED tasks above (BLOCKER.md / `forgeo web`), "
-            "then `forgeo task reopen --task <id>`"
+            "then `forgeo task reopen` (oldest BLOCKED)"
         )
     if counts.get("FAILED", 0) > 0:
         return (

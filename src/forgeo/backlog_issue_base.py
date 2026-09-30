@@ -521,6 +521,107 @@ def execute_rest_with_oauth_retry(
             raise
 
 
+class RestIssueClientBase:
+    """Blocking REST client shared by the GitHub/GitLab providers.
+
+    Both clients did the same dance — lazy OAuth provider, ``_api_url``,
+    ``_request`` with one OAuth retry, and CRUD wrappers over issue paths —
+    differing only in headers, path shapes and the update/delete verbs.
+    Subclasses provide :meth:`_oauth_components`, :meth:`_auth_headers`,
+    :meth:`_collection_path`, :meth:`_comment_path` (plus
+    :meth:`_search_query`/:meth:`_extra_headers` when the defaults don't
+    fit) and inherit the rest. Used via ``asyncio.to_thread``.
+    """
+
+    request_error_cls: type[Exception] = Exception
+    provider_label: str = "issue"
+    api_prefix: str = ""
+    update_method: str = "PATCH"
+
+    def __init__(self, base_url: str, config: Any) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.config = config
+        self._oauth_provider: Any | None = None
+
+    def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
+        """Return ``(store_cls, provider_cls, oauth_error_cls)`` (lazy import)."""
+        raise NotImplementedError
+
+    def _auth_headers(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def _extra_headers(self) -> dict[str, str]:
+        return {}
+
+    def _collection_path(self) -> str:
+        raise NotImplementedError
+
+    def _comment_path(self, issue_id: int) -> str:
+        raise NotImplementedError
+
+    def _search_query(self, page: int, per_page: int, state: str) -> dict[str, Any]:
+        del state
+        return {"per_page": per_page, "page": page}
+
+    def _item_path(self, issue_id: int) -> str:
+        return f"{self._collection_path()}/{issue_id}"
+
+    def _oauth_token_provider(self) -> Any | None:
+        store_cls, provider_cls, _ = self._oauth_components()
+        return resolve_cached_oauth_provider(self, store_cls, provider_cls)
+
+    def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
+        return build_api_url(self.base_url, path, query, api_prefix=self.api_prefix)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        def _build_request() -> urllib.request.Request:
+            body = encode_json_body(payload)
+            headers = {**self._auth_headers(), **self._extra_headers()}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+            return urllib.request.Request(
+                self._api_url(path, query), data=body, method=method, headers=headers
+            )
+
+        return execute_rest_with_oauth_retry(
+            build_request=_build_request,
+            timeout=self.config.timeout_seconds,
+            error_cls=self.request_error_cls,
+            method=method,
+            has_oauth=self.config.auth.oauth is not None,
+            get_cached_provider=lambda: self._oauth_provider,
+        )
+
+    def search_issues(
+        self, *, page: int = 1, per_page: int = 30, state: str = "all"
+    ) -> list[dict[str, Any]]:
+        return clean_issue_list(
+            self._request("GET", self._collection_path(), query=self._search_query(page, per_page, state))
+        )
+
+    def get_issue(self, issue_id: int) -> dict[str, Any]:
+        return self._request("GET", self._item_path(issue_id))  # type: ignore[no-any-return]
+
+    def create_issue(self, fields: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", self._collection_path(), payload=fields)  # type: ignore[no-any-return]
+
+    def update_issue(self, issue_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        return self._request(self.update_method, self._item_path(issue_id), payload=fields)  # type: ignore[no-any-return]
+
+    def add_comment(self, issue_id: int, body: str) -> None:
+        self._request("POST", self._comment_path(issue_id), payload={"body": body})
+
+    def delete_issue(self, issue_id: int) -> None:
+        self._request("DELETE", self._item_path(issue_id))
+
+
 def execute_json_request(
     request: urllib.request.Request,
     timeout: float,

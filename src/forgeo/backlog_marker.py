@@ -45,6 +45,12 @@ class MarkerIssueBacklog(IssueBacklogBase):
     provider_label: str = "issue"
     request_error_cls: type[Exception] = Exception
     client_cls: Any = None
+    # ``update_issue`` payloads closing/reopening an issue, e.g.
+    # ``{"state": "closed"}`` (GitHub) or ``{"state_event": "close"}``
+    # (GitLab). Subclasses set both; the shared ``_close_issue`` /
+    # ``_reopen_issue`` below send a copy.
+    close_update: dict[str, Any] | None = None
+    reopen_update: dict[str, Any] | None = None
 
     def __init__(self, url: str, config: Any, *, output_cap: int | None = None, client: Any = None) -> None:
         super().__init__(output_cap=output_cap)
@@ -68,22 +74,27 @@ class MarkerIssueBacklog(IssueBacklogBase):
         return await self._call(self.client.get_issue, numeric_id)
 
     async def _search_page(self, *, page: int, per_page: int) -> Any:
-        return await self._call(self.client.search_issues, page=page, per_page=per_page)
+        # ``state="all"`` lists open and closed issues; the GitLab client
+        # accepts (and ignores) it so both providers share this method.
+        return await self._call(self.client.search_issues, page=page, per_page=per_page, state="all")
 
     async def _apply_update(self, numeric_id: int, fields: dict[str, Any]) -> Any:
         return await self._call(self.client.update_issue, numeric_id, fields)
 
     async def _post_comment(self, numeric_id: int, body: str) -> None:
-        raise NotImplementedError
+        await self._call(self.client.add_comment, numeric_id, body)
 
     async def _delete_issue(self, numeric_id: int) -> None:
         await self._call(self.client.delete_issue, numeric_id)
 
     async def _close_issue(self, numeric_id: int) -> None:
-        raise NotImplementedError
+        if self.close_update is None:
+            raise NotImplementedError
+        await self._call(self.client.update_issue, numeric_id, dict(self.close_update))
 
     def _created_id(self, created: Any) -> str | None:
-        raise NotImplementedError
+        number = extract_issue_number(created if isinstance(created, dict) else {})
+        return str(number) if number is not None else None
 
     def _create_fields(self, task: Task, engine: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -246,7 +257,9 @@ class MarkerIssueBacklog(IssueBacklogBase):
             await self._reopen_issue(number)
 
     async def _reopen_issue(self, numeric_id: int) -> None:
-        raise NotImplementedError
+        if self.reopen_update is None:
+            raise NotImplementedError
+        await self._call(self.client.update_issue, numeric_id, dict(self.reopen_update))
 
     async def _transition_metadata(
         self,

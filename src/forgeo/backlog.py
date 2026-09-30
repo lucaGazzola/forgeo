@@ -78,14 +78,6 @@ def _require_string(updates: dict[str, Any], field: str) -> None:
         raise ValueError(f"{field} must be a string")
 
 
-def _require_string_list(updates: dict[str, Any], field: str) -> None:
-    if field in updates and (
-        not isinstance(updates[field], list)
-        or not all(isinstance(item, str) for item in updates[field])
-    ):
-        raise ValueError(f"{field} must be a list of strings")
-
-
 def validate_task_updates(updates: dict[str, Any]) -> None:
     """Validate fields accepted by the task-editing API.
 
@@ -103,7 +95,11 @@ def validate_task_updates(updates: dict[str, Any]) -> None:
     if "description" in updates and not updates["description"].strip():
         raise ValueError("description must be a non-blank string")
     for field in ("acceptance_criteria", "dependencies", "files_to_modify"):
-        _require_string_list(updates, field)
+        if field in updates and (
+            not isinstance(updates[field], list)
+            or not all(isinstance(item, str) for item in updates[field])
+        ):
+            raise ValueError(f"{field} must be a list of strings")
     if "retries_left" in updates and updates["retries_left"] is not None and (
         not isinstance(updates["retries_left"], int)
         or isinstance(updates["retries_left"], bool)

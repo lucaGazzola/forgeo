@@ -8,18 +8,15 @@ import os
 import urllib.request
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
     CachedFileTokenProvider,
     FileTokenStore,
-    begin_browser_login,
     host_token_path,
+    make_browser_flow,
     make_callback_handler,
     make_post_form,
-    open_authorize_url,
     stamp_issued_at,
-    wait_for_callback,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +78,15 @@ class JiraOAuthTokenProvider(CachedFileTokenProvider):
         if not secret:
             return None
         try:
-            new_data = _refresh_token(self.client_id, secret, refresh)
+            new_data = _post_form(
+                f"{ATLASSIAN_AUTH_BASE}/oauth/token",
+                {
+                    "grant_type": "refresh_token",
+                    "client_id": self.client_id,
+                    "client_secret": secret,
+                    "refresh_token": refresh,
+                },
+            )
             # Preserve cloud_id if not in new_data
             if "cloud_id" not in new_data and data.get("cloud_id"):
                 new_data["cloud_id"] = data["cloud_id"]
@@ -96,17 +101,6 @@ class JiraOAuthTokenProvider(CachedFileTokenProvider):
 
 
 _post_form = make_post_form(JiraOAuthError, "Jira OAuth")
-
-
-def _refresh_token(client_id: str, client_secret: str, refresh_token: str) -> dict[str, Any]:
-    url = f"{ATLASSIAN_AUTH_BASE}/oauth/token"
-    fields = {
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-    }
-    return _post_form(url, fields)
 
 
 def _fetch_accessible_resources(access_token: str) -> list[dict[str, Any]]:
@@ -128,6 +122,25 @@ def _fetch_accessible_resources(access_token: str) -> list[dict[str, Any]]:
 
 _CallbackHandler = make_callback_handler("Jira")
 
+#: Shared PKCE browser dance (loopback server, authorize URL, code exchange);
+#: Atlassian-only extras are the fixed authorize params and the default scope.
+#: ``offline_access`` (refresh grant) is ensured per call in
+#: :func:`run_browser_flow`, since a custom scope may omit it.
+_browser_flow = make_browser_flow(
+    _CallbackHandler,
+    JiraOAuthError,
+    "Jira",
+    _post_form,
+    authorize_path="/authorize",
+    token_path="/oauth/token",
+    default_scope="offline_access read:jira-user read:jira-work",
+    extra_authorize_params={
+        "audience": "api.atlassian.com",
+        "response_type": "code",
+        "prompt": "consent",
+    },
+)
+
 
 def run_browser_flow(
     client_id: str,
@@ -142,39 +155,19 @@ def run_browser_flow(
 ) -> dict[str, Any]:
     """Run Atlassian OAuth 3LO browser flow and return token data including cloud_id."""
     del oauth_base  # Atlassian base is fixed
-    verifier, challenge, state, server, redirect_uri = begin_browser_login(
-        _CallbackHandler, JiraOAuthError, callback_port
-    )
     # Atlassian scopes: offline_access required for refresh, plus Jira scopes
-    # Default scope for Forgeo: read:jira-user read:jira-work offline_access
     eff_scope = scope or "offline_access read:jira-user read:jira-work"
     if "offline_access" not in eff_scope:
         eff_scope = eff_scope + " offline_access"
-    params: dict[str, str] = {
-        "audience": "api.atlassian.com",
-        "client_id": client_id,
-        "scope": eff_scope,
-        "redirect_uri": redirect_uri,
-        "state": state,
-        "response_type": "code",
-        "prompt": "consent",
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    auth_url = f"{ATLASSIAN_AUTH_BASE}/authorize?{urlencode(params)}"
-    open_authorize_url(auth_url, "Jira", open_browser=open_browser)
-    code, redirect_uri = wait_for_callback(server, _CallbackHandler, state, timeout, JiraOAuthError, "Jira")
-    token_url = f"{ATLASSIAN_AUTH_BASE}/oauth/token"
-    fields: dict[str, str] = {
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "code": code,
-        "redirect_uri": redirect_uri,
-        "code_verifier": verifier,
-    }
-    if client_secret:
-        fields["client_secret"] = client_secret
-    token_data = _post_form(token_url, fields)
+    token_data = _browser_flow(
+        client_id,
+        ATLASSIAN_AUTH_BASE,
+        eff_scope,
+        client_secret=client_secret,
+        open_browser=open_browser,
+        callback_port=callback_port,
+        timeout=timeout,
+    )
     # Fetch cloudId if not provided
     access = token_data.get("access_token")
     if not isinstance(access, str):

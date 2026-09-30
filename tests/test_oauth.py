@@ -205,7 +205,7 @@ def test_jira_invalidate_refreshes_with_the_stored_refresh_token(tmp_path, monke
         client_secret_env=secret_env,
     )
     refreshed = {"access_token": "new-token", "expires_in": 3600}
-    monkeypatch.setattr("forgeo.oauth_jira._refresh_token", lambda *args: refreshed)
+    monkeypatch.setattr("forgeo.oauth_jira._post_form", lambda *args: refreshed)
 
     assert provider.token() == "old-token"
     provider.invalidate()

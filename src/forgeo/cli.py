@@ -1265,34 +1265,6 @@ async def _resolve_backlog_task_id(backlog: Any, raw_id: str) -> tuple[str, Any 
     return raw_id, None
 
 
-def _match_listed_task_id(tasks: list[Any], raw_id: str) -> Any | None:
-    """Find ``raw_id`` in an already-fetched task list, honoring shorthand.
-
-    Exact match wins (native issue ids keep working); falls back to the
-    expanded ``TASK-###`` form.
-    """
-    for candidate in _task_id_candidates(raw_id):
-        for task in tasks:
-            if task.id == candidate:
-                return task
-    return None
-
-
-def _resolve_task_title(args: argparse.Namespace) -> tuple[str | None, str | None]:
-    """Resolve a task title from ``--title`` or its positional shorthand.
-
-    Returns ``(title, error)`` — exactly one is set.
-    """
-    return _resolve_flag_or_positional(
-        args,
-        "title",
-        "title_pos",
-        "Missing title: pass --title TITLE or TITLE positionally.",
-        "Pass either --title TITLE or TITLE positionally, not both.",
-        blank_error="--title must not be blank (pass --title TITLE or TITLE positionally).",
-    )
-
-
 def _resolve_run_at(value: str | None) -> str | None:
     """Normalize a ``--run-at`` value to an ISO-8601 string.
 
@@ -1378,16 +1350,6 @@ def _resolve_optional_description(
     return description_text.strip(), None
 
 
-def _next_cli_task_id(tasks: list[Task]) -> str:
-    """Next ``TASK-###`` id after the highest existing ``TASK-###`` id."""
-    highest = 0
-    for task in tasks:
-        match = _TASK_ID_RE.match(task.id)
-        if match:
-            highest = max(highest, int(match.group(1)))
-    return f"TASK-{highest + 1:03d}"
-
-
 def cmd_task_add(args: argparse.Namespace) -> int:
     """Handle ``forgeo task add``: create a new ``OPEN`` task and exit.
 
@@ -1409,7 +1371,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
     run_now = bool(getattr(args, "run", False))
     if _has_run_schedule_conflict(args):
         return 1
-    title_text, title_error = _resolve_task_title(args)
+    title_text, title_error = _resolve_flag_or_positional(
+        args,
+        "title",
+        "title_pos",
+        "Missing title: pass --title TITLE or TITLE positionally.",
+        "Pass either --title TITLE or TITLE positionally, not both.",
+        blank_error="--title must not be blank (pass --title TITLE or TITLE positionally).",
+    )
     if title_error is not None:
         console.print(f"[red]{title_error}[/red]")
         # A blank --title is a value error (exit 1, as before); a missing
@@ -1435,7 +1404,12 @@ def cmd_task_add(args: argparse.Namespace) -> int:
             console.print("[red]--id must not be blank.[/red]")
             return 1
     else:
-        task_id = _next_cli_task_id(existing)
+        highest = 0
+        for task in existing:
+            match = _TASK_ID_RE.match(task.id)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        task_id = f"TASK-{highest + 1:03d}"
     run_at_raw = _resolve_run_at(getattr(args, "run_at", None))
     try:
         task = Task(
@@ -1823,7 +1797,14 @@ def cmd_task_rm(args: argparse.Namespace) -> int:
     tasks = _load_backlog_tasks(config)
     if tasks is None:
         return 1
-    existing = _match_listed_task_id(tasks, task_id)
+    existing = None
+    for candidate in _task_id_candidates(task_id):
+        for task in tasks:
+            if task.id == candidate:
+                existing = task
+                break
+        if existing is not None:
+            break
     if existing is None:
         console.print(f"[red]Unknown task: {task_id}.[/red]")
         return 1

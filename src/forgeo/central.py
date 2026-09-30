@@ -609,24 +609,12 @@ def _status_payload(info: InstanceInfo) -> dict[str, Any]:
 def _summary(info: InstanceInfo) -> dict[str, Any]:
     """One home-page/API row for a registered instance."""
     config = info.config
-    if config is None:
-        return {
-            "name": info.name,
-            "config_path": str(info.config_path),
-            "repo": None,
-            "daemon_running": False,
-            "last_outcome": None,
-            "next_run_at": None,
-            "backlog_counts": {status.value: 0 for status in TaskStatus},
-            "backlog_error": None,
-            **_backlog_meta(None),
-        }
     tasks, backlog_error = _read_tasks_or_error(config)
     return {
         "name": info.name,
         "config_path": str(info.config_path),
-        "repo": str(config.repo),
-        "daemon_running": info.daemon_running,
+        "repo": str(config.repo) if config is not None else None,
+        "daemon_running": info.daemon_running if config is not None else False,
         "last_outcome": _last_outcome(config),
         "next_run_at": _next_run(info, config),
         "backlog_counts": backlog_status_counts(tasks),

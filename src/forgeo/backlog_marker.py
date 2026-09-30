@@ -42,8 +42,8 @@ class MarkerIssueBacklog(IssueBacklogBase):
     client_cls: Any = None
     # ``update_issue`` payloads closing/reopening an issue, e.g.
     # ``{"state": "closed"}`` (GitHub) or ``{"state_event": "close"}``
-    # (GitLab). Subclasses set both; the shared ``_close_issue`` /
-    # ``_reopen_issue`` below send a copy.
+    # (GitLab). Subclasses set both; ``_close_issue`` and
+    # ``_transition_state`` send a copy of the matching payload.
     close_update: dict[str, Any] | None = None
     reopen_update: dict[str, Any] | None = None
 
@@ -64,9 +64,6 @@ class MarkerIssueBacklog(IssueBacklogBase):
     def _body_of(self, issue: dict[str, Any]) -> str:
         body = issue.get(self.body_key)
         return body if isinstance(body, str) else ""
-
-    async def _apply_update(self, numeric_id: int, fields: dict[str, Any]) -> Any:
-        return await self._call(self.client.update_issue, numeric_id, fields)
 
     async def _close_issue(self, numeric_id: int) -> None:
         if self.close_update is None:
@@ -127,7 +124,7 @@ class MarkerIssueBacklog(IssueBacklogBase):
                 number = int(issue_id)
             except ValueError:
                 return
-        await self._apply_update(number, {self.body_key: new_body})
+        await self._call(self.client.update_issue, number, {self.body_key: new_body})
 
     def _state_from_issue(self, issue: dict[str, Any]) -> TaskStatus | None:
         labels = set(extract_issue_labels(issue))
@@ -229,13 +226,10 @@ class MarkerIssueBacklog(IssueBacklogBase):
             return
         if state == self.close_state:
             await self._close_issue(number)
-        else:
-            await self._reopen_issue(number)
-
-    async def _reopen_issue(self, numeric_id: int) -> None:
+            return
         if self.reopen_update is None:
             raise NotImplementedError
-        await self._call(self.client.update_issue, numeric_id, dict(self.reopen_update))
+        await self._call(self.client.update_issue, number, dict(self.reopen_update))
 
     async def _transition_metadata(
         self,
@@ -323,5 +317,5 @@ class MarkerIssueBacklog(IssueBacklogBase):
                 state.update(task_engine_state(candidate))
                 fields.update({self.body_key: embed_engine_state(candidate.description, state)})
             if fields:
-                await self._apply_update(number, fields)
+                await self._call(self.client.update_issue, number, fields)
             return await self.get_task(task_id)

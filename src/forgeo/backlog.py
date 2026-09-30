@@ -749,6 +749,31 @@ class IssueBacklogBase(BacklogStore):
                 return None
         return issue, task
 
+    async def _locked_issue_candidate(
+        self, task_id: str, updates: dict[str, Any]
+    ) -> tuple[dict[str, Any], Task] | None:
+        """Fetch an issue plus its update-validated candidate task.
+
+        Type-checks and validates ``updates``, then builds the candidate by
+        applying them to the current task; call with the lock held. Returns
+        ``None`` when the issue is missing or not runnable, collapsing the
+        preamble repeated in the marker (GitHub/GitLab) and Jira
+        ``update_task`` implementations.
+        """
+        if not isinstance(updates, dict):
+            raise TypeError("updates must be a dict of task fields")
+        validate_task_updates(updates)
+        fetched = await self._locked_issue_task(task_id)
+        if fetched is None:
+            return None
+        issue, current = fetched
+        candidate = current.model_copy(update=updates)
+        try:
+            candidate = Task.model_validate(candidate.model_dump(mode="python"))
+        except ValidationError as exc:
+            raise ValueError(f"invalid task field(s): {exc}") from exc
+        return issue, candidate
+
     def _queue_state_comment(self, key: Any, state: str, reason: list[str]) -> None:
         """Queue a bounded ``[forgeo] STATE`` comment for later flushing."""
         self._pending_comments.append((key, format_state_comment(state, reason)))

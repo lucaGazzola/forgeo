@@ -23,12 +23,9 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from pydantic import ValidationError
-
 from forgeo.backlog import (
     IssueBacklogBase,
     IssueRequestError,
-    validate_task_updates,
 )
 from forgeo.backlog_issue_base import (
     RestTransportBase,
@@ -762,19 +759,11 @@ class JiraBacklog(IssueBacklogBase):
             fields["duedate"] = task.run_at.date().isoformat()
 
     async def update_task(self, task_id: str, updates: dict[str, Any]) -> Task | None:
-        if not isinstance(updates, dict):
-            raise TypeError("updates must be a dict of task fields")
-        validate_task_updates(updates)
         async with self._lock:
-            fetched = await self._locked_issue_task(task_id)
+            fetched = await self._locked_issue_candidate(task_id, updates)
             if fetched is None:
                 return None
-            _issue, current = fetched
-            candidate = current.model_copy(update=updates)
-            try:
-                candidate = Task.model_validate(candidate.model_dump(mode="python"))
-            except ValidationError as exc:
-                raise ValueError(f"invalid task field(s): {exc}") from exc
+            _issue, candidate = fetched
             # need to persist review fields even when not mapped to Jira field
             if "review_required" in updates:
                 metadata = await self._metadata(task_id)

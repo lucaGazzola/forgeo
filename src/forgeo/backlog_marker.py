@@ -11,9 +11,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import ValidationError
-
-from forgeo.backlog import IssueBacklogBase, validate_task_updates
+from forgeo.backlog import IssueBacklogBase
 from forgeo.backlog_issue_base import (
     ENGINE_STATE_FIELDS,
     build_task,
@@ -338,19 +336,11 @@ class MarkerIssueBacklog(IssueBacklogBase):
             return result
 
     async def update_task(self, task_id: str, updates: dict[str, Any]) -> Task | None:
-        if not isinstance(updates, dict):
-            raise TypeError("updates must be a dict of task fields")
-        validate_task_updates(updates)
         async with self._lock:
-            fetched = await self._locked_issue_task(task_id)
+            fetched = await self._locked_issue_candidate(task_id, updates)
             if fetched is None:
                 return None
-            issue, current = fetched
-            candidate = current.model_copy(update=updates)
-            try:
-                candidate = Task.model_validate(candidate.model_dump(mode="python"))
-            except ValidationError as exc:
-                raise ValueError(f"invalid task field(s): {exc}") from exc
+            issue, candidate = fetched
             number = extract_issue_number(issue)
             assert number is not None
             fields: dict[str, Any] = {}

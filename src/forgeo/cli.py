@@ -2837,17 +2837,6 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
     return resolved
 
 
-def _normalize_auth_provider(provider: str) -> str:
-    """Map ``provider`` to a known key, falling back to ``github``.
-
-    The login/status/logout commands historically treated any unknown
-    provider as GitHub; preserve that instead of erroring.
-    """
-    if provider in _OAUTH_PARAM_DEFAULTS:
-        return provider
-    return "github"
-
-
 class _AuthProviderSpec(NamedTuple):
     """All per-provider OAuth components for the ``auth`` commands.
 
@@ -2871,8 +2860,9 @@ class _AuthProviderSpec(NamedTuple):
 def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
     """Resolve every per-provider OAuth component for ``provider`` at once.
 
-    Unknown providers fall back to GitHub, matching
-    :func:`_normalize_auth_provider`. Imports stay function-local (resolved
+    Unknown providers fall back to GitHub: the login/status/logout
+    commands historically treated any unknown provider as GitHub, so
+    preserve that instead of erroring. Imports stay function-local (resolved
     on each call) so tests can monkeypatch e.g.
     ``forgeo.oauth_github.run_browser_flow`` and ``auth`` never imports
     provider modules it does not use. Attribute names follow the
@@ -2881,7 +2871,7 @@ def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
     by the three provider modules; Jira has no device flow, so
     ``device_flow`` resolves to ``None`` there.
     """
-    key = _normalize_auth_provider(provider)
+    key = provider if provider in _OAUTH_PARAM_DEFAULTS else "github"
     _provider_module: Any
     if key == "gitlab":
         from forgeo import oauth_gitlab as _gitlab_module
@@ -3034,9 +3024,9 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
 
 def cmd_auth_status(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth status``: show token presence/expiry."""
-    provider = getattr(args, "provider", "github")
-    key = _normalize_auth_provider(provider)
-    label = _auth_provider_spec(key).label
+    spec = _auth_provider_spec(getattr(args, "provider", "github"))
+    key = spec.key
+    label = spec.label
     store = _resolve_auth_store(key, args)
     data = store.load()
     if data is None:
@@ -3065,8 +3055,7 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
 
 def cmd_auth_logout(args: argparse.Namespace) -> int:
     """Handle ``forgeo auth logout``: delete stored token."""
-    provider = getattr(args, "provider", "github")
-    key = _normalize_auth_provider(provider)
+    key = _auth_provider_spec(getattr(args, "provider", "github")).key
     store = _resolve_auth_store(key, args)
     if store.clear():
         console.print(f"[green]Removed token at {store.path}.[/green]")

@@ -356,6 +356,40 @@ def _add_auth_store_args(
     parser.add_argument("--api-base", default=None, help=api_base_help)
 
 
+def _add_config_only_parser(sub: Any, name: str, *, help: str) -> Any:
+    """Add a subcommand taking only ``--config``/``--name`` (no extra args)."""
+    parser = sub.add_parser(name, help=help)
+    _add_config_or_name(parser)
+    return parser
+
+
+def _add_task_id_only_parser(
+    sub: Any, name: str, *, help: str, flag_help: str, positional_help: str
+) -> Any:
+    """Add a task subcommand taking only ``--config``/``--name`` + task id."""
+    parser = sub.add_parser(name, help=help)
+    _add_config_or_name(parser)
+    _add_task_id_args(parser, flag_help, positional_help)
+    return parser
+
+
+def _add_timeout_parser(sub: Any, name: str, *, help: str, timeout_help: str) -> None:
+    """Add a daemon-lifecycle subcommand (``stop``/``restart``) with ``--timeout``."""
+    parser = sub.add_parser(name, help=help)
+    _add_config_or_name(parser)
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=STOP_TIMEOUT_SECONDS,
+        help=timeout_help,
+    )
+
+
+def _add_run_flag(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add the shared ``--run`` store-true flag (``reopen``/``run`` immediate run)."""
+    parser.add_argument("--run", action="store_true", help=help)
+
+
 def _add_init_parser(sub: Any) -> None:
     init_parser = sub.add_parser(
         "init", help="Guided first-time setup: interactively write a forgeo.yaml."
@@ -391,24 +425,16 @@ def _add_start_parser(sub: Any) -> None:
     )
 
 
-def _add_once_parser(sub: Any) -> None:
-    once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
-    _add_config_or_name(once_parser)
-
-
 def _add_run_parser(sub: Any) -> None:
-    run_parser = sub.add_parser(
+    run_parser = _add_task_id_only_parser(
+        sub,
         "run",
         help="Run exactly one specific OPEN task by id and exit.",
-    )
-    _add_config_or_name(run_parser)
-    _add_task_id_args(
-        run_parser,
-        "Id of the OPEN task to run now (triage: rerun a FAILED task "
+        flag_help="Id of the OPEN task to run now (triage: rerun a FAILED task "
         "after reopening it, or try a risky task immediately). "
         "May be passed positionally instead. Short ids work: 3, TASK-3 "
         "or #3 for TASK-003.",
-        "Task id, positional shorthand for --task (3, TASK-3 or #3 work).",
+        positional_help="Task id, positional shorthand for --task (3, TASK-3 or #3 work).",
     )
     run_parser.add_argument(
         "--reopen",
@@ -479,29 +505,6 @@ def _add_task_list_parser(task_sub: Any) -> None:
     )
 
 
-def _add_task_next_parser(task_sub: Any) -> None:
-    task_next_parser = task_sub.add_parser(
-        "next", help="Show which task would run next and why (never starts an agent)."
-    )
-    _add_config_or_name(task_next_parser)
-
-
-def _add_task_show_parser(task_sub: Any) -> None:
-    task_show_parser = task_sub.add_parser(
-        "show",
-        help="Show one task's full detail (defaults to the next task "
-        "when no id is given; never starts an agent).",
-    )
-    _add_config_or_name(task_show_parser)
-    _add_task_id_args(
-        task_show_parser,
-        "Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work; "
-        "omit both to show the next task the scheduler would pick).",
-        "Task id, positional shorthand for --task (3, TASK-3, #3 work; "
-        "omit both to show the next task the scheduler would pick).",
-    )
-
-
 def _add_task_edit_parser(task_sub: Any) -> None:
     task_edit_parser = task_sub.add_parser(
         "edit", help="Update a task's fields in place (never starts an agent)."
@@ -538,80 +541,59 @@ def _add_task_edit_parser(task_sub: Any) -> None:
         "one retried — first, so fix-and-retry needs no second command; "
         "not with --run-at).",
     )
-    _add_clear_flag(
-        task_edit_parser, "acceptance", help="Clear all acceptance criteria."
+    _CLEAR_FLAGS: tuple[tuple[str, str], ...] = (
+        ("acceptance", "Clear all acceptance criteria."),
+        ("depends-on", "Clear all dependencies."),
+        ("run-at", "Clear the scheduled run time (back to oldest-first order)."),
+        ("files", "Clear the files-to-modify list."),
     )
-    _add_clear_flag(
-        task_edit_parser, "depends-on", help="Clear all dependencies."
-    )
-    _add_clear_flag(
-        task_edit_parser,
-        "run-at",
-        help="Clear the scheduled run time (back to oldest-first order).",
-    )
-    _add_clear_flag(
-        task_edit_parser, "files", help="Clear the files-to-modify list."
-    )
+    for _flag_name, _flag_help in _CLEAR_FLAGS:
+        _add_clear_flag(task_edit_parser, _flag_name, help=_flag_help)
 
 
 def _add_task_reopen_parser(task_sub: Any) -> None:
-    task_reopen_parser = task_sub.add_parser(
-        "reopen", help="Move a BLOCKED or FAILED task back to OPEN."
+    task_reopen_parser = _add_task_id_only_parser(
+        task_sub,
+        "reopen",
+        help="Move a BLOCKED or FAILED task back to OPEN.",
+        flag_help="Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work; "
+        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
+        positional_help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
     )
-    _add_config_or_name(task_reopen_parser)
-    _add_task_id_args(
+    _add_run_flag(
         task_reopen_parser,
-        "Id of the BLOCKED or FAILED task to reopen (or pass it positionally; 3, TASK-3, #3 work; "
-        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
-        "Task id, positional shorthand for --task (3, TASK-3, #3 work; "
-        "omit both to reopen the oldest BLOCKED task, else the oldest FAILED one).",
-    )
-    task_reopen_parser.add_argument(
-        "--run",
-        action="store_true",
         help="Reopen the task and run it immediately in one step (same "
         "lock as `forgeo run`; refuses while a daemon holds it).",
     )
 
 
-def _add_task_rm_parser(task_sub: Any) -> None:
-    task_rm_parser = task_sub.add_parser(
-        "rm", help="Delete a task from the backlog (never starts an agent)."
-    )
-    _add_config_or_name(task_rm_parser)
-    _add_task_id_args(
-        task_rm_parser,
-        "Id of the task to delete (typos, duplicates, or tasks that "
-        "will never be done). Or pass it positionally (3, TASK-3, #3 work).",
-        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
-    )
+_REVIEW_PARSERS: tuple[tuple[str, str, str], ...] = (
+    (
+        "complete-review",
+        "Mark a REVIEW task COMPLETED after merging its branch "
+        "(never starts an agent).",
+        "Id of the REVIEW task to mark COMPLETED (merge its "
+        "review branch first). Or pass it positionally (3, TASK-3, #3 work).",
+    ),
+    (
+        "request-changes",
+        "Send a REVIEW task back to OPEN for rework "
+        "(never starts an agent).",
+        "Id of the REVIEW task to send back to OPEN. Or pass it positionally (3, TASK-3, #3 work).",
+    ),
+)
 
 
 def _add_task_review_parsers(task_sub: Any) -> None:
-    task_complete_review_parser = task_sub.add_parser(
-        "complete-review",
-        help="Mark a REVIEW task COMPLETED after merging its branch "
-        "(never starts an agent).",
-    )
-    _add_config_or_name(task_complete_review_parser)
-    _add_task_id_args(
-        task_complete_review_parser,
-        "Id of the REVIEW task to mark COMPLETED (merge its "
-        "review branch first). Or pass it positionally (3, TASK-3, #3 work).",
-        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
-    )
-
-    task_request_changes_parser = task_sub.add_parser(
-        "request-changes",
-        help="Send a REVIEW task back to OPEN for rework "
-        "(never starts an agent).",
-    )
-    _add_config_or_name(task_request_changes_parser)
-    _add_task_id_args(
-        task_request_changes_parser,
-        "Id of the REVIEW task to send back to OPEN. Or pass it positionally (3, TASK-3, #3 work).",
-        "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
-    )
+    for _name, _help, _flag_help in _REVIEW_PARSERS:
+        _add_task_id_only_parser(
+            task_sub,
+            _name,
+            help=_help,
+            flag_help=_flag_help,
+            positional_help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
+        )
 
 
 def _add_task_parser(sub: Any) -> None:
@@ -623,20 +605,30 @@ def _add_task_parser(sub: Any) -> None:
     task_sub = task_parser.add_subparsers(dest="task_action")
     _add_task_add_parser(task_sub)
     _add_task_list_parser(task_sub)
-    _add_task_next_parser(task_sub)
-    _add_task_show_parser(task_sub)
+    _add_config_only_parser(
+        task_sub, "next", help="Show which task would run next and why (never starts an agent)."
+    )
+    _add_task_id_only_parser(
+        task_sub,
+        "show",
+        help="Show one task's full detail (defaults to the next task "
+        "when no id is given; never starts an agent).",
+        flag_help="Id of the task to show in full (or pass it positionally; 3, TASK-3, #3 work; "
+        "omit both to show the next task the scheduler would pick).",
+        positional_help="Task id, positional shorthand for --task (3, TASK-3, #3 work; "
+        "omit both to show the next task the scheduler would pick).",
+    )
     _add_task_edit_parser(task_sub)
     _add_task_reopen_parser(task_sub)
-    _add_task_rm_parser(task_sub)
-    _add_task_review_parsers(task_sub)
-
-
-def _add_status_parser(sub: Any) -> None:
-    status_parser = sub.add_parser(
-        "status",
-        help="Print a read-only summary of Forgeo (never starts an agent).",
+    _add_task_id_only_parser(
+        task_sub,
+        "rm",
+        help="Delete a task from the backlog (never starts an agent).",
+        flag_help="Id of the task to delete (typos, duplicates, or tasks that "
+        "will never be done). Or pass it positionally (3, TASK-3, #3 work).",
+        positional_help="Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
-    _add_config_or_name(status_parser)
+    _add_task_review_parsers(task_sub)
 
 
 def _add_logs_parser(sub: Any) -> None:
@@ -661,50 +653,11 @@ def _add_logs_parser(sub: Any) -> None:
     )
 
 
-def _add_validate_parser(sub: Any) -> None:
-    validate_parser = sub.add_parser(
-        "validate",
-        help="Read-only dry run: check config, repo, branch, remote, backlog, "
-        "agent command and lock state without starting anything.",
-    )
-    _add_config_or_name(validate_parser)
-
-
 def _add_check_parser(sub: Any) -> None:
     sub.add_parser(
         "check",
         help="Run the contributor quality gates (pytest, ruff check, "
         "mypy src/forgeo) and print a PASS/FAIL summary.",
-    )
-
-
-def _add_stop_parser(sub: Any) -> None:
-    stop_parser = sub.add_parser(
-        "stop",
-        help="Stop a running forgeo daemon gracefully (SIGTERM).",
-    )
-    _add_config_or_name(stop_parser)
-    stop_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=STOP_TIMEOUT_SECONDS,
-        help="Seconds to wait for the daemon to exit (default: 600); a cycle "
-        "in progress always finishes first.",
-    )
-
-
-def _add_restart_parser(sub: Any) -> None:
-    restart_parser = sub.add_parser(
-        "restart",
-        help="Restart Forgeo daemon in the background, re-reading the config.",
-    )
-    _add_config_or_name(restart_parser)
-    restart_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=STOP_TIMEOUT_SECONDS,
-        help="Seconds to wait for the old daemon to exit (default: 600); a "
-        "cycle in progress always finishes first.",
     )
 
 
@@ -869,15 +822,34 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="action")
     _add_init_parser(sub)
     _add_start_parser(sub)
-    _add_once_parser(sub)
+    _add_config_only_parser(sub, "once", help="Run exactly one forgeo cycle and exit.")
     _add_run_parser(sub)
     _add_task_parser(sub)
-    _add_status_parser(sub)
+    _add_config_only_parser(
+        sub, "status", help="Print a read-only summary of Forgeo (never starts an agent)."
+    )
     _add_logs_parser(sub)
-    _add_validate_parser(sub)
+    _add_config_only_parser(
+        sub,
+        "validate",
+        help="Read-only dry run: check config, repo, branch, remote, backlog, "
+        "agent command and lock state without starting anything.",
+    )
     _add_check_parser(sub)
-    _add_stop_parser(sub)
-    _add_restart_parser(sub)
+    _add_timeout_parser(
+        sub,
+        "stop",
+        help="Stop a running forgeo daemon gracefully (SIGTERM).",
+        timeout_help="Seconds to wait for the daemon to exit (default: 600); a cycle "
+        "in progress always finishes first.",
+    )
+    _add_timeout_parser(
+        sub,
+        "restart",
+        help="Restart Forgeo daemon in the background, re-reading the config.",
+        timeout_help="Seconds to wait for the old daemon to exit (default: 600); a "
+        "cycle in progress always finishes first.",
+    )
     _add_instance_parsers(sub)
     _add_web_parsers(sub)
     _add_auth_parsers(sub)
@@ -1625,7 +1597,7 @@ def cmd_task_add(args: argparse.Namespace) -> int:
             f"or wait for the next cycle.[/dim]"
         )
         return 0
-    return _run_created_task_now(config, created.id)
+    return _run_task_now(config, created.id)
 
 
 def _run_task_now(config: ForgeoConfig, task_id: str, *, reopen: bool = False) -> int:
@@ -1661,11 +1633,6 @@ def _run_task_now(config: ForgeoConfig, task_id: str, *, reopen: bool = False) -
         return 0
 
     return _run_worker_with_lock(lock, _execute)
-
-
-def _run_created_task_now(config: ForgeoConfig, task_id: str) -> int:
-    """Run a just-created task immediately (``task add --run``)."""
-    return _run_task_now(config, task_id)
 
 
 def cmd_task_list(args: argparse.Namespace) -> int:

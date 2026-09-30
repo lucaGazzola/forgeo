@@ -129,21 +129,6 @@ _ISSUE_PROVIDER_LABELS: dict[str, str] = {
 }
 
 
-def _github_repo_root(config: ForgeoConfig, base: str) -> str | None:
-    """The ``<web_base>/<repo>`` root for a GitHub config, or ``None``."""
-    if config.github is None:
-        return None
-    return f"{github_web_base(base)}/{config.github.repo.strip('/')}"
-
-
-def _gitlab_issues_root(base: str, repo: str) -> str:
-    """The issues root for a GitLab repo (numeric iid vs path)."""
-    stripped = repo.strip("/")
-    if stripped.isdigit():
-        return f"{base}/-/issues"
-    return f"{base}/{stripped}/-/issues"
-
-
 def _issue_provider_base(config: ForgeoConfig | None) -> tuple[str, str] | None:
     """Issue provider and base URL, or ``None`` for document providers."""
     if config is None or not isinstance(config.backlog, str):
@@ -152,6 +137,22 @@ def _issue_provider_base(config: ForgeoConfig | None) -> tuple[str, str] | None:
     if provider not in ISSUE_PROVIDERS:
         return None
     return provider, config.backlog.rstrip("/")
+
+
+def _provider_issues_root(config: ForgeoConfig, provider: str, base: str) -> str | None:
+    """The ``.../issues`` URL for a GitHub/GitLab config, or ``None``."""
+    if provider == "github":
+        if config.github is None:
+            return None
+        # GitHub API expects owner/repo as two separate path segments.
+        root = f"{github_web_base(base)}/{config.github.repo.strip('/')}"
+        return f"{root}/issues"
+    if provider == "gitlab" and config.gitlab is not None:
+        repo = config.gitlab.repo.strip("/")
+        if repo.isdigit():
+            return f"{base}/-/issues"
+        return f"{base}/{repo}/-/issues"
+    return None
 
 
 def _external_board_url(config: ForgeoConfig | None) -> str | None:
@@ -164,14 +165,7 @@ def _external_board_url(config: ForgeoConfig | None) -> str | None:
         if config.jira is None:
             return base
         return f"{base}/issues/?jql={quote(config.jira.jql, safe='')}"
-    if provider == "github":
-        root = _github_repo_root(config, base)
-        if root is None:
-            return None
-        return f"{root}/issues"
-    if provider == "gitlab" and config.gitlab is not None:
-        return _gitlab_issues_root(base, config.gitlab.repo)
-    return None
+    return _provider_issues_root(config, provider, base)
 
 
 def _external_issue_url(config: ForgeoConfig | None, task_id: str) -> str | None:
@@ -184,16 +178,13 @@ def _external_issue_url(config: ForgeoConfig | None, task_id: str) -> str | None
     provider, base = pb
     if provider == "jira":
         return f"{base}/browse/{quote(task_id, safe='')}"
+    root = _provider_issues_root(config, provider, base)
+    if root is None:
+        return None
     if provider == "github":
-        root = _github_repo_root(config, base)
-        if root is None:
-            return None
         # GitHub ids are numeric; a stale WEB-### prefix is stripped for the URL.
-        issue_num = task_id.split("-")[-1] if "-" in task_id and task_id.rsplit("-", 1)[-1].isdigit() else task_id
-        return f"{root}/issues/{issue_num}"
-    if provider == "gitlab" and config.gitlab is not None:
-        return f"{_gitlab_issues_root(base, config.gitlab.repo)}/{task_id}"
-    return None
+        task_id = task_id.split("-")[-1] if "-" in task_id and task_id.rsplit("-", 1)[-1].isdigit() else task_id
+    return f"{root}/{task_id}"
 
 _WEB_TASK_ID_RE = re.compile(r"^WEB-(\d+)$")
 

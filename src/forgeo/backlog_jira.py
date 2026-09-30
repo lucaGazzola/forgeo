@@ -22,7 +22,7 @@ import os
 import urllib.request
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from pydantic import ValidationError
 
@@ -39,6 +39,7 @@ from forgeo.backlog_issue_base import (
     as_optional_float,
     as_optional_int,
     as_string_list,
+    build_api_url,
     claim_cutoff,
     encode_json_body,
     execute_rest_with_oauth_retry,
@@ -48,6 +49,7 @@ from forgeo.backlog_issue_base import (
     parse_optional_datetime,
     plain_text_to_adf,
     require_env_token,
+    resolve_cached_oauth_provider,
     transition_label_update,
 )
 from forgeo.models import (
@@ -84,54 +86,48 @@ class JiraClient:
         self._oauth_provider: Any | None = None
 
     def _oauth_token_provider(self) -> Any | None:
-        if self._oauth_provider is not None:
-            return self._oauth_provider
+        from forgeo.oauth_jira import JiraOAuthTokenProvider, JiraTokenStore
+
         auth = self.config.auth
         if auth.oauth is None:
             return None
-        from forgeo.oauth_jira import JiraOAuthTokenProvider, JiraTokenStore
-
-        token_file = auth.oauth.token_file
-        store = JiraTokenStore(path=token_file, api_base=self.base_url) if token_file is not None else JiraTokenStore(api_base=self.base_url)
-        provider = JiraOAuthTokenProvider(
-            store, client_id=auth.oauth.client_id, client_secret_env=auth.oauth.client_secret_env
+        return resolve_cached_oauth_provider(
+            self,
+            JiraTokenStore,
+            JiraOAuthTokenProvider,
+            client_id=auth.oauth.client_id,
+            client_secret_env=auth.oauth.client_secret_env,
         )
-        self._oauth_provider = provider
-        return provider
+
+    def _cached_cloud_id(self) -> str | None:
+        """Cloud id from the cached OAuth token file (best-effort)."""
+        from forgeo.oauth_jira import JiraTokenStore
+
+        auth = self.config.auth
+        if auth.oauth is None:
+            return None
+        if self._oauth_provider is not None:
+            store = self._oauth_provider.store
+        elif auth.oauth.token_file is not None:
+            store = JiraTokenStore(path=auth.oauth.token_file, api_base=self.base_url)
+        else:
+            store = JiraTokenStore(api_base=self.base_url)
+        try:
+            data = store.load()
+        except Exception:
+            return None
+        cloud_id = data.get("cloud_id") if isinstance(data, dict) else None
+        return cloud_id if isinstance(cloud_id, str) else None
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
         # When OAuth is used with cloud_id, Jira Cloud API lives at api.atlassian.com/ex/jira/{cloudId}
         base = self.base_url
         auth = self.config.auth
         if auth.oauth is not None:
-            # Prefer cloud_id from config oauth, else from token file
-            cloud_id: str | None = auth.oauth.cloud_id
-            if cloud_id is None and self._oauth_provider is not None:
-                try:
-                    data = self._oauth_provider.store.load()
-                    if isinstance(data, dict) and isinstance(data.get("cloud_id"), str):
-                        cloud_id = data["cloud_id"]
-                except Exception:
-                    pass
-            elif cloud_id is None:
-                # Try to load directly via store without provider cache
-                try:
-                    from forgeo.oauth_jira import JiraTokenStore
-
-                    tmp_store = JiraTokenStore(
-                        path=auth.oauth.token_file, api_base=self.base_url
-                    ) if auth.oauth.token_file is not None else JiraTokenStore(api_base=self.base_url)
-                    data = tmp_store.load()
-                    if isinstance(data, dict) and isinstance(data.get("cloud_id"), str):
-                        cloud_id = data["cloud_id"]
-                except Exception:
-                    pass
+            cloud_id = auth.oauth.cloud_id or self._cached_cloud_id()
             if cloud_id:
                 base = f"https://api.atlassian.com/ex/jira/{cloud_id}"
-        url = f"{base}/rest/api/{self.api_version}{path}"
-        if query:
-            url += "?" + urlencode(query, doseq=True)
-        return url
+        return build_api_url(base, path, query, api_prefix=f"/rest/api/{self.api_version}")
 
     def _auth_header(self) -> str:
         auth = self.config.auth
@@ -206,12 +202,13 @@ class JiraClient:
         next_page_token: str | None = None,
     ) -> dict[str, Any]:
         """Search a page of issues using Jira's JQL endpoint."""
+        unique_fields = list(dict.fromkeys(fields))
         if self.api_version >= 3:
             path = "/search/jql"
             query: dict[str, Any] = {
                 "jql": jql,
                 "maxResults": max_results,
-                "fields": list(dict.fromkeys(fields)),
+                "fields": unique_fields,
             }
             if next_page_token is not None:
                 query["nextPageToken"] = next_page_token
@@ -221,13 +218,9 @@ class JiraClient:
                 "jql": jql,
                 "startAt": start_at,
                 "maxResults": max_results,
-                "fields": list(dict.fromkeys(fields)),
+                "fields": unique_fields,
             }
-        return self._request(
-            "GET",
-            path,
-            query=query,
-        )
+        return self._request("GET", path, query=query)
 
     def get_issue(self, issue_key: str, *, fields: list[str]) -> dict[str, Any]:
         """Fetch one issue by key."""
@@ -262,11 +255,9 @@ class JiraClient:
         update: dict[str, Any] | None = None,
     ) -> None:
         """Update native or custom issue fields."""
-        payload: dict[str, Any] = {}
-        if fields:
-            payload["fields"] = fields
-        if update:
-            payload["update"] = update
+        payload: dict[str, Any] = {
+            key: value for key, value in (("fields", fields), ("update", update)) if value
+        }
         self._request(
             "PUT",
             f"/issue/{quote(issue_key, safe='')}",
@@ -718,13 +709,13 @@ class JiraBacklog(IssueBacklogBase):
             metadata, status, reason, previous=previous if isinstance(previous, str) else None
         )
         add, remove = transition_label_update(status, self._labels)
-        if status is TaskStatus.COMPLETED:
-            await self._transition_to(issue, self.config.workflow.completed_status)
-            await self._update_labels(key, add=add, remove=remove)
-            await self._save_metadata(key, metadata)
-            return await self.get_task(key)
-        if status is TaskStatus.OPEN:
-            await self._transition_to(issue, self.config.workflow.open_status)
+        if status in (TaskStatus.COMPLETED, TaskStatus.OPEN):
+            destination = (
+                self.config.workflow.completed_status
+                if status is TaskStatus.COMPLETED
+                else self.config.workflow.open_status
+            )
+            await self._transition_to(issue, destination)
             await self._update_labels(key, add=add, remove=remove)
             await self._save_metadata(key, metadata)
             return await self.get_task(key)

@@ -508,8 +508,14 @@ def invalidate_oauth_provider(provider: Any) -> None:
         provider.invalidate()
 
 
-def resolve_cached_oauth_provider(client: Any, store_cls: Any, provider_cls: Any) -> Any | None:
-    """Lazy ``store``/``provider`` pair shared by the GitHub/GitLab clients."""
+def resolve_cached_oauth_provider(
+    client: Any, store_cls: Any, provider_cls: Any, **provider_kwargs: Any
+) -> Any | None:
+    """Lazy ``store``/``provider`` pair shared by the issue clients.
+
+    ``provider_kwargs`` go to ``provider_cls(store, ...)`` (Jira needs
+    ``client_id``/``client_secret_env``).
+    """
     if client._oauth_provider is not None:
         return client._oauth_provider
     auth = client.config.auth
@@ -521,7 +527,7 @@ def resolve_cached_oauth_provider(client: Any, store_cls: Any, provider_cls: Any
         if token_file is not None
         else store_cls(api_base=client.base_url)
     )
-    provider = provider_cls(store)
+    provider = provider_cls(store, **provider_kwargs)
     client._oauth_provider = provider
     return provider
 

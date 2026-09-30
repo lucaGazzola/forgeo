@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
-    DEFAULT_TOKEN_DIR,
     CachedFileTokenProvider,
     FileTokenStore,
     begin_browser_login,
@@ -30,7 +29,6 @@ class JiraOAuthError(RuntimeError):
     """A Jira OAuth step failed; message is user-facing."""
 
 
-DEFAULT_JIRA_TOKEN_DIR = DEFAULT_TOKEN_DIR
 ATLASSIAN_AUTH_BASE = "https://auth.atlassian.com"
 ATLASSIAN_API_BASE = "https://api.atlassian.com"
 
@@ -200,7 +198,6 @@ def run_browser_flow(
 __all__ = [
     "ATLASSIAN_API_BASE",
     "ATLASSIAN_AUTH_BASE",
-    "DEFAULT_JIRA_TOKEN_DIR",
     "EXPIRY_MARGIN_SECONDS",
     "JiraOAuthError",
     "JiraOAuthTokenProvider",

@@ -5,10 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from forgeo.oauth_common import (
-    DEFAULT_DEVICE_POLL_INTERVAL,
-    DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS,
-    DEFAULT_TOKEN_DIR,
-    EXPIRY_MARGIN_SECONDS,
     host_token_path,
     make_browser_flow,
     make_callback_handler,
@@ -24,9 +20,6 @@ from forgeo.oauth_common import (
 
 class GitlabOAuthError(RuntimeError):
     """A browser/device login step failed; message is user-facing."""
-
-
-DEFAULT_GITLAB_TOKEN_DIR = DEFAULT_TOKEN_DIR
 
 
 def gitlab_default_token_path(api_base: str | None = None) -> Path:
@@ -87,10 +80,6 @@ run_browser_flow = make_browser_flow(
 
 
 __all__ = [
-    "DEFAULT_DEVICE_POLL_INTERVAL",
-    "DEFAULT_DEVICE_POLL_TIMEOUT_SECONDS",
-    "DEFAULT_GITLAB_TOKEN_DIR",
-    "EXPIRY_MARGIN_SECONDS",
     "GitlabOAuthError",
     "GitlabOAuthTokenProvider",
     "GitlabTokenStore",

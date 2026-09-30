@@ -844,28 +844,23 @@ class Forgeo:
     def _render_blocked_task(self, task: Task) -> str:
         """Render the explanation and required human action for one blocked task."""
         reason = self._render_reason_sections(task, task.instruction, task.blocker_reason)
+        # A backlog file can be edited in place; a remote backlog belongs to
+        # another application, so point at it instead of a local file.
+        if self.config.backlog_is_remote:
+            reopen = f", or wherever the backlog at `{self.config.backlog}` is edited."
+        else:
+            reopen = (
+                f", or set the status of `{task.id}` back to `OPEN` directly in "
+                f"`{self.config.backlog}`."
+            )
         return self._render_block(
             reason,
             [
                 "1. Decide what the agent needs (edit the repository directly if required).",
                 "2. Reopen the task from the web console so Forgeo retries it on the next",
-                f"   scheduled run{self._reopen_by_hand(task)}",
+                f"   scheduled run{reopen}",
                 "3. Or delete the task from the web console if it should not be done.",
             ],
-        )
-
-    def _reopen_by_hand(self, task: Task) -> str:
-        """How to reopen a blocked task without the web console.
-
-        Only a backlog file can be edited in place; a backlog served over HTTP
-        belongs to another application, so the human is pointed at it instead
-        of at a file that does not exist on this machine.
-        """
-        if self.config.backlog_is_remote:
-            return f", or wherever the backlog at `{self.config.backlog}` is edited."
-        return (
-            f", or set the status of `{task.id}` back to `OPEN` directly in "
-            f"`{self.config.backlog}`."
         )
 
     def _blocker_header(self, *, include_marker: bool) -> list[str]:

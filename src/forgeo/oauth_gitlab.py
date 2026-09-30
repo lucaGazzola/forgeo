@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -14,9 +13,8 @@ from forgeo.oauth_common import (
     CallbackHandler,
     FileTokenStore,
     announce_device_code,
-    bind_loopback,
+    begin_browser_login,
     open_authorize_url,
-    pkce_pair,
     poll_device_grant,
     post_form,
     wait_for_callback,
@@ -145,10 +143,6 @@ def run_device_flow(
     return poll_device_token(client_id, device_code, oauth_base, interval=interval, timeout=timeout)
 
 
-def _pkce_pair() -> tuple[str, str]:
-    return pkce_pair()
-
-
 class _CallbackHandler(CallbackHandler):
     provider_label = "GitLab"
 
@@ -163,13 +157,9 @@ def run_browser_flow(
     callback_port: int | None = None,
     timeout: float = 300.0,
 ) -> dict[str, Any]:
-    verifier, challenge = _pkce_pair()
-    state = secrets.token_urlsafe(16)
-    server = bind_loopback(_CallbackHandler, callback_port, GitlabOAuthError)
-    addr = server.server_address
-    host: str = str(addr[0])
-    port: int = int(addr[1])
-    redirect_uri = f"http://{host}:{port}/callback"
+    verifier, challenge, state, server, redirect_uri = begin_browser_login(
+        _CallbackHandler, GitlabOAuthError, callback_port
+    )
     params: dict[str, str] = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,

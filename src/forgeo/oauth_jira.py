@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 import threading
 import time
 import urllib.request
@@ -16,9 +15,8 @@ from urllib.parse import urlencode, urlparse
 from forgeo.oauth_common import (
     CallbackHandler,
     FileTokenStore,
-    bind_loopback,
+    begin_browser_login,
     open_authorize_url,
-    pkce_pair,
     post_form,
     wait_for_callback,
 )
@@ -191,10 +189,6 @@ def _fetch_accessible_resources(access_token: str) -> list[dict[str, Any]]:
         return []
 
 
-def _pkce_pair() -> tuple[str, str]:
-    return pkce_pair()
-
-
 class _CallbackHandler(CallbackHandler):
     provider_label = "Jira"
 
@@ -212,13 +206,9 @@ def run_browser_flow(
 ) -> dict[str, Any]:
     """Run Atlassian OAuth 3LO browser flow and return token data including cloud_id."""
     del oauth_base  # Atlassian base is fixed
-    verifier, challenge = _pkce_pair()
-    state = secrets.token_urlsafe(16)
-    server = bind_loopback(_CallbackHandler, callback_port, JiraOAuthError)
-    addr = server.server_address
-    host: str = str(addr[0])
-    port: int = int(addr[1])
-    redirect_uri = f"http://{host}:{port}/callback"
+    verifier, challenge, state, server, redirect_uri = begin_browser_login(
+        _CallbackHandler, JiraOAuthError, callback_port
+    )
     # Atlassian scopes: offline_access required for refresh, plus Jira scopes
     # Default scope for Forgeo: read:jira-user read:jira-work offline_access
     eff_scope = scope or "offline_access read:jira-user read:jira-work"

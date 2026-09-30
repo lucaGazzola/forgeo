@@ -122,6 +122,22 @@ def bind_loopback(handler_cls: type[CallbackHandler], callback_port: int | None,
         raise error_cls(f"Could not bind OAuth callback port: {exc}") from exc
 
 
+def begin_browser_login(
+    handler_cls: type[CallbackHandler],
+    error_cls: type[Exception],
+    callback_port: int | None,
+) -> tuple[str, str, str, HTTPServer, str]:
+    """Start a PKCE browser login: PKCE pair, state, loopback server, redirect URI."""
+    verifier, challenge = pkce_pair()
+    state = secrets.token_urlsafe(16)
+    server = bind_loopback(handler_cls, callback_port, error_cls)
+    addr = server.server_address
+    host: str = str(addr[0])
+    port: int = int(addr[1])
+    redirect_uri = f"http://{host}:{port}/callback"
+    return verifier, challenge, state, server, redirect_uri
+
+
 def wait_for_callback(
     server: HTTPServer,
     handler_cls: type[CallbackHandler],

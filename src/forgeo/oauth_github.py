@@ -22,7 +22,6 @@ and are read by :class:`GithubClient` at request time, mirroring the
 from __future__ import annotations
 
 import logging
-import secrets
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -33,9 +32,8 @@ from forgeo.oauth_common import (
     CallbackHandler,
     FileTokenStore,
     announce_device_code,
-    bind_loopback,
+    begin_browser_login,
     open_authorize_url,
-    pkce_pair,
     poll_device_grant,
     post_form,
     wait_for_callback,
@@ -191,10 +189,6 @@ def run_device_flow(
 # ---------------------------------------------------------------------------
 
 
-def _pkce_pair() -> tuple[str, str]:
-    return pkce_pair()
-
-
 class _CallbackHandler(CallbackHandler):
     """Capture ``code``/``state`` from the loopback redirect."""
 
@@ -216,13 +210,9 @@ def run_browser_flow(
     Uses PKCE (S256) for public clients; falls back to client_secret for
     confidential clients when provided.
     """
-    verifier, challenge = _pkce_pair()
-    state = secrets.token_urlsafe(16)
-    server = bind_loopback(_CallbackHandler, callback_port, GithubOAuthError)
-    addr = server.server_address
-    host: str = str(addr[0])
-    port: int = int(addr[1])
-    redirect_uri = f"http://{host}:{port}/callback"
+    verifier, challenge, state, server, redirect_uri = begin_browser_login(
+        _CallbackHandler, GithubOAuthError, callback_port
+    )
     # Build authorize URL
     params: dict[str, str] = {
         "client_id": client_id,

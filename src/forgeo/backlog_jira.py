@@ -702,14 +702,9 @@ class JiraBacklog(IssueBacklogBase):
             except JiraRequestError as exc:
                 logger.warning("Could not add Jira comment to %s: %s", issue_key, exc)
 
-    async def delete_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id)
-            if fetched is None:
-                return None
-            _issue, task = fetched
-            await self._call(self.client.delete_issue, task_id)
-            return task
+    async def _delete_issue_by_id(self, issue_id: str, issue: dict[str, Any]) -> None:
+        del issue
+        await self._call(self.client.delete_issue, issue_id)
 
     async def create_task(self, task: Task) -> Task:
         project_key = self.config.project_key

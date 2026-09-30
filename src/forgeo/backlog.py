@@ -958,6 +958,20 @@ class IssueBacklogBase(BacklogStore):
         """Shared review rework: REVIEW -> OPEN with reopen transition."""
         return await self._exit_review(task_id, TaskStatus.OPEN, close=False)
 
+    async def _delete_issue_by_id(self, issue_id: str, issue: dict[str, Any]) -> None:
+        """Delete ``issue`` from the provider (provider-specific)."""
+        raise NotImplementedError
+
+    async def delete_task(self, task_id: str) -> Task | None:
+        """Shared delete: fetch one issue and remove it from the provider."""
+        async with self._lock:
+            fetched = await self._locked_issue_task(task_id)
+            if fetched is None:
+                return None
+            issue, task = fetched
+            await self._delete_issue_by_id(task_id, issue)
+            return task
+
     async def _update_issue_labels(
         self, issue_id: str, *, add: list[str], remove: list[str]
     ) -> None:

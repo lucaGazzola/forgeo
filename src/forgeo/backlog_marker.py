@@ -301,19 +301,15 @@ class MarkerIssueBacklog(IssueBacklogBase):
             except error_cls as exc:
                 logger.warning("Could not add %s comment to %s: %s", self.provider_label, numeric_id, exc)
 
-    async def delete_task(self, task_id: str) -> Task | None:
-        async with self._lock:
-            fetched = await self._locked_issue_task(task_id)
-            if fetched is None:
-                return None
-            issue, task = fetched
-            number = extract_issue_number(issue)
-            assert number is not None
-            try:
-                await self._delete_issue(number)
-            except self.request_error_cls:
-                await self._close_issue(number)
-            return task
+    async def _delete_issue_by_id(self, issue_id: str, issue: dict[str, Any]) -> None:
+        """Delete a marker issue, falling back to close when delete is unsupported."""
+        del issue_id
+        number = extract_issue_number(issue)
+        assert number is not None
+        try:
+            await self._delete_issue(number)
+        except self.request_error_cls:
+            await self._close_issue(number)
 
     async def create_task(self, task: Task) -> Task:
         engine: dict[str, Any] = {"state": TaskStatus.OPEN.value}

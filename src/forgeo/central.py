@@ -644,6 +644,28 @@ def _summary(info: InstanceInfo) -> dict[str, Any]:
     }
 
 
+_TASK_TRANSITIONS: dict[str, tuple[tuple[TaskStatus, ...], str, str]] = {
+    "reopen": ((TaskStatus.BLOCKED,), "only BLOCKED tasks can be reopened", "reopen_task"),
+    "complete-review": (
+        (TaskStatus.REVIEW,),
+        "only REVIEW tasks can be completed",
+        "complete_review",
+    ),
+    "request-changes": (
+        (TaskStatus.REVIEW,),
+        "only REVIEW tasks can be sent back",
+        "request_changes",
+    ),
+}
+"""Single-status POST transitions under ``/api/instances/<name>/tasks/<id>/``.
+
+One table instead of three one-line wrappers (reopen/complete-review/
+request-changes), so adding a transition touches one place. Each entry maps
+the URL action to the allowed source statuses, the 400 message, and the
+backlog method invoked by ``_transition_instance_task``.
+"""
+
+
 def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
     """Build the request-handler class for the central dashboard.
 
@@ -942,14 +964,15 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 2:
                 self._post_instance_task(path)
                 return
-            if len(parts) == 4 and parts[3] == "reopen":
-                self._reopen_instance_task(path)
-                return
-            if len(parts) == 4 and parts[3] == "complete-review":
-                self._complete_review_instance_task(path)
-                return
-            if len(parts) == 4 and parts[3] == "request-changes":
-                self._request_changes_instance_task(path)
+            if len(parts) == 4 and parts[3] in _TASK_TRANSITIONS:
+                from_statuses, error_message, method = _TASK_TRANSITIONS[parts[3]]
+                self._transition_instance_task(
+                    path,
+                    action=parts[3],
+                    from_statuses=from_statuses,
+                    error_message=error_message,
+                    method=method,
+                )
                 return
             self._send_not_found()
 
@@ -975,6 +998,24 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             else:
                 self._daemon_restart(info, config, lock)
 
+        def _send_daemon_ok(
+            self, status: str, message: str, *, daemon_running: bool, pid: int | None = None
+        ) -> None:
+            """Send the shared 200 for a daemon start/stop/restart outcome.
+
+            One helper for the identical ``status``/``message``/
+            ``daemon_running``/``pid`` payloads in ``_daemon_start``/
+            ``_daemon_stop``/``_daemon_restart``.
+            """
+            payload: dict[str, Any] = {
+                "status": status,
+                "message": message,
+                "daemon_running": daemon_running,
+            }
+            if pid is not None:
+                payload["pid"] = pid
+            self._send_json(200, payload)
+
         def _daemon_start(self, info: Any, config: ForgeoConfig, lock: Path) -> None:
             if is_lock_held(lock):
                 self._send_json(
@@ -992,41 +1033,29 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 pid = daemon_control.start_daemon(info.config_path, config)
             except daemon_control.DaemonError as exc:
                 return self._daemon_error(lock, "start_failed", exc)
-            self._send_json(
-                200,
-                {
-                    "status": "started",
-                    "message": (
-                        f"Forgeo {config.name!r} started "
-                        f"(pid {pid}, interval {config.interval_minutes} min)."
-                    ),
-                    "daemon_running": True,
-                    "pid": pid,
-                },
+            self._send_daemon_ok(
+                "started",
+                f"Forgeo {config.name!r} started (pid {pid}, interval {config.interval_minutes} min).",
+                daemon_running=True,
+                pid=pid,
             )
 
         def _daemon_stop(self, config: ForgeoConfig, lock: Path) -> None:
             if not is_lock_held(lock):
-                self._send_json(
-                    200,
-                    {
-                        "status": "not_running",
-                        "message": f"Forgeo {config.name!r} is not running.",
-                        "daemon_running": False,
-                    },
+                self._send_daemon_ok(
+                    "not_running",
+                    f"Forgeo {config.name!r} is not running.",
+                    daemon_running=False,
                 )
                 return
             try:
                 daemon_control.stop_daemon(config)
             except daemon_control.DaemonError as exc:
                 return self._daemon_error(lock, "stop_failed", exc)
-            self._send_json(
-                200,
-                {
-                    "status": "stopped",
-                    "message": f"Forgeo {config.name!r} stopped.",
-                    "daemon_running": False,
-                },
+            self._send_daemon_ok(
+                "stopped",
+                f"Forgeo {config.name!r} stopped.",
+                daemon_running=False,
             )
 
         def _daemon_restart(self, info: Any, config: ForgeoConfig, lock: Path) -> None:
@@ -1034,17 +1063,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                 pid = daemon_control.restart_daemon(info.config_path, config)
             except daemon_control.DaemonError as exc:
                 return self._daemon_error(lock, "restart_failed", exc)
-            self._send_json(
-                200,
-                {
-                    "status": "restarted",
-                    "message": (
-                        f"Forgeo {config.name!r} restarted "
-                        f"(pid {pid}, interval {config.interval_minutes} min)."
-                    ),
-                    "daemon_running": True,
-                    "pid": pid,
-                },
+            self._send_daemon_ok(
+                "restarted",
+                f"Forgeo {config.name!r} restarted (pid {pid}, interval {config.interval_minutes} min).",
+                daemon_running=True,
+                pid=pid,
             )
 
         def _post_instance_task(self, path: str) -> None:
@@ -1125,7 +1148,11 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             error_message: str,
             method: str,
         ) -> None:
-            """Run one single-status task transition (reopen/complete-review/...)."""
+            """Run one single-status task transition from :data:`_TASK_TRANSITIONS`.
+
+            A dedicated endpoint rather than a generic ``status`` via PATCH,
+            so the status transition stays outside the editable-fields model.
+            """
             parts = _instance_parts(path)
             if len(parts) != 4 or parts[1] != "tasks" or parts[3] != action:
                 self._send_not_found()
@@ -1146,20 +1173,6 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             assert updated is not None  # task was just found in the backlog
             self._send_json(200, updated.model_dump(mode="json"))
 
-        def _reopen_instance_task(self, path: str) -> None:
-            """Reopen a BLOCKED task: status back to OPEN, reason cleared.
-
-            A dedicated endpoint rather than a generic ``status`` via PATCH,
-            so the status transition stays outside the editable-fields model.
-            """
-            self._transition_instance_task(
-                path,
-                action="reopen",
-                from_statuses=(TaskStatus.BLOCKED,),
-                error_message="only BLOCKED tasks can be reopened",
-                method="reopen_task",
-            )
-
         def _delete_instance_task(self, path: str) -> None:
             """Delete an OPEN, BLOCKED or REVIEW task from an instance's backlog."""
             target = self._resolve_task_target(path, with_task_id=True)
@@ -1178,26 +1191,6 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             deleted = asyncio.run(backlog.delete_task(task_id))
             assert deleted is not None  # task was just found in the backlog
             self._send_json(200, deleted.model_dump(mode="json"))
-
-        def _complete_review_instance_task(self, path: str) -> None:
-            """Mark a REVIEW task COMPLETED after human merged the branch."""
-            self._transition_instance_task(
-                path,
-                action="complete-review",
-                from_statuses=(TaskStatus.REVIEW,),
-                error_message="only REVIEW tasks can be completed",
-                method="complete_review",
-            )
-
-        def _request_changes_instance_task(self, path: str) -> None:
-            """Move a REVIEW task back to OPEN for rework."""
-            self._transition_instance_task(
-                path,
-                action="request-changes",
-                from_statuses=(TaskStatus.REVIEW,),
-                error_message="only REVIEW tasks can be sent back",
-                method="request_changes",
-            )
 
         def _put_instance_api(self, path: str) -> None:
             """Route a PUT under ``/api/instances/`` to its handler."""

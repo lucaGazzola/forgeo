@@ -1834,17 +1834,17 @@ def _cmd_task_show_next(args: argparse.Namespace) -> int:
     the magic is visible, then prints the same detail (plus hint) as an
     explicit ``show``.
     """
-    loaded = _resolve_config_and_tasks(args)
+    loaded = _load_default_task(
+        args,
+        _default_show_task,
+        empty_message=(
+            "No OPEN or BLOCKED tasks to show — "
+            "add one with `forgeo task add --title ...`."
+        ),
+    )
     if isinstance(loaded, int):
         return loaded
-    _config, tasks = loaded
-    task = _default_show_task(tasks)
-    if task is None:
-        console.print(
-            "[yellow]No OPEN or BLOCKED tasks to show — "
-            "add one with `forgeo task add --title ...`.[/yellow]"
-        )
-        return 1
+    _config, task = loaded
     console.print(
         f"[dim]Showing {task.id} (no id given — the next task the scheduler "
         f"would pick).[/dim]"
@@ -1960,13 +1960,7 @@ def _default_reopen_task(tasks: list[Task]) -> Task | None:
     task the oldest ``FAILED`` task is next (same ``reopen``/``retry`` split
     as the explicit path). ``None`` when no task is reopenable.
     """
-    blocked = _oldest_with_status(tasks, TaskStatus.BLOCKED)
-    if blocked:
-        return blocked
-    failed = _oldest_with_status(tasks, TaskStatus.FAILED)
-    if failed:
-        return failed
-    return None
+    return _oldest_of_statuses(tasks, TaskStatus.BLOCKED, TaskStatus.FAILED)
 
 
 def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
@@ -1977,17 +1971,17 @@ def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
     id up front so the magic is visible, then delegates to
     :func:`cmd_task_reopen` with the id filled in.
     """
-    loaded = _resolve_config_and_tasks(args)
+    loaded = _load_default_task(
+        args,
+        _default_reopen_task,
+        empty_message=(
+            "No BLOCKED or FAILED tasks to reopen — "
+            "add one with `forgeo task add --title ...` or wait for the next cycle."
+        ),
+    )
     if isinstance(loaded, int):
         return loaded
-    _config, tasks = loaded
-    task = _default_reopen_task(tasks)
-    if task is None:
-        console.print(
-            "[yellow]No BLOCKED or FAILED tasks to reopen — "
-            "add one with `forgeo task add --title ...` or wait for the next cycle.[/yellow]"
-        )
-        return 1
+    _config, task = loaded
     console.print(
         f"[dim]Reopening {task.id} (no id given — the oldest "
         f"{task.status.value} task).[/dim]"
@@ -2480,6 +2474,20 @@ def _oldest_with_status(tasks: list[Task], status: TaskStatus) -> Task | None:
     return matching[0] if matching else None
 
 
+def _oldest_of_statuses(tasks: list[Task], *statuses: TaskStatus) -> Task | None:
+    """Oldest task with the first non-empty ``status`` in ``statuses``.
+
+    One helper for the priority-fallback chains repeated in the no-id
+    ``task show``/``reopen`` defaults (``BLOCKED`` first, then the next
+    status), so the ordering lives in the caller, not in copy-pasted loops.
+    """
+    for status in statuses:
+        oldest = _oldest_with_status(tasks, status)
+        if oldest is not None:
+            return oldest
+    return None
+
+
 def _report_backlog_unavailable(exc: Exception) -> int:
     """Print the unavailable-backlog error; returns exit code ``1``.
 
@@ -2521,6 +2529,30 @@ def _resolve_config_and_tasks(
     if tasks is None:
         return 1
     return config, tasks
+
+
+def _load_default_task(
+    args: argparse.Namespace,
+    pick: Callable[[list[Task]], Task | None],
+    *,
+    empty_message: str,
+) -> tuple[ForgeoConfig, Task] | int:
+    """Resolve the config, list tasks, and pick the no-id default task.
+
+    Returns ``(config, task)`` or exit code ``1`` when the config/backlog
+    cannot be read or ``pick`` finds nothing (printing ``empty_message``),
+    so the ``task show``/``reopen`` no-id handlers share one preamble
+    instead of repeating the same resolve-pick-announce dance.
+    """
+    loaded = _resolve_config_and_tasks(args)
+    if isinstance(loaded, int):
+        return loaded
+    config, tasks = loaded
+    task = pick(tasks)
+    if task is None:
+        console.print(f"[yellow]{empty_message}[/yellow]")
+        return 1
+    return config, task
 
 
 def _resolve_config_and_task_id(args: argparse.Namespace) -> tuple[ForgeoConfig, str] | int:

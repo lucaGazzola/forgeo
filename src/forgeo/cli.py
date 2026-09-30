@@ -199,16 +199,60 @@ DEFAULT_CONFIG = Path("forgeo.yaml")
 console = Console()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Construct the CLI argument parser."""
-    parser = argparse.ArgumentParser(
-        prog="forgeo",
-        description="A scheduled software forgeo: executes backlog tasks on main, "
-        "refactors when idle, and writes BLOCKER.md when it needs human input.",
-    )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    sub = parser.add_subparsers(dest="action")
 
+
+
+def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
+    """Add a mutually-exclusive ``--config``/``--name`` option pair.
+
+    ``--config`` keeps its default so plain ``forgeo start`` (etc.) keeps
+    resolving to ``forgeo.yaml``; argparse still rejects explicitly passing
+    both options together.
+    """
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help="Forgeo YAML file (default: forgeo.yaml, auto-discovered in "
+        "parent dirs; a lone registered instance is used when none is found).",
+    )
+    group.add_argument(
+        "--name",
+        default=None,
+        help="Registered instance name resolved from the registry "
+        "(see `forgeo instance`).",
+    )
+
+
+def _add_task_id_args(
+    parser: argparse.ArgumentParser, flag_help: str, positional_help: str
+) -> None:
+    """Add the shared ``--task``/``TASK_ID`` positional id pair.
+
+    Seven subcommands (``run``, ``task show/edit/reopen/rm/complete-review/
+    request-changes``) accept the same task id either as ``--task`` or
+    positionally, with short ids (``3``, ``TASK-3``, ``#3``) resolved later.
+    The help texts stay per-command, so this helper only removes the
+    structural duplication.
+    """
+    parser.add_argument(
+        "--task",
+        required=False,
+        default=None,
+        metavar="TASK_ID",
+        help=flag_help,
+    )
+    parser.add_argument(
+        "task_id",
+        nargs="?",
+        default=None,
+        metavar="TASK_ID",
+        help=positional_help,
+    )
+
+
+def _add_init_parser(sub: Any) -> None:
     init_parser = sub.add_parser(
         "init", help="Guided first-time setup: interactively write a forgeo.yaml."
     )
@@ -222,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Overwrite an existing config file."
     )
 
+
+def _add_start_parser(sub: Any) -> None:
     start_parser = sub.add_parser(
         "start", help="Start the scheduled forgeo daemon for a repository."
     )
@@ -240,9 +286,13 @@ def build_parser() -> argparse.ArgumentParser:
         "detached in the background.",
     )
 
+
+def _add_once_parser(sub: Any) -> None:
     once_parser = sub.add_parser("once", help="Run exactly one forgeo cycle and exit.")
     _add_config_or_name(once_parser)
 
+
+def _add_run_parser(sub: Any) -> None:
     run_parser = sub.add_parser(
         "run",
         help="Run exactly one specific OPEN task by id and exit.",
@@ -263,13 +313,8 @@ def build_parser() -> argparse.ArgumentParser:
         "so `forgeo run --task <id> --reopen` retries in one step.",
     )
 
-    task_parser = sub.add_parser(
-        "task",
-        help="Manage backlog tasks from the terminal "
-        "(no JSON editing or dashboard needed).",
-    )
-    task_sub = task_parser.add_subparsers(dest="task_action")
 
+def _add_task_add_parser(task_sub: Any) -> None:
     task_add_parser = task_sub.add_parser(
         "add", help="Create a new OPEN task in the backlog."
     )
@@ -338,6 +383,8 @@ def build_parser() -> argparse.ArgumentParser:
         "not with --run-at).",
     )
 
+
+def _add_task_list_parser(task_sub: Any) -> None:
     task_list_parser = task_sub.add_parser(
         "list", help="List backlog tasks and their statuses."
     )
@@ -356,11 +403,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show at most N tasks (default: all).",
     )
 
+
+def _add_task_next_parser(task_sub: Any) -> None:
     task_next_parser = task_sub.add_parser(
         "next", help="Show which task would run next and why (never starts an agent)."
     )
     _add_config_or_name(task_next_parser)
 
+
+def _add_task_show_parser(task_sub: Any) -> None:
     task_show_parser = task_sub.add_parser(
         "show",
         help="Show one task's full detail (defaults to the next task "
@@ -375,6 +426,8 @@ def build_parser() -> argparse.ArgumentParser:
         "omit both to show the next task the scheduler would pick).",
     )
 
+
+def _add_task_edit_parser(task_sub: Any) -> None:
     task_edit_parser = task_sub.add_parser(
         "edit", help="Update a task's fields in place (never starts an agent)."
     )
@@ -459,6 +512,8 @@ def build_parser() -> argparse.ArgumentParser:
         "not with --run-at).",
     )
 
+
+def _add_task_reopen_parser(task_sub: Any) -> None:
     task_reopen_parser = task_sub.add_parser(
         "reopen", help="Move a BLOCKED or FAILED task back to OPEN."
     )
@@ -477,6 +532,8 @@ def build_parser() -> argparse.ArgumentParser:
         "lock as `forgeo run`; refuses while a daemon holds it).",
     )
 
+
+def _add_task_rm_parser(task_sub: Any) -> None:
     task_rm_parser = task_sub.add_parser(
         "rm", help="Delete a task from the backlog (never starts an agent)."
     )
@@ -488,6 +545,8 @@ def build_parser() -> argparse.ArgumentParser:
         "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
+
+def _add_task_review_parsers(task_sub: Any) -> None:
     task_complete_review_parser = task_sub.add_parser(
         "complete-review",
         help="Mark a REVIEW task COMPLETED after merging its branch "
@@ -513,12 +572,33 @@ def build_parser() -> argparse.ArgumentParser:
         "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
 
+
+def _add_task_parser(sub: Any) -> None:
+    task_parser = sub.add_parser(
+        "task",
+        help="Manage backlog tasks from the terminal "
+        "(no JSON editing or dashboard needed).",
+    )
+    task_sub = task_parser.add_subparsers(dest="task_action")
+    _add_task_add_parser(task_sub)
+    _add_task_list_parser(task_sub)
+    _add_task_next_parser(task_sub)
+    _add_task_show_parser(task_sub)
+    _add_task_edit_parser(task_sub)
+    _add_task_reopen_parser(task_sub)
+    _add_task_rm_parser(task_sub)
+    _add_task_review_parsers(task_sub)
+
+
+def _add_status_parser(sub: Any) -> None:
     status_parser = sub.add_parser(
         "status",
         help="Print a read-only summary of Forgeo (never starts an agent).",
     )
     _add_config_or_name(status_parser)
 
+
+def _add_logs_parser(sub: Any) -> None:
     logs_parser = sub.add_parser(
         "logs",
         help="Print the tail of the forgeo log file (never starts an agent).",
@@ -539,6 +619,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep printing new lines as they are appended (Ctrl-C to stop).",
     )
 
+
+def _add_validate_parser(sub: Any) -> None:
     validate_parser = sub.add_parser(
         "validate",
         help="Read-only dry run: check config, repo, branch, remote, backlog, "
@@ -546,12 +628,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_or_name(validate_parser)
 
+
+def _add_check_parser(sub: Any) -> None:
     sub.add_parser(
         "check",
         help="Run the contributor quality gates (pytest, ruff check, "
         "mypy src/forgeo) and print a PASS/FAIL summary.",
     )
 
+
+def _add_stop_parser(sub: Any) -> None:
     stop_parser = sub.add_parser(
         "stop",
         help="Stop a running forgeo daemon gracefully (SIGTERM).",
@@ -565,6 +651,8 @@ def build_parser() -> argparse.ArgumentParser:
         "in progress always finishes first.",
     )
 
+
+def _add_restart_parser(sub: Any) -> None:
     restart_parser = sub.add_parser(
         "restart",
         help="Restart Forgeo daemon in the background, re-reading the config.",
@@ -578,6 +666,8 @@ def build_parser() -> argparse.ArgumentParser:
         "cycle in progress always finishes first.",
     )
 
+
+def _add_instance_parsers(sub: Any) -> None:
     instance_parser = sub.add_parser(
         "instance",
         help="Register, list, and unregister named forgeo instances.",
@@ -609,6 +699,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="List every registered instance (alias for `forgeo instance list`).",
     )
 
+
+def _add_web_parsers(sub: Any) -> None:
     web_parser = sub.add_parser(
         "web",
         help="Serve the central multi-instance dashboard in the foreground.",
@@ -664,6 +756,8 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="Print whether the central dashboard is running."
     )
 
+
+def _add_auth_parsers(sub: Any) -> None:
     auth_parser = sub.add_parser(
         "auth",
         help="Browser/OAuth login for issue backlogs (GitHub, GitLab, Jira).",
@@ -761,58 +855,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Token file to remove.",
     )
     auth_logout.add_argument("--api-base", default=None, help="Provider API base URL.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="forgeo",
+        description="A scheduled software forgeo: executes backlog tasks on main, "
+        "refactors when idle, and writes BLOCKER.md when it needs human input.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    sub = parser.add_subparsers(dest="action")
+    _add_init_parser(sub)
+    _add_start_parser(sub)
+    _add_once_parser(sub)
+    _add_run_parser(sub)
+    _add_task_parser(sub)
+    _add_status_parser(sub)
+    _add_logs_parser(sub)
+    _add_validate_parser(sub)
+    _add_check_parser(sub)
+    _add_stop_parser(sub)
+    _add_restart_parser(sub)
+    _add_instance_parsers(sub)
+    _add_web_parsers(sub)
+    _add_auth_parsers(sub)
     return parser
-
-
-def _add_config_or_name(parser: argparse.ArgumentParser) -> None:
-    """Add a mutually-exclusive ``--config``/``--name`` option pair.
-
-    ``--config`` keeps its default so plain ``forgeo start`` (etc.) keeps
-    resolving to ``forgeo.yaml``; argparse still rejects explicitly passing
-    both options together.
-    """
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help="Forgeo YAML file (default: forgeo.yaml, auto-discovered in "
-        "parent dirs; a lone registered instance is used when none is found).",
-    )
-    group.add_argument(
-        "--name",
-        default=None,
-        help="Registered instance name resolved from the registry "
-        "(see `forgeo instance`).",
-    )
-
-
-def _add_task_id_args(
-    parser: argparse.ArgumentParser, flag_help: str, positional_help: str
-) -> None:
-    """Add the shared ``--task``/``TASK_ID`` positional id pair.
-
-    Seven subcommands (``run``, ``task show/edit/reopen/rm/complete-review/
-    request-changes``) accept the same task id either as ``--task`` or
-    positionally, with short ids (``3``, ``TASK-3``, ``#3``) resolved later.
-    The help texts stay per-command, so this helper only removes the
-    structural duplication.
-    """
-    parser.add_argument(
-        "--task",
-        required=False,
-        default=None,
-        metavar="TASK_ID",
-        help=flag_help,
-    )
-    parser.add_argument(
-        "task_id",
-        nargs="?",
-        default=None,
-        metavar="TASK_ID",
-        help=positional_help,
-    )
-
 
 def setup_logging(log_file: str | Path) -> None:
     """Configure the ``forgeo`` logger with a rotating file handler."""

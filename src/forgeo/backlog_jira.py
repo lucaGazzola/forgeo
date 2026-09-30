@@ -19,7 +19,6 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -33,23 +32,19 @@ from forgeo.backlog import (
     validate_task_updates,
 )
 from forgeo.backlog_issue_base import (
+    RestTransportBase,
     adf_to_plain_text,
     apply_terminal_transition,
     as_nonnegative_int,
     as_optional_float,
     as_optional_int,
     as_string_list,
-    build_api_url,
     claim_cutoff,
-    encode_json_body,
-    execute_rest_with_oauth_retry,
     is_claim_stale,
-    oauth_access_token,
     parse_datetime,
     parse_optional_datetime,
     plain_text_to_adf,
     require_env_token,
-    resolve_cached_oauth_provider,
     transition_label_update,
 )
 from forgeo.models import (
@@ -72,32 +67,42 @@ class JiraRequestError(BacklogUnavailableError):
         self.status = status
 
 
-class JiraClient:
-    """Small blocking Jira REST client used through ``asyncio.to_thread``."""
+class JiraClient(RestTransportBase):
+    """Small blocking Jira REST client used through ``asyncio.to_thread``.
+
+    Issue paths use string keys and JQL search, so only the shared
+    transport is inherited (OAuth provider, URL building, request retry);
+    the CRUD wrappers below stay Jira-specific.
+    """
+
+    request_error_cls = JiraRequestError
+    provider_label = "Jira"
 
     def __init__(
         self,
         base_url: str,
         config: JiraBacklogConfig,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.config = config
+        super().__init__(base_url, config)
         self.api_version = config.api_version or DEFAULT_API_VERSION
-        self._oauth_provider: Any | None = None
+        self.api_prefix = f"/rest/api/{self.api_version}"
 
-    def _oauth_token_provider(self) -> Any | None:
-        from forgeo.oauth_jira import JiraOAuthTokenProvider, JiraTokenStore
+    def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
+        from forgeo.oauth_jira import JiraOAuthError, JiraOAuthTokenProvider, JiraTokenStore
 
+        return JiraTokenStore, JiraOAuthTokenProvider, JiraOAuthError
+
+    def _oauth_provider_kwargs(self) -> dict[str, Any]:
         auth = self.config.auth
         if auth.oauth is None:
-            return None
-        return resolve_cached_oauth_provider(
-            self,
-            JiraTokenStore,
-            JiraOAuthTokenProvider,
-            client_id=auth.oauth.client_id,
-            client_secret_env=auth.oauth.client_secret_env,
-        )
+            return {}
+        return {
+            "client_id": auth.oauth.client_id,
+            "client_secret_env": auth.oauth.client_secret_env,
+        }
+
+    def _extra_headers(self) -> dict[str, str]:
+        return {"Accept": "application/json"}
 
     def _cached_cloud_id(self) -> str | None:
         """Cloud id from the cached OAuth token file (best-effort)."""
@@ -119,43 +124,30 @@ class JiraClient:
         cloud_id = data.get("cloud_id") if isinstance(data, dict) else None
         return cloud_id if isinstance(cloud_id, str) else None
 
-    def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
+    def _api_base(self) -> str:
         # When OAuth is used with cloud_id, Jira Cloud API lives at api.atlassian.com/ex/jira/{cloudId}
-        base = self.base_url
         auth = self.config.auth
         if auth.oauth is not None:
             cloud_id = auth.oauth.cloud_id or self._cached_cloud_id()
             if cloud_id:
-                base = f"https://api.atlassian.com/ex/jira/{cloud_id}"
-        return build_api_url(base, path, query, api_prefix=f"/rest/api/{self.api_version}")
+                return f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        return self.base_url
 
-    def _auth_header(self) -> str:
+    def _auth_headers(self) -> dict[str, str]:
         auth = self.config.auth
-        if auth.oauth is not None:
-            provider = self._oauth_token_provider()
-            assert provider is not None
-            from forgeo.oauth_jira import JiraOAuthError
-
-            token = oauth_access_token(
-                provider,
-                oauth_error_cls=JiraOAuthError,
-                request_error_cls=JiraRequestError,
-            )
-            return f"Bearer {token}"
-        # PAT branch
-        if auth.token_env is None or not auth.token_env.strip():
-            raise JiraRequestError("Jira token environment variable is not set")
-        token = require_env_token(auth.token_env, "Jira", JiraRequestError)
-        if auth.scheme == "bearer":
-            return f"Bearer {token}"
-        username = auth.username
-        if auth.username_env is not None:
-            username = os.environ.get(auth.username_env)
-        if not username:
-            source = auth.username_env or "username"
-            raise JiraRequestError(f"Jira username {source!r} is not set")
-        encoded = base64.b64encode(f"{username}:{token}".encode()).decode("ascii")
-        return f"Basic {encoded}"
+        if auth.oauth is None and auth.scheme != "bearer":
+            if auth.token_env is None:
+                raise JiraRequestError("Jira token environment variable is not set")
+            token = require_env_token(auth.token_env, "Jira", JiraRequestError)
+            username = auth.username
+            if auth.username_env is not None:
+                username = os.environ.get(auth.username_env)
+            if not username:
+                source = auth.username_env or "username"
+                raise JiraRequestError(f"Jira username {source!r} is not set")
+            encoded = base64.b64encode(f"{username}:{token}".encode()).decode("ascii")
+            return {"Authorization": f"Basic {encoded}"}
+        return super()._auth_headers()
 
     def _request(
         self,
@@ -166,28 +158,7 @@ class JiraClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Perform one authenticated request and decode its JSON response."""
-
-        def _build_request() -> urllib.request.Request:
-            body = encode_json_body(payload)
-            return urllib.request.Request(
-                self._api_url(path, query),
-                data=body,
-                method=method,
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": self._auth_header(),
-                    **({"Content-Type": "application/json"} if body is not None else {}),
-                },
-            )
-
-        data = execute_rest_with_oauth_retry(
-            build_request=_build_request,
-            timeout=self.config.timeout_seconds,
-            error_cls=JiraRequestError,
-            method=method,
-            has_oauth=self.config.auth.oauth is not None,
-            get_cached_provider=lambda: self._oauth_provider,
-        )
+        data = super()._request(method, path, query=query, payload=payload)
         if not isinstance(data, dict):
             raise JiraRequestError(f"{method} {self._api_url(path, query)} returned a non-object JSON body")
         return data

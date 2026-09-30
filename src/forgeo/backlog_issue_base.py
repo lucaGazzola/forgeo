@@ -583,23 +583,22 @@ def execute_rest_with_oauth_retry(
             raise
 
 
-class RestIssueClientBase:
-    """Blocking REST client shared by the GitHub/GitLab providers.
+class RestTransportBase:
+    """Authenticated REST transport shared by the Jira/GitHub/GitLab clients.
 
-    Both clients did the same dance — lazy OAuth provider, ``_api_url``,
-    ``_request`` with one OAuth retry, and CRUD wrappers over issue paths —
-    differing only in header shape, path shapes and the update/delete verbs.
-    Subclasses provide :meth:`_oauth_components`,
-    :meth:`_collection_path`, :meth:`_comment_path` (plus
-    :meth:`_search_query`/:meth:`_extra_headers`/:meth:`_token_headers` when
-    the defaults don't fit) and inherit the rest. Used via
-    ``asyncio.to_thread``.
+    All three clients did the same dance — lazy OAuth provider,
+    ``_api_url`` and ``_request`` with one OAuth retry — differing only in
+    header shape and URL prefix. Subclasses provide
+    :meth:`_oauth_components` (plus :meth:`_extra_headers`/
+    :meth:`_token_headers`/:meth:`_oauth_provider_kwargs`/:meth:`_api_base`
+    when the defaults don't fit) and inherit the rest. Jira additionally
+    overrides :meth:`_auth_headers` (basic auth) and :meth:`_request`
+    (non-object bodies are errors). Used via ``asyncio.to_thread``.
     """
 
     request_error_cls: type[Exception] = Exception
     provider_label: str = "issue"
     api_prefix: str = ""
-    update_method: str = "PATCH"
 
     def __init__(self, base_url: str, config: Any) -> None:
         self.base_url = base_url.rstrip("/")
@@ -610,6 +609,10 @@ class RestIssueClientBase:
         """Return ``(store_cls, provider_cls, oauth_error_cls)`` (lazy import)."""
         raise NotImplementedError
 
+    def _oauth_provider_kwargs(self) -> dict[str, Any]:
+        """Extra ``provider_cls(store, ...)`` kwargs (Jira refresh needs client ids)."""
+        return {}
+
     def _token_headers(self, token: str) -> dict[str, str]:
         """Auth headers for a resolved ``token`` (Bearer by default)."""
         return {"Authorization": f"Bearer {token}"}
@@ -617,7 +620,7 @@ class RestIssueClientBase:
     def _auth_headers(self) -> dict[str, str]:
         """Resolve the PAT/OAuth token and shape it via :meth:`_token_headers`.
 
-        Shared by the GitHub/GitLab clients, which differed only in the
+        Shared by the issue clients, which differed only in the
         header shape (GitLab additionally sends ``PRIVATE-TOKEN``) and in
         the provider label/error classes used for messages.
         """
@@ -642,25 +645,16 @@ class RestIssueClientBase:
     def _extra_headers(self) -> dict[str, str]:
         return {}
 
-    def _collection_path(self) -> str:
-        raise NotImplementedError
-
-    def _comment_path(self, issue_id: int) -> str:
-        raise NotImplementedError
-
-    def _search_query(self, page: int, per_page: int, state: str) -> dict[str, Any]:
-        del state
-        return {"per_page": per_page, "page": page}
-
-    def _item_path(self, issue_id: int) -> str:
-        return f"{self._collection_path()}/{issue_id}"
-
     def _oauth_token_provider(self) -> Any | None:
         store_cls, provider_cls, _ = self._oauth_components()
-        return resolve_cached_oauth_provider(self, store_cls, provider_cls)
+        return resolve_cached_oauth_provider(self, store_cls, provider_cls, **self._oauth_provider_kwargs())
+
+    def _api_base(self) -> str:
+        """API host before ``api_prefix`` (Jira swaps it for OAuth ``cloud_id``)."""
+        return self.base_url
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
-        return build_api_url(self.base_url, path, query, api_prefix=self.api_prefix)
+        return build_api_url(self._api_base(), path, query, api_prefix=self.api_prefix)
 
     def _request(
         self,
@@ -687,6 +681,31 @@ class RestIssueClientBase:
             has_oauth=self.config.auth.oauth is not None,
             get_cached_provider=lambda: self._oauth_provider,
         )
+
+
+class RestIssueClientBase(RestTransportBase):
+    """Integer-id issue CRUD over :class:`RestTransportBase` (GitHub/GitLab).
+
+    Jira uses string keys and JQL search, so it inherits the transport only.
+    Subclasses provide :meth:`_collection_path` and :meth:`_comment_path`
+    (plus :meth:`_search_query` when the defaults don't fit) and inherit
+    the rest.
+    """
+
+    update_method: str = "PATCH"
+
+    def _collection_path(self) -> str:
+        raise NotImplementedError
+
+    def _comment_path(self, issue_id: int) -> str:
+        raise NotImplementedError
+
+    def _search_query(self, page: int, per_page: int, state: str) -> dict[str, Any]:
+        del state
+        return {"per_page": per_page, "page": page}
+
+    def _item_path(self, issue_id: int) -> str:
+        return f"{self._collection_path()}/{issue_id}"
 
     def search_issues(
         self, *, page: int = 1, per_page: int = 30, state: str = "all"

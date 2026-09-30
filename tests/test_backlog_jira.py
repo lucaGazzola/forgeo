@@ -229,7 +229,7 @@ def test_jira_cloud_search_uses_cursor_endpoint_and_bearer_auth(monkeypatch) -> 
         seen.append(request)
         return Response()
 
-    monkeypatch.setattr("forgeo.backlog_jira.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("forgeo.backlog_issue_base.urllib.request.urlopen", urlopen)
 
     JiraClient("https://jira.test", config).search_issues(
         "project = APP",
@@ -269,7 +269,7 @@ def test_jira_v2_search_keeps_offset_pagination(monkeypatch) -> None:
         seen.append(request)
         return Response()
 
-    monkeypatch.setattr("forgeo.backlog_jira.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("forgeo.backlog_issue_base.urllib.request.urlopen", urlopen)
     JiraClient("https://jira.test", config).search_issues(
         "project = APP",
         start_at=25,

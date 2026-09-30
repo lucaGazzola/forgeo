@@ -100,6 +100,16 @@ NonBlankStr = Annotated[str, BeforeValidator(_check_non_blank)]
 #: An optional string that, when set, must contain more than whitespace.
 OptionalNonBlankStr = Annotated[str | None, BeforeValidator(_check_optional_non_blank)]
 
+#: A required agent command (non-blank string or non-empty argv list).
+#: Replaces the per-model ``_command_not_blank`` field validators on
+#: ``Task``/``ForgeoConfig`` that both called :func:`_validate_agent_command`.
+AgentCommand = Annotated[str | list[str], BeforeValidator(_validate_agent_command)]
+
+#: An optional agent command override (``None`` = inherit from the config).
+OptionalAgentCommand = Annotated[
+    str | list[str] | None, BeforeValidator(_validate_agent_command)
+]
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -205,7 +215,7 @@ class Task(BaseModel):
 
     id: str
     title: str
-    description: str
+    description: NonBlankStr
     dependencies: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     files_to_modify: list[str] = Field(default_factory=list)
@@ -220,7 +230,7 @@ class Task(BaseModel):
         "the task unpicked until then. ``None`` (the default) picks the task "
         "by oldest ``created_at`` as before.",
     )
-    agent_command: str | list[str] | None = Field(default=None)
+    agent_command: OptionalAgentCommand = Field(default=None)
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
     blocker_reason: list[str] = Field(default_factory=list)
     blocked_count: int = Field(default=0, ge=0)
@@ -278,18 +288,6 @@ class Task(BaseModel):
             lines.append("Acceptance criteria:")
             lines.extend(f"- {criterion}" for criterion in self.acceptance_criteria)
         return "\n".join(lines)
-
-    @field_validator("description")
-    @classmethod
-    def _description_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("description must be a non-blank string")
-        return value
-
-    @field_validator("agent_command")
-    @classmethod
-    def _command_not_blank(cls, value: str | list[str] | None) -> str | list[str] | None:
-        return _validate_agent_command(value)
 
     @field_validator("run_at", mode="before")
     @classmethod
@@ -739,13 +737,13 @@ class ForgeoConfig(BaseModel):
     github: GithubBacklogConfig | None = None
     gitlab: GitlabBacklogConfig | None = None
     blocker_file: Path = Field(default=Path("BLOCKER.md"))
-    agent_command: str | list[str]
+    agent_command: AgentCommand
     agent_timeout_seconds: float | None = Field(default=None, gt=0)
     agent_env: dict[str, str] = Field(default_factory=dict)
     agent_sandbox: SandboxMode = SandboxMode.NONE
     agent_sandbox_image: str | None = None
-    agent_sandbox_network: str = "none"
-    agent_sandbox_mounts: list[str] = Field(default_factory=list)
+    agent_sandbox_network: NonBlankStr = "none"
+    agent_sandbox_mounts: list[NonBlankStr] = Field(default_factory=list)
     blocked_exit_code: int = Field(default=2)
     no_changes_exit_code: int = Field(default=3)
     remote: str | None = None
@@ -773,7 +771,7 @@ class ForgeoConfig(BaseModel):
         "``off`` (default) commits directly to ``branch`` and marks COMPLETED; "
         "``branch`` creates ``review_branch_prefix + task.id`` and marks REVIEW.",
     )
-    review_branch_prefix: str = Field(
+    review_branch_prefix: NonBlankStr = Field(
         default="forgeo/review/",
         description="Prefix for feature branches created when ``review_mode`` is "
         "``branch``. The task id is appended, e.g. ``forgeo/review/TASK-001``.",
@@ -784,11 +782,6 @@ class ForgeoConfig(BaseModel):
     notify_webhook_events: list[str] = Field(
         default_factory=lambda: [WEBHOOK_EVENTS[0]]
     )
-
-    @field_validator("agent_command")
-    @classmethod
-    def _command_not_blank(cls, value: str | list[str]) -> str | list[str] | None:
-        return _validate_agent_command(value)
 
     @field_validator("backlog", mode="before")
     @classmethod
@@ -820,13 +813,6 @@ class ForgeoConfig(BaseModel):
             )
         return list(dict.fromkeys(value))
 
-    @field_validator("agent_sandbox_network")
-    @classmethod
-    def _network_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("agent_sandbox_network must not be blank")
-        return value
-
     @field_validator("no_changes_exit_code")
     @classmethod
     def _no_changes_exit_code_not_success(cls, value: int) -> int:
@@ -834,19 +820,9 @@ class ForgeoConfig(BaseModel):
             raise ValueError("no_changes_exit_code must not be 0 (reserved for SUCCESS)")
         return value
 
-    @field_validator("agent_sandbox_mounts")
-    @classmethod
-    def _mounts_not_blank(cls, value: list[str]) -> list[str]:
-        for mount in value:
-            if not mount.strip():
-                raise ValueError("agent_sandbox_mounts must not contain blank paths")
-        return value
-
     @field_validator("review_branch_prefix")
     @classmethod
-    def _review_prefix_not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("review_branch_prefix must not be blank")
+    def _review_prefix_no_whitespace(cls, value: str) -> str:
         if any(ch.isspace() for ch in value):
             raise ValueError("review_branch_prefix must not contain whitespace")
         return value

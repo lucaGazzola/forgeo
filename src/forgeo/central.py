@@ -66,7 +66,7 @@ import sys
 import threading
 import tomllib
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -1063,30 +1063,13 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
             description = payload.get("description", "")
             if not isinstance(description, str) or not description.strip():
                 return self._reject(400, "description is required")
-            acceptance_criteria = payload.get("acceptance_criteria", [])
-            if not isinstance(acceptance_criteria, list) or not all(
-                isinstance(criterion, str) for criterion in acceptance_criteria
-            ):
-                return self._reject(400, "acceptance_criteria must be a list of strings")
+            # Remaining fields (acceptance_criteria, agent_command, run_at,
+            # review_required, ...) are validated by the Task model below,
+            # so malformed values surface as 400 via the ValidationError
+            # path instead of a second hand-rolled type check here.
             agent_command = payload.get("agent_command")
-            if agent_command is not None and (
-                not isinstance(agent_command, str) or not agent_command.strip()
-            ):
-                return self._reject(400, "agent_command must be a non-blank string or null")
-            run_at = payload.get("run_at")
-            run_at_dt: datetime | None = None
-            if run_at is not None:
-                if not isinstance(run_at, str):
-                    return self._reject(400, "run_at must be an ISO-8601 datetime string or null")
-                try:
-                    run_at_dt = datetime.fromisoformat(run_at)
-                except ValueError:
-                    return self._reject(400, "run_at must be an ISO-8601 datetime string or null")
-
-            review_required = payload.get("review_required")
-            if review_required is not None and not isinstance(review_required, bool):
-                return self._reject(400, "review_required must be a boolean or null")
-
+            if isinstance(agent_command, str):
+                agent_command = agent_command.strip() or agent_command
             backlog = open_backlog(config)
             existing = asyncio.run(backlog.list_tasks())
             try:
@@ -1094,10 +1077,10 @@ def make_handler(token: str | None = None) -> type[BaseHTTPRequestHandler]:
                     id=web_task_id_for(existing),
                     title=title.strip(),
                     description=description.strip(),
-                    acceptance_criteria=acceptance_criteria,
-                    agent_command=agent_command.strip() if agent_command else None,
-                    run_at=run_at_dt,
-                    review_required=review_required if isinstance(review_required, bool) else None,
+                    acceptance_criteria=payload.get("acceptance_criteria", []),
+                    agent_command=agent_command,
+                    run_at=payload.get("run_at"),
+                    review_required=payload.get("review_required"),
                 )
             except ValidationError as exc:
                 return self._reject(400, f"invalid task field(s): {exc}")

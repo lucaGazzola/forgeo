@@ -278,6 +278,36 @@ def _add_description_args(
     )
 
 
+def _add_auth_store_args(
+    parser: argparse.ArgumentParser,
+    *,
+    provider_help: str,
+    config_help: str,
+    token_file_help: str,
+    api_base_help: str,
+) -> None:
+    """Add the shared ``--provider``/``--config``/``--token-file``/``--api-base`` options."""
+    parser.add_argument(
+        "--provider",
+        choices=["github", "gitlab", "jira"],
+        default="github",
+        help=provider_help,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=config_help,
+    )
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        default=None,
+        help=token_file_help,
+    )
+    parser.add_argument("--api-base", default=None, help=api_base_help)
+
+
 def _add_init_parser(sub: Any) -> None:
     init_parser = sub.add_parser(
         "init", help="Guided first-time setup: interactively write a forgeo.yaml."
@@ -773,17 +803,12 @@ def _add_auth_parsers(sub: Any) -> None:
     )
     auth_sub = auth_parser.add_subparsers(dest="auth_action")
     auth_login = auth_sub.add_parser("login", help="Log in via browser/OAuth and store a token.")
-    auth_login.add_argument(
-        "--provider",
-        choices=["github", "gitlab", "jira"],
-        default="github",
-        help="Backlog provider to authenticate (default: github).",
-    )
-    auth_login.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Forgeo config to read OAuth client_id from (defaults to forgeo.yaml if present).",
+    _add_auth_store_args(
+        auth_login,
+        provider_help="Backlog provider to authenticate (default: github).",
+        config_help="Forgeo config to read OAuth client_id from (defaults to forgeo.yaml if present).",
+        token_file_help="Where to store the token (defaults to ~/.config/forgeo/tokens/<provider>.json).",
+        api_base_help="Provider API base URL (default: https://api.github.com / https://gitlab.com / jira site, or from config).",
     )
     auth_login.add_argument("--client-id", default=None, help="OAuth client ID (overrides config).")
     auth_login.add_argument(
@@ -798,12 +823,6 @@ def _add_auth_parsers(sub: Any) -> None:
         help="OAuth scope to request (default: repo for github, api for gitlab, offline_access for jira).",
     )
     auth_login.add_argument(
-        "--token-file",
-        type=Path,
-        default=None,
-        help="Where to store the token (defaults to ~/.config/forgeo/tokens/<provider>.json).",
-    )
-    auth_login.add_argument(
         "--callback-port",
         type=_callback_port,
         default=None,
@@ -815,55 +834,26 @@ def _add_auth_parsers(sub: Any) -> None:
         help="Atlassian Jira Cloud ID (overrides jira.auth.oauth.cloud_id).",
     )
     auth_login.add_argument(
-        "--api-base",
-        default=None,
-        help="Provider API base URL (default: https://api.github.com / https://gitlab.com / jira site, or from config).",
-    )
-    auth_login.add_argument(
         "--no-open-browser",
         action="store_true",
         help="Do not open the browser automatically (print the URL instead; browser and device flows).",
     )
     auth_status = auth_sub.add_parser("status", help="Show stored OAuth token status.")
-    auth_status.add_argument(
-        "--provider",
-        choices=["github", "gitlab", "jira"],
-        default="github",
-        help="Backlog provider (default: github).",
+    _add_auth_store_args(
+        auth_status,
+        provider_help="Backlog provider (default: github).",
+        config_help="Forgeo config to resolve token file / api base.",
+        token_file_help="Token file to inspect.",
+        api_base_help="Provider API base URL.",
     )
-    auth_status.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Forgeo config to resolve token file / api base.",
-    )
-    auth_status.add_argument(
-        "--token-file",
-        type=Path,
-        default=None,
-        help="Token file to inspect.",
-    )
-    auth_status.add_argument("--api-base", default=None, help="Provider API base URL.")
     auth_logout = auth_sub.add_parser("logout", help="Remove the stored OAuth token.")
-    auth_logout.add_argument(
-        "--provider",
-        choices=["github", "gitlab", "jira"],
-        default="github",
-        help="Backlog provider (default: github).",
+    _add_auth_store_args(
+        auth_logout,
+        provider_help="Backlog provider (default: github).",
+        config_help="Forgeo config to resolve token file / api base.",
+        token_file_help="Token file to remove.",
+        api_base_help="Provider API base URL.",
     )
-    auth_logout.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Forgeo config to resolve token file / api base.",
-    )
-    auth_logout.add_argument(
-        "--token-file",
-        type=Path,
-        default=None,
-        help="Token file to remove.",
-    )
-    auth_logout.add_argument("--api-base", default=None, help="Provider API base URL.")
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -271,7 +271,7 @@ def test_github_missing_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     config = GithubBacklogConfig(auth={"token_env": "GITHUB_TOKEN"}, repo="owner/repo")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(Exception, match="GITHUB_TOKEN"):
-        GithubClient("https://api.github.com", config)._auth_header()
+        GithubClient("https://api.github.com", config)._auth_headers()
 
 
 def test_gitlab_missing_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:

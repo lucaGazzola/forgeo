@@ -6,13 +6,8 @@ from typing import Any
 from urllib.parse import quote
 
 from forgeo.backlog import BacklogUnavailableError
-from forgeo.backlog_issue_base import (
-    RestIssueClientBase,
-    oauth_access_token,
-    require_env_token,
-)
+from forgeo.backlog_issue_base import RestIssueClientBase
 from forgeo.backlog_marker import MarkerIssueBacklog
-from forgeo.models import GitlabBacklogConfig
 
 
 class GitlabRequestError(BacklogUnavailableError):
@@ -29,27 +24,14 @@ class GitlabClient(RestIssueClientBase):
     api_prefix = "/api/v4"
     update_method = "PUT"
 
-    def __init__(self, base_url: str, config: GitlabBacklogConfig) -> None:
-        super().__init__(base_url, config)
-
     def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
         from forgeo.oauth_gitlab import GitlabOAuthError, GitlabOAuthTokenProvider, GitlabTokenStore
 
         return GitlabTokenStore, GitlabOAuthTokenProvider, GitlabOAuthError
 
-    def _auth_headers(self) -> dict[str, str]:
-        auth = self.config.auth
-        if auth.token_env is not None:
-            token = require_env_token(auth.token_env, "GitLab", GitlabRequestError)
-            # GitLab prefers PRIVATE-TOKEN, but also accepts Bearer
-            return {"PRIVATE-TOKEN": token, "Authorization": f"Bearer {token}"}
-        if auth.oauth is not None:
-            provider = self._oauth_token_provider()
-            assert provider is not None
-            from forgeo.oauth_gitlab import GitlabOAuthError
-
-            return {"Authorization": f"Bearer {oauth_access_token(provider, oauth_error_cls=GitlabOAuthError, request_error_cls=GitlabRequestError)}"}
-        raise GitlabRequestError("GitLab auth is not configured (token_env or oauth required)")
+    def _token_headers(self, token: str) -> dict[str, str]:
+        # GitLab prefers PRIVATE-TOKEN, but also accepts Bearer.
+        return {"PRIVATE-TOKEN": token, "Authorization": f"Bearer {token}"}
 
     def _extra_headers(self) -> dict[str, str]:
         return {"Accept": "application/json"}

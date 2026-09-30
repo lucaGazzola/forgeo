@@ -6,13 +6,8 @@ from typing import Any
 from urllib.parse import quote
 
 from forgeo.backlog import BacklogUnavailableError
-from forgeo.backlog_issue_base import (
-    RestIssueClientBase,
-    oauth_access_token,
-    require_env_token,
-)
+from forgeo.backlog_issue_base import RestIssueClientBase
 from forgeo.backlog_marker import MarkerIssueBacklog
-from forgeo.models import GithubBacklogConfig
 
 
 class GithubRequestError(BacklogUnavailableError):
@@ -27,9 +22,6 @@ class GithubClient(RestIssueClientBase):
     request_error_cls = GithubRequestError
     provider_label = "GitHub"
 
-    def __init__(self, base_url: str, config: GithubBacklogConfig) -> None:
-        super().__init__(base_url, config)
-
     def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
         from forgeo.oauth_github import (
             GithubOAuthError,
@@ -38,22 +30,6 @@ class GithubClient(RestIssueClientBase):
         )
 
         return GithubTokenStore, GithubOAuthTokenProvider, GithubOAuthError
-
-    def _auth_header(self) -> str:
-        auth = self.config.auth
-        if auth.token_env is not None:
-            token = require_env_token(auth.token_env, "GitHub", GithubRequestError)
-            return f"Bearer {token}"
-        if auth.oauth is not None:
-            provider = self._oauth_token_provider()
-            assert provider is not None
-            from forgeo.oauth_github import GithubOAuthError
-
-            return f"Bearer {oauth_access_token(provider, oauth_error_cls=GithubOAuthError, request_error_cls=GithubRequestError)}"
-        raise GithubRequestError("GitHub auth is not configured (token_env or oauth required)")
-
-    def _auth_headers(self) -> dict[str, str]:
-        return {"Authorization": self._auth_header()}
 
     def _extra_headers(self) -> dict[str, str]:
         return {

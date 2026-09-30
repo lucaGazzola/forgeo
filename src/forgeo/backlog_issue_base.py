@@ -526,11 +526,12 @@ class RestIssueClientBase:
 
     Both clients did the same dance — lazy OAuth provider, ``_api_url``,
     ``_request`` with one OAuth retry, and CRUD wrappers over issue paths —
-    differing only in headers, path shapes and the update/delete verbs.
-    Subclasses provide :meth:`_oauth_components`, :meth:`_auth_headers`,
+    differing only in header shape, path shapes and the update/delete verbs.
+    Subclasses provide :meth:`_oauth_components`,
     :meth:`_collection_path`, :meth:`_comment_path` (plus
-    :meth:`_search_query`/:meth:`_extra_headers` when the defaults don't
-    fit) and inherit the rest. Used via ``asyncio.to_thread``.
+    :meth:`_search_query`/:meth:`_extra_headers`/:meth:`_token_headers` when
+    the defaults don't fit) and inherit the rest. Used via
+    ``asyncio.to_thread``.
     """
 
     request_error_cls: type[Exception] = Exception
@@ -547,8 +548,34 @@ class RestIssueClientBase:
         """Return ``(store_cls, provider_cls, oauth_error_cls)`` (lazy import)."""
         raise NotImplementedError
 
+    def _token_headers(self, token: str) -> dict[str, str]:
+        """Auth headers for a resolved ``token`` (Bearer by default)."""
+        return {"Authorization": f"Bearer {token}"}
+
     def _auth_headers(self) -> dict[str, str]:
-        raise NotImplementedError
+        """Resolve the PAT/OAuth token and shape it via :meth:`_token_headers`.
+
+        Shared by the GitHub/GitLab clients, which differed only in the
+        header shape (GitLab additionally sends ``PRIVATE-TOKEN``) and in
+        the provider label/error classes used for messages.
+        """
+        auth = self.config.auth
+        if auth.token_env is not None:
+            token = require_env_token(auth.token_env, self.provider_label, self.request_error_cls)
+            return self._token_headers(token)
+        if auth.oauth is not None:
+            provider = self._oauth_token_provider()
+            assert provider is not None
+            _, _, oauth_error_cls = self._oauth_components()
+            token = oauth_access_token(
+                provider,
+                oauth_error_cls=oauth_error_cls,
+                request_error_cls=self.request_error_cls,
+            )
+            return self._token_headers(token)
+        raise self.request_error_cls(
+            f"{self.provider_label} auth is not configured (token_env or oauth required)"
+        )
 
     def _extra_headers(self) -> dict[str, str]:
         return {}

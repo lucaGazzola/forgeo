@@ -1602,27 +1602,6 @@ def _task_show_hint(task: Task) -> str | None:
     return None
 
 
-def _default_show_task(tasks: list[Task]) -> Task | None:
-    """The task ``show`` displays when no id is given: the scheduler's next pick.
-
-    Oldest ``BLOCKED`` first (that is what pauses the cycle and needs eyes),
-    else the oldest runnable ``OPEN`` task (overdue ``run_at`` first, matching
-    :func:`forgeo.backlog.oldest_open_task`), else the oldest waiting ``OPEN``
-    task so its detail still explains why it waits. ``None`` when there is no
-    ``OPEN`` or ``BLOCKED`` task to show.
-    """
-    blocked = _oldest_with_status(tasks, TaskStatus.BLOCKED)
-    if blocked:
-        return blocked
-    picked = oldest_open_task(tasks)
-    if picked is not None:
-        return picked
-    waiting = _oldest_with_status(tasks, TaskStatus.OPEN)
-    if waiting:
-        return waiting
-    return None
-
-
 def _print_task_detail(task: Task) -> None:
     """Print one task's detail plus its most useful next step, if any."""
     console.print(
@@ -1644,37 +1623,29 @@ def cmd_task_show(args: argparse.Namespace) -> int:
     copy-paste.
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
-        return _cmd_task_show_next(args)
+        loaded = _load_default_task(
+            args,
+            lambda tasks: _oldest_with_status(tasks, TaskStatus.BLOCKED)
+            or oldest_open_task(tasks)
+            or _oldest_with_status(tasks, TaskStatus.OPEN),
+            empty_message=(
+                "No OPEN or BLOCKED tasks to show — "
+                "add one with `forgeo task add --title ...`."
+            ),
+        )
+        if isinstance(loaded, int):
+            return loaded
+        _config, task = loaded
+        console.print(
+            f"[dim]Showing {task.id} (no id given — the next task the scheduler "
+            f"would pick).[/dim]"
+        )
+        _print_task_detail(task)
+        return 0
     fetched = _resolve_config_backlog_task(args)
     if isinstance(fetched, int):
         return fetched
     _config, _backlog, task = fetched
-    _print_task_detail(task)
-    return 0
-
-
-def _cmd_task_show_next(args: argparse.Namespace) -> int:
-    """Handle ``forgeo task show`` with no id: show the scheduler's next pick.
-
-    Read-only; never starts an agent. Reports the defaulted id up front so
-    the magic is visible, then prints the same detail (plus hint) as an
-    explicit ``show``.
-    """
-    loaded = _load_default_task(
-        args,
-        _default_show_task,
-        empty_message=(
-            "No OPEN or BLOCKED tasks to show — "
-            "add one with `forgeo task add --title ...`."
-        ),
-    )
-    if isinstance(loaded, int):
-        return loaded
-    _config, task = loaded
-    console.print(
-        f"[dim]Showing {task.id} (no id given — the next task the scheduler "
-        f"would pick).[/dim]"
-    )
     _print_task_detail(task)
     return 0
 
@@ -1768,50 +1739,6 @@ def cmd_task_edit(args: argparse.Namespace) -> int:
     return _run_task_now(config, updated.id, reopen=True)
 
 
-def _default_reopen_task(tasks: list[Task]) -> Task | None:
-    """The task ``reopen`` retries when no id is given: oldest ``BLOCKED`` first.
-
-    That mirrors the cycle's pause rule (any ``BLOCKED`` task pauses the
-    forgeo, so the oldest one is what needs eyes first); with no ``BLOCKED``
-    task the oldest ``FAILED`` task is next (same ``reopen``/``retry`` split
-    as the explicit path). ``None`` when no task is reopenable.
-    """
-    for status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
-        oldest = _oldest_with_status(tasks, status)
-        if oldest is not None:
-            return oldest
-    return None
-
-
-def _cmd_task_reopen_next(args: argparse.Namespace) -> int:
-    """Handle ``forgeo task reopen`` with no id: reopen the oldest waiting task.
-
-    Never starts an agent, unless ``--run`` is passed (then the defaulted
-    task is reopened and run, like the explicit path). Reports the defaulted
-    id up front so the magic is visible, then delegates to
-    :func:`cmd_task_reopen` with the id filled in.
-    """
-    loaded = _load_default_task(
-        args,
-        _default_reopen_task,
-        empty_message=(
-            "No BLOCKED or FAILED tasks to reopen — "
-            "add one with `forgeo task add --title ...` or wait for the next cycle."
-        ),
-    )
-    if isinstance(loaded, int):
-        return loaded
-    _config, task = loaded
-    console.print(
-        f"[dim]Reopening {task.id} (no id given — the oldest "
-        f"{task.status.value} task).[/dim]"
-    )
-    forwarded_kwargs = dict(vars(args))
-    forwarded_kwargs["task"] = task.id
-    forwarded_kwargs["task_id"] = None
-    return cmd_task_reopen(argparse.Namespace(**forwarded_kwargs))
-
-
 def cmd_task_reopen(args: argparse.Namespace) -> int:
     """Handle ``forgeo task reopen``: move a ``BLOCKED``/``FAILED`` task to ``OPEN``.
 
@@ -1826,7 +1753,26 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     reopened, so the paused-forgeo recovery needs no id copy-paste.
     """
     if getattr(args, "task", None) is None and getattr(args, "task_id", None) is None:
-        return _cmd_task_reopen_next(args)
+        loaded = _load_default_task(
+            args,
+            lambda tasks: _oldest_with_status(tasks, TaskStatus.BLOCKED)
+            or _oldest_with_status(tasks, TaskStatus.FAILED),
+            empty_message=(
+                "No BLOCKED or FAILED tasks to reopen — "
+                "add one with `forgeo task add --title ...` or wait for the next cycle."
+            ),
+        )
+        if isinstance(loaded, int):
+            return loaded
+        _config, task = loaded
+        console.print(
+            f"[dim]Reopening {task.id} (no id given — the oldest "
+            f"{task.status.value} task).[/dim]"
+        )
+        forwarded_kwargs = dict(vars(args))
+        forwarded_kwargs["task"] = task.id
+        forwarded_kwargs["task_id"] = None
+        return cmd_task_reopen(argparse.Namespace(**forwarded_kwargs))
     fetched = _resolve_config_backlog_task(args)
     if isinstance(fetched, int):
         return fetched

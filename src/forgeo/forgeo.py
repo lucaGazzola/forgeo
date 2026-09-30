@@ -65,15 +65,6 @@ class TaskNotRunnableError(RuntimeError):
     """
 
 
-def _execution_outcome(status: ExecutionStatus) -> RunOutcome:
-    """Map an agent execution status onto a run record outcome.
-
-    The two enums share member names for the agent outcomes (SUCCESS, BLOCKED,
-    ERROR), so the mapping is a plain name lookup.
-    """
-    return RunOutcome[status.name]
-
-
 def _subject_label(task: Task, *, is_refactor: bool) -> str:
     """Log subject naming the actor of a message."""
     return "Refactoring pass" if is_refactor else f"Task {task.id}"
@@ -378,7 +369,7 @@ class Forgeo:
             result = self._last_agent_result
             if result is None:
                 return RunOutcome.ERROR
-            return _execution_outcome(result.status)
+            return RunOutcome[result.status.name]
         return {
             "blocked": RunOutcome.BLOCKED,
             "paused": RunOutcome.PAUSED,

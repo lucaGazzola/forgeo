@@ -2864,30 +2864,30 @@ def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
     commands historically treated any unknown provider as GitHub, so
     preserve that instead of erroring. Imports stay function-local (resolved
     on each call) so tests can monkeypatch e.g.
-    ``forgeo.oauth_github.run_browser_flow`` and ``auth`` never imports
+    ``forgeo.oauth_common.github_run_browser_flow`` and ``auth`` never imports
     provider modules it does not use. Attribute names follow the
     ``<Stem>OAuthError`` / ``<Stem>TokenStore`` /
-    ``<key>_default_token_path`` / ``<key>_oauth_base`` convention shared
-    by the three provider modules; Jira has no device flow, so
-    ``device_flow`` resolves to ``None`` there.
+    ``<key>_default_token_path`` / ``<key>_oauth_base`` convention; the
+    GitHub/GitLab flows live in ``oauth_common`` under ``<key>_run_*``
+    names. Jira has no device flow, so ``device_flow`` resolves to ``None``
+    there.
     """
     key = provider if provider in _OAUTH_PARAM_DEFAULTS else "github"
     _provider_module: Any
-    if key == "gitlab":
-        from forgeo import oauth_gitlab as _gitlab_module
+    if key in ("github", "gitlab"):
+        from forgeo import oauth_common as _issue_oauth_module
 
-        _provider_module = _gitlab_module
-        stem, label = "Gitlab", "GitLab"
-    elif key == "jira":
+        _provider_module = _issue_oauth_module
+        stem, label = ("Gitlab", "GitLab") if key == "gitlab" else ("Github", "GitHub")
+        browser_flow = getattr(_provider_module, f"{key}_run_browser_flow")
+        device_flow = getattr(_provider_module, f"{key}_run_device_flow", None)
+    else:
         from forgeo import oauth_jira as _jira_module
 
         _provider_module = _jira_module
         stem, label = "Jira", "Jira"
-    else:
-        from forgeo import oauth_github as _github_module
-
-        _provider_module = _github_module
-        stem, label = "Github", "GitHub"
+        browser_flow = _provider_module.run_browser_flow
+        device_flow = getattr(_provider_module, "run_device_flow", None)
     return _AuthProviderSpec(
         key=key,
         label=label,
@@ -2895,8 +2895,8 @@ def _auth_provider_spec(provider: str) -> _AuthProviderSpec:
         store_cls=getattr(_provider_module, f"{stem}TokenStore"),
         default_token_path=getattr(_provider_module, f"{key}_default_token_path"),
         oauth_base_fn=getattr(_provider_module, f"{key}_oauth_base"),
-        browser_flow=_provider_module.run_browser_flow,
-        device_flow=getattr(_provider_module, "run_device_flow", None),
+        browser_flow=browser_flow,
+        device_flow=device_flow,
     )
 
 

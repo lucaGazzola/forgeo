@@ -1303,7 +1303,7 @@ def test_auth_login_passes_browser_options_to_github_flow(tmp_path, monkeypatch)
         calls.update(client_id=client_id, oauth_base=oauth_base, scope=scope, **kwargs)
         return {"access_token": "secret"}
 
-    monkeypatch.setattr("forgeo.oauth_github.run_browser_flow", fake_browser_flow)
+    monkeypatch.setattr("forgeo.oauth_common.github_run_browser_flow", fake_browser_flow)
     args = build_parser().parse_args(
         [
             "auth",
@@ -1394,7 +1394,7 @@ def test_auth_status_uses_project_default_config(tmp_path, monkeypatch, capsys):
         "agent_command: echo\n",
         encoding="utf-8",
     )
-    from forgeo.oauth_github import GithubTokenStore
+    from forgeo.oauth_common import GithubTokenStore
 
     GithubTokenStore(path=token_path).save({"access_token": "secret-token"})
     monkeypatch.chdir(config_dir)

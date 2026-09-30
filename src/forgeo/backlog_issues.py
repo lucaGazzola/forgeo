@@ -25,7 +25,7 @@ class GithubClient(RestIssueClientBase):
     provider_label = "GitHub"
 
     def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
-        from forgeo.oauth_github import (
+        from forgeo.oauth_common import (
             GithubOAuthError,
             GithubOAuthTokenProvider,
             GithubTokenStore,
@@ -66,7 +66,7 @@ class GitlabClient(RestIssueClientBase):
     update_method = "PUT"
 
     def _oauth_components(self) -> tuple[Any, Any, type[Exception]]:
-        from forgeo.oauth_gitlab import GitlabOAuthError, GitlabOAuthTokenProvider, GitlabTokenStore
+        from forgeo.oauth_common import GitlabOAuthError, GitlabOAuthTokenProvider, GitlabTokenStore
 
         return GitlabTokenStore, GitlabOAuthTokenProvider, GitlabOAuthError
 

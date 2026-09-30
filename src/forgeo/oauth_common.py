@@ -1,9 +1,8 @@
-"""Shared helpers for OAuth / browser login (GitHub, GitLab, Jira).
+"""Shared OAuth / browser login (GitHub, GitLab, Jira).
 
-Extracted to avoid duplication across ``oauth_github``, ``oauth_gitlab`` and
-``oauth_jira``. Each provider still has its own TokenStore/Provider with
-provider-specific defaults, but the PKCE, loopback, token-file and HTTP
-helpers are shared.
+PKCE, loopback, token-file and HTTP helpers live here, as do the wired
+GitHub/GitLab provider bindings (built once via :func:`build_simple_oauth`).
+Jira keeps its own module (``oauth_jira``) for its Atlassian-specific flow.
 """
 
 from __future__ import annotations
@@ -746,3 +745,82 @@ def build_simple_oauth(
             extra_authorize_params=extra_authorize_params,
         ),
     )
+
+
+# ------------------------------------------------------------------ #
+# GitHub / GitLab provider bindings                                   #
+# ------------------------------------------------------------------ #
+# Wired once here (instead of one shim module per provider) so there is
+# a single place for the GitHub/GitLab OAuth objects. Flow helpers use
+# a ``<key>_`` prefix (``github_run_browser_flow`` ...) because both
+# providers live in this module; the ``<Stem>`` class names and
+# ``<key>_default_token_path`` / ``<key>_oauth_base`` names keep the
+# convention the ``auth`` commands and setup wizard resolve.
+
+
+class GithubOAuthError(RuntimeError):
+    """A browser/device login step failed; message is user-facing."""
+
+
+class GitlabOAuthError(RuntimeError):
+    """A browser/device login step failed; message is user-facing."""
+
+
+_github_provider = build_simple_oauth(
+    GithubOAuthError, "github", "GitHub",
+    default_base="https://api.github.com", plain_host="api.github.com",
+    strip_suffixes=("/api/v3",), oauth_base_fn=github_web_base,
+    device_paths=("/login/device/code",),
+    token_path="/login/oauth/access_token",
+    authorize_path="/login/oauth/authorize", default_scope="repo",
+)
+
+
+_gitlab_provider = build_simple_oauth(
+    GitlabOAuthError, "gitlab", "GitLab",
+    default_base="https://gitlab.com", plain_host="gitlab.com",
+    strip_suffixes=("/api/v4", "/api"),
+    oauth_base_fn=lambda base: strip_url_suffix(base.rstrip("/"), ("/api/v4", "/api")),
+    device_paths=("/oauth/device/code", "/oauth/authorize_device"),
+    token_path="/oauth/token", authorize_path="/oauth/authorize",
+    default_scope="api", extra_authorize_params={"response_type": "code"},
+    extra_url_keys=("verification_url",),
+)
+
+
+github_default_token_path = _github_provider.default_token_path
+github_oauth_base = _github_provider.oauth_base
+
+
+GithubTokenStore = _github_provider.TokenStore
+GithubOAuthTokenProvider = _github_provider.TokenProvider
+github_run_device_flow = _github_provider.run_device_flow
+github_run_browser_flow = _github_provider.run_browser_flow
+
+
+gitlab_default_token_path = _gitlab_provider.default_token_path
+gitlab_oauth_base = _gitlab_provider.oauth_base
+
+
+GitlabTokenStore = _gitlab_provider.TokenStore
+GitlabOAuthTokenProvider = _gitlab_provider.TokenProvider
+gitlab_run_device_flow = _gitlab_provider.run_device_flow
+gitlab_run_browser_flow = _gitlab_provider.run_browser_flow
+
+
+__all__ = [
+    "GithubOAuthError",
+    "GithubOAuthTokenProvider",
+    "GithubTokenStore",
+    "GitlabOAuthError",
+    "GitlabOAuthTokenProvider",
+    "GitlabTokenStore",
+    "github_default_token_path",
+    "github_oauth_base",
+    "github_run_browser_flow",
+    "github_run_device_flow",
+    "gitlab_default_token_path",
+    "gitlab_oauth_base",
+    "gitlab_run_browser_flow",
+    "gitlab_run_device_flow",
+]

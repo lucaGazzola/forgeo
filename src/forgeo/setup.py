@@ -318,9 +318,11 @@ _ISSUE_OAUTH_SPECS: dict[str, dict[str, str | None]] = {
         "flow_prompt": "[bold]OAuth flow[/bold] [device/browser] [default device]",
         "default_scope": "repo",
         "secret_prompt": "[bold]Client secret env var (for confidential OAuth Apps, optional)[/bold]",
-        "module": "forgeo.oauth_github",
+        "module": "forgeo.oauth_common",
         "store_attr": "GithubTokenStore",
         "oauth_base_attr": "github_oauth_base",
+        "browser_attr": "github_run_browser_flow",
+        "device_attr": "github_run_device_flow",
         "success_note": "Token cached; forgeo validate/start will use it.",
     },
     "gitlab": {
@@ -332,9 +334,11 @@ _ISSUE_OAUTH_SPECS: dict[str, dict[str, str | None]] = {
         "flow_prompt": "[bold]OAuth flow[/bold] [browser/device] [default browser]",
         "default_scope": "api",
         "secret_prompt": "[bold]Client secret env var (for confidential apps, optional)[/bold]",
-        "module": "forgeo.oauth_gitlab",
+        "module": "forgeo.oauth_common",
         "store_attr": "GitlabTokenStore",
         "oauth_base_attr": "gitlab_oauth_base",
+        "browser_attr": "gitlab_run_browser_flow",
+        "device_attr": "gitlab_run_device_flow",
         "success_note": None,
     },
 }
@@ -379,7 +383,7 @@ def _offer_issue_oauth_login(
 
     mod = importlib.import_module(str(spec["module"]))
     store_attr, base_attr = str(spec["store_attr"]), str(spec["oauth_base_attr"])
-    browser_attr, device_attr = "run_browser_flow", "run_device_flow"
+    browser_attr, device_attr = str(spec["browser_attr"]), str(spec["device_attr"])
     store_cls = getattr(mod, store_attr)
     oauth_base = getattr(mod, base_attr)(api_base)
     browser_flow = getattr(mod, browser_attr)

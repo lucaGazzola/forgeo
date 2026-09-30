@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
     DEFAULT_DEVICE_POLL_INTERVAL,
@@ -13,12 +12,12 @@ from forgeo.oauth_common import (
     EXPIRY_MARGIN_SECONDS,
     CachedFileTokenProvider,
     host_token_path,
+    make_browser_flow,
     make_callback_handler,
     make_device_flow,
     make_post_form,
     make_token_store,
     poll_device_grant,
-    run_pkce_browser_login,
     strip_url_suffix,
 )
 
@@ -112,55 +111,16 @@ run_device_flow = make_device_flow(
 )
 
 
-_CallbackHandler = make_callback_handler("GitLab")
-
-
-def run_browser_flow(
-    client_id: str,
-    oauth_base: str,
-    scope: str | None = None,
-    *,
-    client_secret: str | None = None,
-    open_browser: bool = True,
-    callback_port: int | None = None,
-    timeout: float = 300.0,
-) -> dict[str, Any]:
-    def _authorize_url(redirect_uri: str, state: str, challenge: str) -> str:
-        params: dict[str, str] = {
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": scope or "api",
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-        return f"{oauth_base.rstrip('/')}/oauth/authorize?{urlencode(params)}"
-
-    def _token_fields(code: str, redirect_uri: str, verifier: str) -> dict[str, str]:
-        fields: dict[str, str] = {
-            "client_id": client_id,
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "code_verifier": verifier,
-            "grant_type": "authorization_code",
-        }
-        if client_secret:
-            fields["client_secret"] = client_secret
-        return fields
-
-    return run_pkce_browser_login(
-        handler_cls=_CallbackHandler,
-        error_cls=GitlabOAuthError,
-        provider_label="GitLab",
-        build_authorize_url=_authorize_url,
-        build_token_fields=_token_fields,
-        post_fn=_post_form,
-        token_url=f"{oauth_base.rstrip('/')}/oauth/token",
-        open_browser=open_browser,
-        callback_port=callback_port,
-        timeout=timeout,
-    )
+run_browser_flow = make_browser_flow(
+    make_callback_handler("GitLab"),
+    GitlabOAuthError,
+    "GitLab",
+    _post_form,
+    authorize_path="/oauth/authorize",
+    token_path="/oauth/token",
+    default_scope="api",
+    extra_authorize_params={"response_type": "code"},
+)
 
 
 __all__ = [

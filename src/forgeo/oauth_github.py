@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 from forgeo.oauth_common import (
     DEFAULT_DEVICE_POLL_INTERVAL,
@@ -33,12 +32,12 @@ from forgeo.oauth_common import (
     CachedFileTokenProvider,
     github_web_base,
     host_token_path,
+    make_browser_flow,
     make_callback_handler,
     make_device_flow,
     make_post_form,
     make_token_store,
     poll_device_grant,
-    run_pkce_browser_login,
 )
 
 
@@ -117,56 +116,15 @@ run_device_flow = make_device_flow(
 )
 
 
-_CallbackHandler = make_callback_handler("GitHub")
-
-
-def run_browser_flow(
-    client_id: str,
-    oauth_base: str,
-    scope: str | None = None,
-    *,
-    client_secret: str | None = None,
-    open_browser: bool = True,
-    callback_port: int | None = None,
-    timeout: float = 300.0,
-) -> dict[str, Any]:
-    """Open browser for GitHub OAuth and exchange code for token."""
-
-    def _authorize_url(redirect_uri: str, state: str, challenge: str) -> str:
-        params: dict[str, str] = {
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scope or "repo",
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-        return f"{oauth_base.rstrip('/')}/login/oauth/authorize?{urlencode(params)}"
-
-    def _token_fields(code: str, redirect_uri: str, verifier: str) -> dict[str, str]:
-        fields: dict[str, str] = {
-            "client_id": client_id,
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "code_verifier": verifier,
-            "grant_type": "authorization_code",
-        }
-        if client_secret:
-            fields["client_secret"] = client_secret
-        return fields
-
-    return run_pkce_browser_login(
-        handler_cls=_CallbackHandler,
-        error_cls=GithubOAuthError,
-        provider_label="GitHub",
-        build_authorize_url=_authorize_url,
-        build_token_fields=_token_fields,
-        post_fn=_post_form,
-        token_url=f"{oauth_base.rstrip('/')}/login/oauth/access_token",
-        open_browser=open_browser,
-        callback_port=callback_port,
-        timeout=timeout,
-    )
+run_browser_flow = make_browser_flow(
+    make_callback_handler("GitHub"),
+    GithubOAuthError,
+    "GitHub",
+    _post_form,
+    authorize_path="/login/oauth/authorize",
+    token_path="/login/oauth/access_token",
+    default_scope="repo",
+)
 
 
 __all__ = [

@@ -556,6 +556,79 @@ def make_post_form(error_cls: type[Exception], label: str) -> Callable[..., dict
     return _post
 
 
+def make_browser_flow(
+    handler_cls: type[CallbackHandler],
+    error_cls: type[Exception],
+    provider_label: str,
+    post_fn: Callable[[str, dict[str, str]], dict[str, Any]],
+    *,
+    authorize_path: str,
+    token_path: str,
+    default_scope: str,
+    extra_authorize_params: dict[str, str] | None = None,
+) -> Callable[..., dict[str, Any]]:
+    """Build a ``run_browser_flow`` wrapper around :func:`run_pkce_browser_login`.
+
+    ``authorize_path``/``token_path`` are appended to the provider's
+    ``oauth_base`` (e.g. ``"/login/oauth/authorize"`` for GitHub,
+    ``"/oauth/authorize"`` for GitLab); ``default_scope`` fills in when the
+    caller passes no ``scope``. Shared so GitHub/GitLab don't duplicate the
+    authorize-URL/token-fields closures.
+    """
+
+    def run(
+        client_id: str,
+        oauth_base: str,
+        scope: str | None = None,
+        *,
+        client_secret: str | None = None,
+        open_browser: bool = True,
+        callback_port: int | None = None,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        base = oauth_base.rstrip("/")
+
+        def _authorize_url(redirect_uri: str, state: str, challenge: str) -> str:
+            params: dict[str, str] = {
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "scope": scope or default_scope,
+                "state": state,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            }
+            if extra_authorize_params:
+                params.update(extra_authorize_params)
+            return f"{base}{authorize_path}?{urlencode(params)}"
+
+        def _token_fields(code: str, redirect_uri: str, verifier: str) -> dict[str, str]:
+            fields: dict[str, str] = {
+                "client_id": client_id,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
+                "grant_type": "authorization_code",
+            }
+            if client_secret:
+                fields["client_secret"] = client_secret
+            return fields
+
+        return run_pkce_browser_login(
+            handler_cls=handler_cls,
+            error_cls=error_cls,
+            provider_label=provider_label,
+            build_authorize_url=_authorize_url,
+            build_token_fields=_token_fields,
+            post_fn=post_fn,
+            token_url=f"{base}{token_path}",
+            open_browser=open_browser,
+            callback_port=callback_port,
+            timeout=timeout,
+        )
+
+    return run
+
+
 def make_device_flow(
     request_fn: Callable[..., dict[str, Any]],
     poll_fn: Callable[..., dict[str, Any]],

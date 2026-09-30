@@ -2196,18 +2196,6 @@ def _print_config_load_error(
         console.print(f"[red]- {loc}: {error['msg']}[/red]", soft_wrap=True)
 
 
-def _load_config_or_error(config_path: Path) -> ForgeoConfig | None:
-    """Load an existing config; prints an error and returns None when missing/invalid."""
-    if not config_path.exists():
-        console.print(f"[red]Config file not found: {config_path}[/red]")
-        return None
-    try:
-        return load_config(config_path)
-    except (yaml.YAMLError, ValidationError) as exc:
-        _print_config_load_error(config_path, exc)
-        return None
-
-
 def _resolve_existing_config(
     args: argparse.Namespace,
 ) -> tuple[Path, ForgeoConfig] | None:
@@ -2220,8 +2208,13 @@ def _resolve_existing_config(
     config_path = _resolved_config_path(args)
     if config_path is None:
         return None
-    config = _load_config_or_error(config_path)
-    if config is None:
+    if not config_path.exists():
+        console.print(f"[red]Config file not found: {config_path}[/red]")
+        return None
+    try:
+        config = load_config(config_path)
+    except (yaml.YAMLError, ValidationError) as exc:
+        _print_config_load_error(config_path, exc)
         return None
     return config_path, config
 
@@ -2327,25 +2320,6 @@ def _resolve_config_and_task_id(args: argparse.Namespace) -> tuple[ForgeoConfig,
     return config, task_id
 
 
-def _load_backlog_task(config: ForgeoConfig, raw_id: str) -> tuple[BacklogStore, Task] | int:
-    """Fetch one task by id (honoring shorthand), printing errors.
-
-    Returns ``(backlog, task)`` or exit code ``1`` when the backlog is
-    unreachable or the id matches nothing, so callers collapse the
-    ``open_backlog``/``_resolve_backlog_task_id``/``Unknown task`` block
-    to three lines.
-    """
-    backlog = open_backlog(config)
-    try:
-        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, raw_id))
-    except BacklogUnavailableError as exc:
-        return _report_backlog_unavailable(exc)
-    if task is None:
-        console.print(f"[red]Unknown task: {raw_id}.[/red]")
-        return 1
-    return backlog, task
-
-
 def _resolve_config_backlog_task(
     args: argparse.Namespace,
 ) -> tuple[ForgeoConfig, BacklogStore, Task] | int:
@@ -2359,10 +2333,14 @@ def _resolve_config_backlog_task(
     if isinstance(loaded, int):
         return loaded
     config, task_id = loaded
-    fetched = _load_backlog_task(config, task_id)
-    if isinstance(fetched, int):
-        return fetched
-    backlog, task = fetched
+    backlog = open_backlog(config)
+    try:
+        _actual_id, task = asyncio.run(_resolve_backlog_task_id(backlog, task_id))
+    except BacklogUnavailableError as exc:
+        return _report_backlog_unavailable(exc)
+    if task is None:
+        console.print(f"[red]Unknown task: {task_id}.[/red]")
+        return 1
     return config, backlog, task
 
 

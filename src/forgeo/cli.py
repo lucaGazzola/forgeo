@@ -252,6 +252,32 @@ def _add_task_id_args(
     )
 
 
+def _add_description_args(
+    parser: argparse.ArgumentParser, description_help: str, file_help: str
+) -> None:
+    """Add the shared ``--description``/``--description-file`` option pair.
+
+    ``task add`` and ``task edit`` accept the same description input (inline
+    text, ``-`` for stdin, or a file) resolved later by
+    :func:`_read_description_input`. The help texts stay per-command, so
+    this helper only removes the structural duplication.
+    """
+    parser.add_argument(
+        "--description",
+        required=False,
+        default=None,
+        help=description_help,
+    )
+    parser.add_argument(
+        "--description-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        dest="description_file",
+        help=file_help,
+    )
+
+
 def _add_init_parser(sub: Any) -> None:
     init_parser = sub.add_parser(
         "init", help="Guided first-time setup: interactively write a forgeo.yaml."
@@ -329,21 +355,12 @@ def _add_task_add_parser(task_sub: Any) -> None:
         metavar="TITLE",
         help="Task title, positional shorthand for --title.",
     )
-    task_add_parser.add_argument(
-        "--description",
-        required=False,
-        default=None,
-        help="What the agent should do (default: the title, so one-liners "
+    _add_description_args(
+        task_add_parser,
+        "What the agent should do (default: the title, so one-liners "
         "need only --title; use '-' to read from stdin; "
         "not with --description-file).",
-    )
-    task_add_parser.add_argument(
-        "--description-file",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        dest="description_file",
-        help="Read the description from FILE ('-' for stdin; "
+        "Read the description from FILE ('-' for stdin; "
         "not with --description).",
     )
     task_add_parser.add_argument(
@@ -438,19 +455,11 @@ def _add_task_edit_parser(task_sub: Any) -> None:
         "Task id, positional shorthand for --task (3, TASK-3, #3 work).",
     )
     task_edit_parser.add_argument("--title", default=None, help="New task title.")
-    task_edit_parser.add_argument(
-        "--description",
-        default=None,
-        help="New task description (use '-' to read from stdin; "
+    _add_description_args(
+        task_edit_parser,
+        "New task description (use '-' to read from stdin; "
         "not with --description-file).",
-    )
-    task_edit_parser.add_argument(
-        "--description-file",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        dest="description_file",
-        help="Read the new description from FILE ('-' for stdin; "
+        "Read the new description from FILE ('-' for stdin; "
         "not with --description).",
     )
     task_edit_parser.add_argument(

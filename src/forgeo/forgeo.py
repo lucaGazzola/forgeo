@@ -298,90 +298,55 @@ class Forgeo:
     def _record_run(self, outcome: str, started_at: datetime) -> None:
         """Build and append the run record for a completed cycle."""
         finished_at = datetime.now(UTC)
-        task = self._cycle_task(outcome)
+        if outcome in ("task", "refactor", "review"):
+            task = self._last_task
+        else:
+            task = self._blocked_tasks[0] if outcome == "blocked" and self._blocked_tasks else None
+        if outcome in ("task", "blocked", "review"):
+            kind: RunKind | None = RunKind.TASK
+        else:
+            kind = RunKind.REFACTOR if outcome == "refactor" else None
+        if outcome in ("task", "refactor", "review"):
+            result = self._last_agent_result
+            run_outcome = RunOutcome[result.status.name] if result is not None else RunOutcome.ERROR
+            exit_code = result.exit_code if result is not None else None
+        else:
+            run_outcome = {
+                "blocked": RunOutcome.BLOCKED,
+                "paused": RunOutcome.PAUSED,
+                "dirty": RunOutcome.DIRTY,
+                "skipped": RunOutcome.SKIPPED,
+            }.get(outcome, RunOutcome.ERROR)
+            exit_code = None
+        # Bounded agent-output tail, only for cycles that ran the agent.
+        logs: list[str] | None = None
+        if outcome in ("task", "refactor", "review"):
+            captured = self._last_agent_result.output_logs if self._last_agent_result is not None else None
+            cap = self.config.run_output_lines
+            if captured and cap > 0:
+                logs = captured[-cap:]
+        # Surface retry count only for retried tasks, to keep History tidy.
+        retry_count = (
+            task.retry_count
+            if outcome in ("task", "blocked", "review") and task is not None and task.retry_count > 0
+            else None
+        )
         self.recorder.append(
             RunRecord(
                 started_at=started_at,
                 finished_at=finished_at,
-                kind=self._run_kind(outcome),
+                kind=kind,
                 task_id=task.id if task is not None else None,
                 task_title=task.title if task is not None else None,
-                outcome=self._run_outcome(outcome),
-                agent_exit_code=self._run_exit_code(outcome),
+                outcome=run_outcome,
+                agent_exit_code=exit_code,
                 commit_sha=self._last_commit_sha if outcome in ("task", "refactor", "review") else None,
                 reason=self._last_run_reason if outcome in ("task", "refactor", "review") else None,
-                output_logs=self._run_output_logs(outcome),
-                retry_count=self._run_retry_count(task, outcome),
+                output_logs=logs,
+                retry_count=retry_count,
                 duration_seconds=round((finished_at - started_at).total_seconds(), 3),
             )
         )
-
-    def _run_retry_count(self, task: Task | None, outcome: str) -> int | None:
-        """The retry count to surface on a run record, if any.
-
-        Kept only for task runs whose task has actually been retried before
-        this run (``retry_count > 0``), so the History tab shows at a glance
-        that a run was a retry without cluttering never-retried runs. Refactor
-        runs and records for untouched tasks store ``None``.
-        """
-        if outcome not in ("task", "blocked", "review"):
-            return None
-        if task is None or task.retry_count <= 0:
-            return None
-        return task.retry_count
-
-    def _run_output_logs(self, outcome: str) -> list[str] | None:
-        """The bounded agent-output tail to persist for a finished cycle.
-
-        Kept only for cycles that actually ran the agent (``task``/``refactor``)
-        and capped at ``run_output_lines`` lines so a chatty agent can never
-        blow up a run record. ``None`` (not ``[]``) when nothing was captured,
-        keeping records without output indistinguishable from pre-field ones.
-        """
-        if outcome not in ("task", "refactor", "review"):
-            return None
-        result = self._last_agent_result
-        logs = result.output_logs if result is not None else None
-        if not logs:
-            return None
-        cap = self.config.run_output_lines
-        if cap <= 0:
-            return None
-        return logs[-cap:]
-
-    def _run_kind(self, outcome: str) -> RunKind | None:
-        if outcome in ("task", "blocked", "review"):
-            return RunKind.TASK
-        if outcome == "refactor":
-            return RunKind.REFACTOR
-        return None
-
-    def _cycle_task(self, outcome: str) -> Task | None:
-        """The task a finished cycle ran, when there is one to record."""
-        if outcome in ("task", "refactor", "review"):
-            return self._last_task
-        if outcome == "blocked":
-            return self._blocked_tasks[0] if self._blocked_tasks else None
-        return None
-
-    def _run_outcome(self, outcome: str) -> RunOutcome:
-        if outcome in ("task", "refactor", "review"):
-            result = self._last_agent_result
-            if result is None:
-                return RunOutcome.ERROR
-            return RunOutcome[result.status.name]
-        return {
-            "blocked": RunOutcome.BLOCKED,
-            "paused": RunOutcome.PAUSED,
-            "dirty": RunOutcome.DIRTY,
-            "skipped": RunOutcome.SKIPPED,
-        }.get(outcome, RunOutcome.ERROR)
-
-    def _run_exit_code(self, outcome: str) -> int | None:
-        if outcome not in ("task", "refactor", "review"):
-            return None
-        result = self._last_agent_result
-        return result.exit_code if result is not None else None
 
     # ------------------------------------------------------------------ #
     # Task execution                                                      #

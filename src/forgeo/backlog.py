@@ -1006,7 +1006,7 @@ class JSONBacklog(DocumentBacklogStore):
             try:
                 store = await self._read()
                 self._rotate_snapshots()
-                self._write_snapshot(store)
+                self._write_store(self.snapshot_paths[0], store)
                 logger.info("Backlog snapshot written to %s", self.snapshot_paths[0])
             except OSError as exc:
                 logger.warning("Could not snapshot backlog at %s: %s", self.path, exc)
@@ -1066,9 +1066,6 @@ class JSONBacklog(DocumentBacklogStore):
             if paths[index - 1].exists():
                 os.replace(paths[index - 1], paths[index])
 
-    def _write_snapshot(self, store: dict[str, Any]) -> None:
-        self._write_store(self.snapshot_paths[0], store)
-
     async def _write(self, store: dict[str, Any]) -> None:
         self._write_store(self.path, store)
 
@@ -1080,7 +1077,8 @@ class JSONBacklog(DocumentBacklogStore):
         )
 
 
-def _provider_factory(config: ForgeoConfig) -> BacklogStore:
+def open_backlog(config: ForgeoConfig) -> BacklogStore:
+    """The task provider selected by ``config`` via registry."""
     provider = config.effective_backlog_provider
     cap = config.agent_response_lines
     if provider == "jira":
@@ -1103,8 +1101,3 @@ def _provider_factory(config: ForgeoConfig) -> BacklogStore:
 
         return HttpBacklog(str(config.backlog), auth=config.backlog_auth, output_cap=cap)
     return JSONBacklog(Path(config.backlog), output_cap=cap)
-
-
-def open_backlog(config: ForgeoConfig) -> BacklogStore:
-    """The task provider selected by ``config`` via registry."""
-    return _provider_factory(config)

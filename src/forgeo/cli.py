@@ -2760,6 +2760,21 @@ _OAUTH_PARAM_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 
+def _auth_config_oauth(key: str, args: argparse.Namespace, config: Any | None) -> tuple[str | None, Path | None, Any | None]:
+    """API base, token file and oauth section for ``key`` (args win over config)."""
+    api_base = getattr(args, "api_base", None)
+    token_file_arg = getattr(args, "token_file", None)
+    provider_cfg = getattr(config, key, None) if config is not None else None
+    oauth = provider_cfg.auth.oauth if provider_cfg is not None and provider_cfg.auth is not None else None
+    if token_file_arg is None and oauth is not None and oauth.token_file is not None:
+        token_file_arg = Path(oauth.token_file)
+    if api_base is None and config is not None and isinstance(config.backlog, str):
+        api_base = config.backlog
+    if token_file_arg is not None:
+        token_file_arg = Path(token_file_arg)
+    return api_base, token_file_arg, oauth
+
+
 def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, Any] | None:
     """Resolve OAuth params for ``provider`` from CLI args and optional config.
 
@@ -2777,27 +2792,16 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
             console.print(f"[red]Could not load config {config_path}: {exc}[/red]")
             return None
 
-    provider_cfg = getattr(config, provider, None) if config is not None else None
-    api_base = getattr(args, "api_base", None)
-    # config.backlog is the API base for issue providers
-    cfg_backlog = config.backlog if config is not None else None
-    if api_base is None and provider_cfg is not None and isinstance(cfg_backlog, str):
-        api_base = cfg_backlog
+    api_base, token_file_arg, oauth = _auth_config_oauth(provider, args, config)
     if api_base is None:
         api_base = defaults["api_base"]
 
     client_id = getattr(args, "client_id", None)
     flow = getattr(args, "flow", None)
     scope = getattr(args, "scope", None)
-    token_file_arg = getattr(args, "token_file", None)
     callback_port = getattr(args, "callback_port", None)
     cloud_id = getattr(args, "cloud_id", None) if provider == "jira" else None
 
-    oauth = (
-        provider_cfg.auth.oauth
-        if provider_cfg is not None and provider_cfg.auth is not None
-        else None
-    )
     if oauth is not None:
         if client_id is None:
             client_id = oauth.client_id
@@ -2805,8 +2809,6 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
             flow = oauth.flow
         if scope is None:
             scope = oauth.scope or defaults["scope"]
-        if token_file_arg is None and oauth.token_file is not None:
-            token_file_arg = Path(oauth.token_file)
         if callback_port is None:
             callback_port = oauth.callback_port
         if provider == "jira" and cloud_id is None:
@@ -2922,20 +2924,14 @@ def _resolve_auth_store(provider: str, args: argparse.Namespace) -> Any:
     spec = _auth_provider_spec(provider)
     key = spec.key
     store_cls = spec.store_cls
-    api_base = getattr(args, "api_base", None)
-    token_file_arg = getattr(args, "token_file", None)
     config_path = _auth_config_path(args)
-    if token_file_arg is None and config_path is not None:
+    cfg = None
+    if config_path is not None:
         try:
             cfg = load_config(Path(config_path))
-            provider_cfg = getattr(cfg, key, None)
-            oauth = provider_cfg.auth.oauth if provider_cfg is not None and provider_cfg.auth is not None else None
-            if oauth is not None and oauth.token_file is not None:
-                token_file_arg = Path(oauth.token_file)
-            if api_base is None and isinstance(cfg.backlog, str):
-                api_base = cfg.backlog
         except Exception:
-            pass
+            cfg = None
+    api_base, token_file_arg, _oauth = _auth_config_oauth(key, args, cfg)
     if api_base is None:
         api_base = _OAUTH_PARAM_DEFAULTS[key]["api_base"]
     if token_file_arg is not None:
@@ -3065,10 +3061,9 @@ def cmd_auth_status(args: argparse.Namespace) -> int:
         console.print(f"  scope: {scope}")
     if isinstance(expires, int | float):
         console.print(f"  expires_in: {expires}s")
-    elif key == "github":
-        console.print("  expires: never (GitHub classic token)")
     else:
-        console.print("  expires: never")
+        suffix = " (GitHub classic token)" if key == "github" else ""
+        console.print(f"  expires: never{suffix}")
     return 0
 
 

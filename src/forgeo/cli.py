@@ -2906,17 +2906,13 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
     """Resolve OAuth params for ``provider`` from CLI args and optional config.
 
     Returns a dict with ``api_base``, ``client_id``, ``flow``, ``scope``,
-    ``token_file``, ``callback_port`` (plus ``cloud_id`` for Jira), or ``None``
-    after printing an error.
+    ``token_file``, ``callback_port``, ``client_secret`` (plus ``cloud_id``
+    for Jira), or ``None`` after printing an error.
     """
-    from pathlib import Path as _P
-
-    from forgeo.config import load_config
-
     defaults = _OAUTH_PARAM_DEFAULTS[provider]
     config_path = _auth_config_path(args)
     config = None
-    if config_path is not None and _P(config_path).exists():
+    if config_path is not None and Path(config_path).exists():
         try:
             config = load_config(config_path)
         except Exception as exc:  # noqa: BLE001 - user-facing error
@@ -2952,7 +2948,7 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
         if scope is None:
             scope = oauth.scope or defaults["scope"]
         if token_file_arg is None and oauth.token_file is not None:
-            token_file_arg = _P(oauth.token_file)
+            token_file_arg = Path(oauth.token_file)
         if callback_port is None:
             callback_port = oauth.callback_port
         if provider == "jira" and cloud_id is None:
@@ -2972,7 +2968,10 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
         from forgeo.oauth_gitlab import gitlab_default_token_path as _default_token_path
     else:
         from forgeo.oauth_jira import jira_default_token_path as _default_token_path
-    token_file = _P(token_file_arg).expanduser() if token_file_arg is not None else _default_token_path(api_base)
+    token_file = Path(token_file_arg).expanduser() if token_file_arg is not None else _default_token_path(api_base)
+    client_secret = None
+    if oauth is not None and oauth.client_secret_env:
+        client_secret = os.environ.get(oauth.client_secret_env)
     resolved: dict[str, Any] = {
         "api_base": api_base,
         "client_id": str(client_id).strip(),
@@ -2980,89 +2979,11 @@ def _resolve_oauth_params(provider: str, args: argparse.Namespace) -> dict[str, 
         "scope": str(scope),
         "token_file": token_file,
         "callback_port": callback_port,
+        "client_secret": client_secret,
     }
     if provider == "jira":
         resolved["cloud_id"] = cloud_id
     return resolved
-
-
-def _resolve_github_auth_params(
-    args: argparse.Namespace,
-) -> tuple[str, str, str, str, Path, int | None] | None:
-    """Resolve GitHub OAuth params from CLI args and optional config.
-
-    Returns (api_base, client_id, flow, scope, token_file, callback_port) or None after
-    printing an error.
-    """
-    resolved = _resolve_oauth_params("github", args)
-    if resolved is None:
-        return None
-    return (
-        resolved["api_base"],
-        resolved["client_id"],
-        resolved["flow"],
-        resolved["scope"],
-        resolved["token_file"],
-        resolved["callback_port"],
-    )
-
-
-def _resolve_gitlab_auth_params(
-    args: argparse.Namespace,
-) -> tuple[str, str, str, str, Path, int | None] | None:
-    """Resolve GitLab OAuth params."""
-    resolved = _resolve_oauth_params("gitlab", args)
-    if resolved is None:
-        return None
-    return (
-        resolved["api_base"],
-        resolved["client_id"],
-        resolved["flow"],
-        resolved["scope"],
-        resolved["token_file"],
-        resolved["callback_port"],
-    )
-
-
-def _resolve_jira_auth_params(
-    args: argparse.Namespace,
-) -> tuple[str, str, str, str, Path, int | None, str | None] | None:
-    """Resolve Jira OAuth params."""
-    resolved = _resolve_oauth_params("jira", args)
-    if resolved is None:
-        return None
-    return (
-        resolved["api_base"],
-        resolved["client_id"],
-        resolved["flow"],
-        resolved["scope"],
-        resolved["token_file"],
-        resolved["callback_port"],
-        resolved["cloud_id"],
-    )
-
-
-def _resolve_client_secret(args: argparse.Namespace, provider: str) -> str | None:
-    """Read the OAuth client secret from the env var named in the config, if any."""
-    from forgeo.config import load_config
-
-    try:
-        cfg_path = _auth_config_path(args)
-        if cfg_path and cfg_path.exists():
-            cfg = load_config(cfg_path)
-            provider_cfg = getattr(cfg, provider, None)
-            oauth = (
-                provider_cfg.auth.oauth
-                if provider_cfg is not None and provider_cfg.auth is not None
-                else None
-            )
-            if oauth is not None and oauth.client_secret_env:
-                import os
-
-                return os.environ.get(oauth.client_secret_env)
-    except Exception:
-        pass
-    return None
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -3089,14 +3010,18 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
             run_device_flow,
         )
 
-        gitlab_params = _resolve_gitlab_auth_params(args)
+        gitlab_params = _resolve_oauth_params("gitlab", args)
         if gitlab_params is None:
             return 1
-        api_base, client_id, flow, scope, token_file, callback_port = gitlab_params
+        api_base = gitlab_params["api_base"]
+        client_id = gitlab_params["client_id"]
+        flow = gitlab_params["flow"]
+        scope = gitlab_params["scope"]
+        token_file = gitlab_params["token_file"]
+        callback_port = gitlab_params["callback_port"]
+        client_secret = gitlab_params["client_secret"]
         oauth_base = gitlab_oauth_base(api_base)
         console.print(f"[bold]GitLab auth[/bold]: provider=gitlab api_base={api_base} oauth_base={oauth_base} flow={flow}")
-        # Resolve client_secret if configured
-        client_secret = _resolve_client_secret(args, "gitlab")
         try:
             if flow == "browser":
                 token_data = run_browser_flow(
@@ -3134,16 +3059,21 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
             run_browser_flow as run_jira_browser_flow,
         )
 
-        jira_params = _resolve_jira_auth_params(args)
+        jira_params = _resolve_oauth_params("jira", args)
         if jira_params is None:
             return 1
-        api_base, client_id, flow, scope, token_file, callback_port, cloud_id = jira_params
+        api_base = jira_params["api_base"]
+        client_id = jira_params["client_id"]
+        flow = jira_params["flow"]
+        scope = jira_params["scope"]
+        token_file = jira_params["token_file"]
+        callback_port = jira_params["callback_port"]
+        cloud_id = jira_params["cloud_id"]
+        client_secret = jira_params["client_secret"]
         console.print(f"[bold]Jira auth[/bold]: provider=jira api_base={api_base} flow={flow}")
         if flow != "browser":
             console.print("[red]Jira OAuth supports browser flow only; use --flow browser.[/red]")
             return 2
-        # Resolve client_secret
-        client_secret = _resolve_client_secret(args, "jira")
         try:
             token_data = run_jira_browser_flow(
                 client_id,
@@ -3180,17 +3110,21 @@ def cmd_auth_login(args: argparse.Namespace) -> int:
         run_device_flow,
     )
 
-    github_params = _resolve_github_auth_params(args)
+    github_params = _resolve_oauth_params("github", args)
     if github_params is None:
         return 1
-    api_base, client_id, flow, scope, token_file, callback_port = github_params
+    api_base = github_params["api_base"]
+    client_id = github_params["client_id"]
+    flow = github_params["flow"]
+    scope = github_params["scope"]
+    token_file = github_params["token_file"]
+    callback_port = github_params["callback_port"]
+    client_secret = github_params["client_secret"]
     oauth_base = github_oauth_base(api_base)
     console.print(f"[bold]GitHub auth[/bold]: provider=github api_base={api_base} oauth_base={oauth_base} flow={flow}")
 
     try:
         if flow == "browser":
-            # Resolve client_secret for confidential apps
-            client_secret = _resolve_client_secret(args, "github")
             token_data = run_browser_flow(
                 client_id,
                 oauth_base,

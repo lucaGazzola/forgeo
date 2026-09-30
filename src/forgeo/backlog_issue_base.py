@@ -457,115 +457,12 @@ def task_engine_state(task: Any) -> dict[str, Any]:
 ERROR_DETAIL_LIMIT = 500
 
 
-def http_error_detail_suffix(exc: urllib.error.HTTPError) -> str:
-    """Truncated detail suffix for an HTTPError (empty when no detail)."""
-    try:
-        detail = exc.read().decode("utf-8", errors="replace")
-    except OSError:
-        detail = ""
-    return f" {detail[:ERROR_DETAIL_LIMIT]}" if detail else ""
-
-
 def require_env_token(token_env: str, label: str, error_cls: type) -> str:
     """Return the env token or raise ``error_cls`` with a standard message."""
     token = os.environ.get(token_env)
     if not token:
         raise error_cls(f"{label} token environment variable {token_env!r} is not set")
     return token
-
-
-def build_api_url(
-    base_url: str,
-    path: str,
-    query: dict[str, Any] | None = None,
-    *,
-    api_prefix: str = "",
-) -> str:
-    """Join ``base_url`` + ``api_prefix`` + ``path`` and encode ``query``.
-
-    Shared by the GitHub (no prefix) and GitLab (``/api/v4`` prefix) clients
-    so URL building stays identical in one place.
-    """
-    url = f"{base_url}{api_prefix}{path}"
-    if query:
-        url += "?" + urlencode(query, doseq=True)
-    return url
-
-
-def encode_json_body(payload: dict[str, Any] | None) -> bytes | None:
-    """Encode ``payload`` as UTF-8 JSON, or ``None`` when there is no payload."""
-    if payload is None:
-        return None
-    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-
-
-def should_retry_on_auth_failure(
-    *,
-    attempt: int,
-    status: int | None,
-    has_oauth: bool,
-    has_provider: bool,
-) -> bool:
-    """True when a 401/403 on the first attempt warrants one OAuth retry.
-
-    Both REST clients invalidate a cached OAuth provider and retry once so a
-    freshly written token (e.g. after ``forgeo auth login``) is picked up.
-    """
-    return attempt == 0 and status in (401, 403) and has_oauth and has_provider
-
-
-def invalidate_oauth_provider(provider: Any) -> None:
-    """Best-effort OAuth cache invalidation before a retry (never raises)."""
-    with contextlib.suppress(Exception):  # noqa: BLE001 - invalidation is best-effort
-        provider.invalidate()
-
-
-def resolve_cached_oauth_provider(
-    client: Any, store_cls: Any, provider_cls: Any, **provider_kwargs: Any
-) -> Any | None:
-    """Lazy ``store``/``provider`` pair shared by the issue clients.
-
-    ``provider_kwargs`` go to ``provider_cls(store, ...)`` (Jira needs
-    ``client_id``/``client_secret_env``).
-    """
-    if client._oauth_provider is not None:
-        return client._oauth_provider
-    auth = client.config.auth
-    if auth.oauth is None:
-        return None
-    token_file = auth.oauth.token_file
-    store = (
-        store_cls(path=token_file, api_base=client.base_url)
-        if token_file is not None
-        else store_cls(api_base=client.base_url)
-    )
-    provider = provider_cls(store, **provider_kwargs)
-    client._oauth_provider = provider
-    return provider
-
-
-def oauth_access_token(
-    provider: Any,
-    *,
-    oauth_error_cls: type[Exception],
-    request_error_cls: type[Exception],
-) -> str:
-    """Return ``provider.token()``, mapping provider errors to ``request_error_cls``."""
-    try:
-        return str(provider.token())
-    except Exception as exc:
-        if isinstance(exc, request_error_cls):
-            raise
-        if isinstance(exc, oauth_error_cls):
-            raise request_error_cls(str(exc)) from exc
-        raise request_error_cls(str(exc)) from exc
-
-
-def clean_issue_list(data: Any) -> list[dict[str, Any]]:
-    """Filter a search response down to its issue dicts (shared by GitHub/GitLab)."""
-    if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)]
-    return []
 
 
 def execute_rest_with_oauth_retry(
@@ -584,15 +481,16 @@ def execute_rest_with_oauth_retry(
             return execute_json_request(request, timeout, error_cls, method)
         except error_cls as exc:
             provider = get_cached_provider()
-            if should_retry_on_auth_failure(
-                attempt=attempt,
-                status=getattr(exc, "status", None),
-                has_oauth=has_oauth,
-                has_provider=provider is not None,
+            if (
+                attempt != 0
+                or getattr(exc, "status", None) not in (401, 403)
+                or not has_oauth
+                or provider is None
             ):
-                invalidate_oauth_provider(provider)
-                continue
-            raise
+                raise
+            with contextlib.suppress(Exception):  # noqa: BLE001 - invalidation is best-effort
+                provider.invalidate()
+            continue
 
 
 class RestTransportBase:
@@ -644,11 +542,14 @@ class RestTransportBase:
             provider = self._oauth_token_provider()
             assert provider is not None
             _, _, oauth_error_cls = self._oauth_components()
-            token = oauth_access_token(
-                provider,
-                oauth_error_cls=oauth_error_cls,
-                request_error_cls=self.request_error_cls,
-            )
+            try:
+                token = str(provider.token())
+            except Exception as exc:
+                if isinstance(exc, self.request_error_cls):
+                    raise
+                if isinstance(exc, oauth_error_cls):
+                    raise self.request_error_cls(str(exc)) from exc
+                raise self.request_error_cls(str(exc)) from exc
             return self._token_headers(token)
         raise self.request_error_cls(
             f"{self.provider_label} auth is not configured (token_env or oauth required)"
@@ -658,15 +559,32 @@ class RestTransportBase:
         return {}
 
     def _oauth_token_provider(self) -> Any | None:
+        """Lazy ``store``/``provider`` pair, cached on the client."""
+        if self._oauth_provider is not None:
+            return self._oauth_provider
+        auth = self.config.auth
+        if auth.oauth is None:
+            return None
         store_cls, provider_cls, _ = self._oauth_components()
-        return resolve_cached_oauth_provider(self, store_cls, provider_cls, **self._oauth_provider_kwargs())
+        token_file = auth.oauth.token_file
+        store = (
+            store_cls(path=token_file, api_base=self.base_url)
+            if token_file is not None
+            else store_cls(api_base=self.base_url)
+        )
+        provider = provider_cls(store, **self._oauth_provider_kwargs())
+        self._oauth_provider = provider
+        return provider
 
     def _api_base(self) -> str:
         """API host before ``api_prefix`` (Jira swaps it for OAuth ``cloud_id``)."""
         return self.base_url
 
     def _api_url(self, path: str, query: dict[str, Any] | None = None) -> str:
-        return build_api_url(self._api_base(), path, query, api_prefix=self.api_prefix)
+        url = f"{self._api_base()}{self.api_prefix}{path}"
+        if query:
+            url += "?" + urlencode(query, doseq=True)
+        return url
 
     def _request(
         self,
@@ -677,7 +595,7 @@ class RestTransportBase:
         payload: dict[str, Any] | None = None,
     ) -> Any:
         def _build_request() -> urllib.request.Request:
-            body = encode_json_body(payload)
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
             headers = {**self._auth_headers(), **self._extra_headers()}
             if body is not None:
                 headers["Content-Type"] = "application/json"
@@ -722,9 +640,10 @@ class RestIssueClientBase(RestTransportBase):
     def search_issues(
         self, *, page: int = 1, per_page: int = 30, state: str = "all"
     ) -> list[dict[str, Any]]:
-        return clean_issue_list(
-            self._request("GET", self._collection_path(), query=self._search_query(page, per_page, state))
-        )
+        data = self._request("GET", self._collection_path(), query=self._search_query(page, per_page, state))
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
 
     def get_issue(self, issue_id: int) -> dict[str, Any]:
         return self._request("GET", self._item_path(issue_id))  # type: ignore[no-any-return]
@@ -759,7 +678,11 @@ def execute_json_request(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
-        suffix = http_error_detail_suffix(exc)
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            detail = ""
+        suffix = f" {detail[:ERROR_DETAIL_LIMIT]}" if detail else ""
         try:
             raise error_cls(  # type: ignore[call-arg]
                 f"{method} {request.full_url} failed with HTTP {exc.code} {exc.reason}.{suffix}",

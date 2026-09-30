@@ -721,10 +721,6 @@ class IssueBacklogBase(BacklogStore):
         """Post queued state comments without failing the transition."""
         raise NotImplementedError
 
-    async def _locked_issue(self, issue_id: str) -> dict[str, Any] | None:
-        """Fetch one issue; call with the lock held, ``None`` when missing."""
-        return await self._get_issue(issue_id)
-
     async def _locked_issue_task(
         self,
         issue_id: str,
@@ -774,10 +770,6 @@ class IssueBacklogBase(BacklogStore):
             raise ValueError(f"invalid task field(s): {exc}") from exc
         return issue, candidate
 
-    def _queue_state_comment(self, key: Any, state: str, reason: list[str]) -> None:
-        """Queue a bounded ``[forgeo] STATE`` comment for later flushing."""
-        self._pending_comments.append((key, format_state_comment(state, reason)))
-
     def _take_pending_comments(self) -> list[tuple[Any, str]]:
         """Drain queued state comments, collapsing the flush preamble."""
         comments = self._pending_comments
@@ -813,7 +805,7 @@ class IssueBacklogBase(BacklogStore):
     ) -> Task | None:
         """Lock, transition one issue, flush comments; shared status epilogue."""
         async with self._lock:
-            issue = await self._locked_issue(task_id)
+            issue = await self._get_issue(task_id)
             if issue is None:
                 return None
             updated = await self._transition_metadata(issue, status, result, reason=reason)
@@ -862,8 +854,8 @@ class IssueBacklogBase(BacklogStore):
         raise NotImplementedError
 
     def _comment(self, key: Any, state: str, reason: list[str]) -> None:
-        """Queue a ``[forgeo] STATE`` comment for ``key``."""
-        self._queue_state_comment(key, state, reason)
+        """Queue a bounded ``[forgeo] STATE`` comment for later flushing."""
+        self._pending_comments.append((key, format_state_comment(state, reason)))
 
     async def _clear_labels(self, task_id: str) -> None:
         """Remove all forgeo labels from ``task_id``."""
@@ -903,7 +895,7 @@ class IssueBacklogBase(BacklogStore):
     ) -> Task | None:
         """Shared review start: persist branch/sha, label REVIEW, comment, flush."""
         async with self._lock:
-            issue = await self._locked_issue(task_id)
+            issue = await self._get_issue(task_id)
             if issue is None:
                 return None
             state = await self.get_engine_state(task_id)

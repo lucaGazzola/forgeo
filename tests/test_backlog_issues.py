@@ -226,6 +226,29 @@ async def test_failed_task_retries(spec: dict[str, Any]) -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_retry_resets_the_retry_budget(spec: dict[str, Any]) -> None:
+    """A human requeue restores the task's automatic-retry budget.
+
+    The engine's automatic retry consumes one of the task's remaining
+    ``failed_retry_max`` retries, so the counter grows.  A manual requeue
+    (``forgeo task reopen``) does not: the human decided to run the task
+    again, so the counter starts over and the task gets a fresh budget.
+    """
+    backlog, _client = make_provider(spec, [spec["make_issue"](1)])
+    task = (await backlog.list_tasks())[0]
+    await backlog.claim_task(task)
+    await backlog.set_failed(task.id, ["timeout"], ExecutionResult(status=ExecutionStatus.ERROR))
+    await backlog.retry_task(task.id)
+    await backlog.set_failed(task.id, ["timeout again"], ExecutionResult(status=ExecutionStatus.ERROR))
+
+    manual = await backlog.retry_task(task.id, manual=True)
+    assert manual is not None and manual.status is TaskStatus.OPEN
+    assert manual.retry_count == 0
+    assert manual.failed_wait_cycles == 0
+    assert manual.failure_reason == []
+
+
+@pytest.mark.asyncio
 async def test_create_update_and_delete_use_issue_operations(spec: dict[str, Any]) -> None:
     backlog, client = make_provider(spec, [])
     task = await backlog.create_task(make_task(title="Created", description="Desc"))

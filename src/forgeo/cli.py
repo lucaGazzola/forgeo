@@ -1766,7 +1766,9 @@ def cmd_task_reopen(args: argparse.Namespace) -> int:
     if previous is TaskStatus.BLOCKED:
         updated = _run_backlog(backlog.reopen_task(task.id))
     else:
-        updated = _run_backlog(backlog.retry_task(task.id))
+        # A human requeue restores the task's automatic-retry budget, so the
+        # human's retry gets a fresh failed_retry_max.
+        updated = _run_backlog(backlog.retry_task(task.id, manual=True))
     if isinstance(updated, int):
         return updated
     if updated is None:

@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merged the GitHub/GitLab backlog suites into one parametrized `test_backlog_issues.py`; shared test fakes (`wait_for`, `FakeResponse`, `FakeIssueClient`) live in `conftest.py`.
 - Removed dead code: unused `_PatAuthBase` model, per-provider OAuth/Auth model duplication (shared bases keep the same names and validation).
 
+### Fixed
+
+- Manually requeuing a `FAILED` task (`forgeo task reopen`, `forgeo run --reopen`, `forgeo task edit --run`) restores the task's automatic-retry budget instead of consuming one of its `failed_retry_max` retries — the human's retry now gets a fresh budget, as the retry docs describe. The engine's automatic retry still consumes the budget as before.
+
 ## [1.12.1] - 2026-09-09
 
 ### Fixed

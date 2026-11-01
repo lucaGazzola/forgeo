@@ -215,7 +215,11 @@ def bump_state_counter(state: dict[str, Any], key: str) -> int:
 
 
 def next_retry_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Mutate ``state`` for a retry transition and return it."""
+    """Mutate ``state`` for an automatic retry transition and return it.
+
+    The engine's automatic retry consumes one of the task's remaining
+    ``failed_retry_max`` retries, so the counter grows.
+    """
     state.update(
         {
             "retry_count": (as_optional_int(state.get("retry_count")) or 0) + 1,
@@ -223,6 +227,17 @@ def next_retry_state(state: dict[str, Any]) -> dict[str, Any]:
             "failure_reason": [],
         }
     )
+    return state
+
+
+def next_manual_retry_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Mutate ``state`` for a manual (human) requeue and return it.
+
+    A human requeue does not consume a retry of the task's budget: the
+    human decided to run the task again, so the retry counter starts over
+    and the task gets a fresh ``failed_retry_max``.
+    """
+    state.update({"retry_count": 0, "failed_wait_cycles": 0, "failure_reason": []})
     return state
 
 

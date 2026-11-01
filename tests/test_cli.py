@@ -2157,6 +2157,28 @@ def test_task_reopen_failed_task(git_repo, tmp_path, capsys):
     assert "now OPEN" in capsys.readouterr().out
 
 
+def test_task_reopen_failed_task_resets_retry_budget(git_repo, tmp_path, capsys):
+    """A human requeue restores the task's automatic-retry budget.
+
+    The manual reopen must not consume one of the task's remaining
+    ``failed_retry_max`` retries: the human decided to run the task again, so
+    it gets a fresh budget (the retry docs: "Reopening a FAILED task manually
+    ... resets retry_count").  Only the engine's automatic retry consumes the
+    budget.
+    """
+    config_path = write_config(git_repo, tmp_path)
+    write_backlog(
+        tmp_path,
+        [make_task(id="TASK-001", status="FAILED", retry_count=2)],
+    )
+
+    assert cmd_task_reopen(task_reopen_args(config_path, "TASK-001")) == 0
+    stored = read_backlog_tasks(tmp_path)[0]
+    assert stored["status"] == "OPEN"
+    assert stored["retry_count"] == 0
+    assert "now OPEN" in capsys.readouterr().out
+
+
 def test_task_reopen_unknown_task(git_repo, tmp_path, capsys):
     config_path = write_config(git_repo, tmp_path)
 

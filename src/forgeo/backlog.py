@@ -44,6 +44,7 @@ from forgeo.backlog_issue_base import (
     extract_issue_number,
     forgeo_labels,
     format_state_comment,
+    next_manual_retry_state,
     next_reopen_state,
     next_retry_state,
     transition_label_update,
@@ -384,8 +385,14 @@ class BacklogStore(ABC):
         """Increment a retry-eligible ``FAILED`` task's wait counter."""
 
     @abstractmethod
-    async def retry_task(self, task_id: str) -> Task | None:
-        """Move a retry-eligible ``FAILED`` task back to ``OPEN``."""
+    async def retry_task(self, task_id: str, *, manual: bool = False) -> Task | None:
+        """Move a retry-eligible ``FAILED`` task back to ``OPEN``.
+
+        ``manual=True`` marks a **human** requeue (``forgeo task reopen``):
+        the task's automatic-retry budget is restored, so the human's retry
+        gets a fresh ``failed_retry_max``. The engine's automatic retry
+        (``manual=False``) instead consumes one retry of that budget.
+        """
 
     @abstractmethod
     async def reopen_task(self, task_id: str) -> Task | None:
@@ -519,10 +526,15 @@ class DocumentBacklogStore(BacklogStore):
 
         return await self._update_entry(task_id, mutate)
 
-    async def retry_task(self, task_id: str) -> Task | None:
+    async def retry_task(self, task_id: str, *, manual: bool = False) -> Task | None:
         def mutate(entry: dict[str, Any]) -> None:
             entry["status"] = TaskStatus.OPEN.value
-            bump_state_counter(entry, "retry_count")
+            if manual:
+                # A human requeue restores the task's automatic-retry budget.
+                entry["retry_count"] = 0
+            else:
+                # The engine's automatic retry consumes one of the budget.
+                bump_state_counter(entry, "retry_count")
             entry["failed_wait_cycles"] = 0
             entry["failure_reason"] = []
 
@@ -878,9 +890,14 @@ class IssueBacklogBase(BacklogStore):
             await self.put_engine_state(task_id, state)
             return await self.get_task(task_id)
 
-    async def retry_task(self, task_id: str) -> Task | None:
-        """Shared retry: FAILED -> OPEN with counter bump and reopen transition."""
-        return await self._reopen_from_status(task_id, from_status=TaskStatus.FAILED, bump=next_retry_state)
+    async def retry_task(self, task_id: str, *, manual: bool = False) -> Task | None:
+        """Shared retry: FAILED -> OPEN with counter bump and reopen transition.
+
+        ``manual=True`` marks a human requeue and restores the task's
+        automatic-retry budget instead of consuming one of its retries.
+        """
+        bump = next_manual_retry_state if manual else next_retry_state
+        return await self._reopen_from_status(task_id, from_status=TaskStatus.FAILED, bump=bump)
 
     async def reopen_task(self, task_id: str) -> Task | None:
         """Shared reopen: BLOCKED -> OPEN with counter reset and reopen transition."""

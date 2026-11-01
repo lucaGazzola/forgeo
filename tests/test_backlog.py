@@ -852,6 +852,34 @@ async def test_retry_task_unknown_id_returns_none(tmp_path):
     assert await backlog.bump_failed_wait("MISSING") is None
 
 
+async def test_retry_task_manual_resets_the_retry_budget(tmp_path):
+    """A manual requeue restores the task's automatic-retry budget.
+
+    The engine's automatic retry consumes one of the task's remaining
+    ``failed_retry_max`` retries, so the counter grows.  A human requeue
+    (``forgeo task reopen``) does not: the human decided to run the task
+    again, so the counter starts over and the task gets a fresh budget.
+    """
+    backlog = JSONBacklog(tmp_path / "backlog.json")
+    task = await backlog.create_task(make_task())
+    await backlog.set_failed(task.id, ["boom"], make_result())
+    await backlog.retry_task(task.id)
+    await backlog.set_failed(task.id, ["boom again"], make_result())
+
+    manual = await backlog.retry_task(task.id, manual=True)
+    assert manual is not None
+    assert manual.status is TaskStatus.OPEN
+    assert manual.retry_count == 0
+    assert manual.failed_wait_cycles == 0
+    assert manual.failure_reason == []
+
+    stored = await backlog.get_task(task.id)
+    assert stored is not None
+    assert stored.retry_count == 0
+    disk = json.loads((tmp_path / "backlog.json").read_text(encoding="utf-8"))
+    assert disk["tasks"][0]["retry_count"] == 0
+
+
 async def test_update_status_leaving_failed_resets_retry_state(tmp_path):
     """A manual reopen (status away from FAILED) resets the retry budget so
     the human's retry gets a fresh failed_retry_max."""

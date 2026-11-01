@@ -182,7 +182,9 @@ class Forgeo:
                 )
             task = reopened
         elif task.status is TaskStatus.FAILED and reopen:
-            retried = await self.backlog.retry_task(task_id)
+            # A human requeue (`forgeo run --reopen`, `task edit --run`)
+            # restores the task's automatic-retry budget.
+            retried = await self.backlog.retry_task(task_id, manual=True)
             if retried is None:
                 raise TaskNotRunnableError(
                     f"Task {task_id!r} could not be retried."
@@ -259,6 +261,8 @@ class Forgeo:
         ``failed_retry_wait_cycles`` the task is moved back to ``OPEN`` and
         its ``retry_count`` is incremented. A task that exhausts its budget
         stays ``FAILED`` with its original ``failure_reason`` preserved.
+        A **human** requeue (``forgeo task reopen``) instead restores the
+        budget — see :meth:`forgeo.backlog.BacklogStore.retry_task`.
 
         With ``failed_retry_max: 0`` (the default) and no per-task override
         this is a no-op, so the historical behavior is unchanged. ``BLOCKED``
